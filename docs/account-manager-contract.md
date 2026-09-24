@@ -87,7 +87,7 @@ server, not the PC, owns the logins and fetches usage; Windows widgets only read
     (required in server mode; refuse to start without it) protect
     every page and `/api/*` with a login form and an HttpOnly, SameSite=Strict session cookie
     (`Secure` when `ACCTMGR_PUBLIC_ORIGIN` is https). Login attempts are rate limited.
-  - `ACCTMGR_PUBLIC_ORIGIN` (e.g. `https://claude.yanasharif.com`) replaces the
+  - `ACCTMGR_PUBLIC_ORIGIN` (e.g. `https://claude.example.com`) replaces the
     127.0.0.1:47291 Origin/Host check.
   - `ACCTMGR_TRUST_PROXY=1` counts sign-in attempts per `CF-Connecting-IP` (only when the
     container is reachable solely through the Cloudflare tunnel); otherwise per socket address.
@@ -103,7 +103,7 @@ server, not the PC, owns the logins and fetches usage; Windows widgets only read
   "schema": 1,
   "revision": 12,
   "updated_unix": 1790240810,
-  "manager_url": "https://claude.yanasharif.com",
+  "manager_url": "https://claude.example.com",
   "card_theme": "auto",
   "accounts": [
     {
