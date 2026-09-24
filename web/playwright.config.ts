@@ -4,7 +4,7 @@ import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 
 // E2E runs the BUILT server on its own port against a throwaway APPDATA / USERPROFILE / TEMP,
-// with a fake Claude CLI and no Edge, so it never touches the real accounts.db, settings.json,
+// with fake Claude + Codex CLIs and no Edge, so it never touches the real accounts.db, settings.json,
 // ~/.claude folders or browser. The temp root is created once in the runner process; workers
 // inherit it through the environment.
 const PORT = 47391;
@@ -39,6 +39,8 @@ export default defineConfig({
 			TEMP: path.join(root, 'tmp'),
 			TMP: path.join(root, 'tmp'),
 			CLAUDE_BIN: path.resolve('tests/fixtures/fake-claude.cmd'),
+			// fake Codex CLI: never the real one (it would open the default, signed-in browser)
+			CODEX_BIN: path.resolve('tests/fixtures/fake-codex.cmd'),
 			EDGE_EXE: 'none',
 			WIDGET_EXE: path.join(root, 'no-widget.exe')
 		}

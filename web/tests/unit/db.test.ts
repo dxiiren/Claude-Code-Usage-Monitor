@@ -36,9 +36,9 @@ describe('schema + meta', () => {
 		const cols = (d.prepare('PRAGMA table_info(accounts)').all() as { name: string }[]).map((c) => c.name);
 		const mode = (d.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode;
 		d.close();
-		expect(cols).toEqual(['id', 'name', 'config_dir', 'email', 'plan', 'enabled', 'sort_order', 'created_at', 'updated_at']);
+		expect(cols).toEqual(['id', 'name', 'config_dir', 'email', 'plan', 'enabled', 'sort_order', 'created_at', 'updated_at', 'provider']);
 		expect(mode).toBe('delete');
-		expect(meta()).toEqual({ revision: '0', schema: '1', manager_url: 'http://127.0.0.1:47291', card_theme: 'auto' });
+		expect(meta()).toEqual({ revision: '0', schema: '2', manager_url: 'http://127.0.0.1:47291', card_theme: 'auto' });
 		expect(fs.existsSync(`${dbFile()}-wal`)).toBe(false);
 	});
 

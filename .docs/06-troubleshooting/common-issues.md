@@ -13,6 +13,14 @@ The code was mistyped or expired (single use, short-lived). **Re-login** and pas
 A browser already signed in connected the wrong account. **Re-login** the wrong one — the page's
 sign-in window is always a fresh Edge profile.
 
+### Codex: "That address belongs to a different or older sign-in"
+The pasted `localhost:1455` address came from an earlier sign-in (each Start makes a new one). Use
+the current link, sign in again, paste the new address.
+
+### Codex: the sign-in never finishes / port 1455 busy
+Only one Codex sign-in can wait at a time (the CLI's callback server uses port 1455); starting one
+cancels the previous. A `codex login` you ran yourself in a terminal holds the same port; close it.
+
 ### An account shows "Expired — log in again"
 The widget or server got 401/403 or an expired token it could not renew. **Re-login**. Network
 errors alone never ask for a re-login.

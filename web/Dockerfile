@@ -20,12 +20,17 @@ FROM ${NODE_IMAGE} AS runtime
 # it runs headless (auth login prints the URL to $BROWSER / stdout, auth status and -p work without a TTY).
 # Bump with: docker compose build --build-arg CLAUDE_CODE_VERSION=<x.y.z>
 ARG CLAUDE_CODE_VERSION=2.1.273
+# Codex CLI, pinned (Codex accounts: ChatGPT sign-in through `codex app-server`, status through
+# `codex login status`, token refresh through the CLI). The npm package also ships its native binary
+# per platform. Bump with: docker compose build --build-arg CODEX_VERSION=<x.y.z>
+ARG CODEX_VERSION=0.142.5
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates tini \
 	&& rm -rf /var/lib/apt/lists/* \
-	&& npm install -g --no-audit --no-fund "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+	&& npm install -g --no-audit --no-fund "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}" \
 	&& npm cache clean --force \
-	&& claude --version
+	&& claude --version \
+	&& codex --version
 
 # DISABLE_AUTOUPDATER: the CLI must never update itself inside the image; bump CLAUDE_CODE_VERSION instead.
 ENV NODE_ENV=production \

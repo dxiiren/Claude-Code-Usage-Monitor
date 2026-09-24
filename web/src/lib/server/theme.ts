@@ -9,6 +9,8 @@
 export interface ThemeAccount {
 	id: string;
 	name: string;
+	/** 'codex' rows bind to accounts.codex.<id>.* and carry a small "Codex" tag; default 'claude'. */
+	provider?: 'claude' | 'codex';
 }
 
 export type CardTheme = 'auto' | 'light' | 'dark';
@@ -138,6 +140,9 @@ export function buildTheme(accounts: ThemeAccount[], mode: CardTheme = 'dark', o
 	const DOT = '·';
 	const vs = variantsFor(mode);
 	const paired = vs.length > 1;
+	const hasCodex = accounts.some((a) => a.provider === 'codex');
+	const hasClaude = accounts.some((a) => a.provider !== 'codex');
+	const title = !hasCodex ? 'Claude usage' : hasClaude ? 'Claude & Codex usage' : 'Codex usage';
 
 	const kids: Json[] = [];
 	if (paired) {
@@ -145,7 +150,7 @@ export function buildTheme(accounts: ThemeAccount[], mode: CardTheme = 'dark', o
 		for (const v of vs) kids.push(boxLayer(`bg${v.suffix}`, 0, 0, W, H, v.p.bg, v.render, 10, `${opacity}`));
 	}
 	for (const v of vs) {
-		kids.push(textLayer(`title${v.suffix}`, 10, 6, 150, 16, 'Claude usage', 11, v.p.muted, 'semibold', v.render));
+		kids.push(textLayer(`title${v.suffix}`, 10, 6, 150, 16, title, 11, v.p.muted, 'semibold', v.render));
 		const close = textLayer(`close-btn${v.suffix}`, W - 26, 3, 20, 20, '✕', 12, v.p.muted, 'regular', v.render);
 		(close.content as Json).align = 'center';
 		close.mouse_events = { click: 'show_context_menu("close-menu")' };
@@ -160,7 +165,8 @@ export function buildTheme(accounts: ThemeAccount[], mode: CardTheme = 'dark', o
 	let n = 0;
 	accounts.forEach((a, i) => {
 		const y0 = PAD + TOP + i * BLOCK;
-		const b = `accounts.claude.${a.id}`;
+		const codex = a.provider === 'codex';
+		const b = `accounts.${codex ? 'codex' : 'claude'}.${a.id}`;
 		// The widget sets login_required = 1 when the account's login expired, was rejected or is missing.
 		const L = `${b}.login_required`;
 		const live = `1 - ${L}`;
@@ -169,8 +175,11 @@ export function buildTheme(accounts: ThemeAccount[], mode: CardTheme = 'dark', o
 			for (const v of vs)
 				kids.push(boxLayer(`div${n}${v.suffix}`, PAD, y0 - Math.floor(GAP / 2) - 1, W - 2 * PAD, 1, v.p.divider, v.render, 0, '0.6'));
 		}
+		// Codex: name on the first line, a small "Codex" tag under it. Claude keeps the kit layout.
 		for (const v of vs)
-			kids.push(textLayer(`name-${a.id}${v.suffix}`, PAD, y0 + Math.floor(LINE / 2), 56, 18, a.name, 13, v.p.text, 'semibold', v.render));
+			kids.push(textLayer(`name-${a.id}${v.suffix}`, PAD, codex ? y0 : y0 + Math.floor(LINE / 2), 56, 18, a.name, 13, v.p.text, 'semibold', v.render));
+		if (codex)
+			for (const v of vs) kids.push(textLayer(`tag-${a.id}${v.suffix}`, PAD, y0 + LINE + 1, 56, 14, 'Codex', 9, v.p.muted, 'semibold', v.render));
 		const rows: [string, string][] = [
 			['5h', 'session'],
 			['7d', 'weekly']

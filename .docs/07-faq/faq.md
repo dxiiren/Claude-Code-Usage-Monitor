@@ -4,6 +4,11 @@
 Yes. PC: `%APPDATA%\ClaudeCodeUsageMonitor\accounts.db`. Server: `/data/accounts.db` in the Docker
 volume. The Claude logins themselves are files in each account's config folder.
 
+**Does it handle Codex (ChatGPT) accounts too?**
+Yes. Pick **Codex** when adding an account. On a PC the private Edge window finishes the sign-in by
+itself; on a server you paste the `localhost:1455` address the browser ends on. Codex rows carry a
+small "Codex" tag on the page and on the widget card.
+
 **Why does the local version not run in Docker?**
 It opens the Edge sign-in window and drives the Windows widget; a Linux container cannot. Docker is
 for servers.

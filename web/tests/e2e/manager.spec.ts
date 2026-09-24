@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test, type Page } from '@playwright/test';
@@ -44,7 +45,7 @@ test('usage page: empty state links to adding an account', async ({ page }) => {
 	await page.getByRole('link', { name: 'Add an account' }).click();
 	await expect(page).toHaveURL(`${ORIGIN}/`);
 	await expect(page.getByText('No accounts yet. Add one above.')).toBeVisible();
-	expect(meta()).toMatchObject({ schema: '1', revision: '0', manager_url: 'http://127.0.0.1:47291' });
+	expect(meta()).toMatchObject({ schema: '2', revision: '0', manager_url: 'http://127.0.0.1:47291' });
 });
 
 test('add account -> login started -> good code -> email shown', async ({ page }) => {
@@ -362,6 +363,129 @@ test('card theme setting: stored in meta.card_theme, bumps revision, regenerates
 	}
 	await page.reload();
 	await expect(page.getByLabel('Card theme')).toHaveValue('auto');
+});
+
+// ---------- Codex accounts (contract: "Codex accounts (provider column)") ----------
+
+const portOpen = (port: number) =>
+	new Promise<boolean>((r) => {
+		const s = net.connect(port, '127.0.0.1', () => (s.destroy(), r(true)));
+		s.on('error', () => r(false));
+	});
+
+async function startCodex(page: Page, name: string) {
+	await page.goto('/');
+	await page.getByLabel('Codex').check();
+	await expect(page.getByText('It finishes by itself.')).toBeVisible();
+	await page.getByLabel('Add an account').fill(name);
+	await page.getByRole('button', { name: 'Start', exact: true }).click();
+	const panel = page.getByTestId('login-panel');
+	await expect(panel).toContainText(`Log in "${name}"`);
+	return panel;
+}
+
+test('codex: provider choice on Add account; the local login completes by itself (no paste)', async ({ page }) => {
+	fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+	fs.writeFileSync(path.join(home, '.codex', 'keep.txt'), 'the user own Codex install');
+	// the fake CLI completes by itself for a CODEX_HOME named *autologin*, as the isolated Edge window does
+	const panel = await startCodex(page, 'autologin cx');
+	await expect(panel).toContainText('This page updates by itself when the sign-in finishes');
+	await expect(panel).not.toContainText('Authentication code');
+	await expect(panel.getByTestId('login-ok')).toContainText('Logged in as autologin_cx@example.com (plus)', { timeout: 20_000 });
+	await panel.getByRole('button', { name: 'Done' }).click();
+	const r = row(page, 'autologin cx');
+	await expect(r.getByTestId('codex-tag')).toHaveText('Codex');
+	await expect(r).toContainText('autologin_cx@example.com');
+	await expect(row(page, 'alpha').getByTestId('codex-tag')).toHaveCount(0);
+	expect(fs.existsSync(path.join(home, '.codex-autologin_cx', 'auth.json'))).toBe(true);
+	// DB: provider column, schema 2; card theme: accounts.codex.<id> bindings + the Codex tag
+	const d = new DatabaseSync(path.join(appDir, 'accounts.db'), { readOnly: true });
+	const dbRow = d.prepare("SELECT provider, config_dir FROM accounts WHERE id = 'autologin_cx'").get() as { provider: string; config_dir: string };
+	d.close();
+	expect(dbRow).toEqual({ provider: 'codex', config_dir: path.join(home, '.codex-autologin_cx') });
+	expect(meta().schema).toBe('2');
+	// the widget polls accounts.db Codex rows only while show_codex is on
+	expect(JSON.parse(fs.readFileSync(path.join(appDir, 'settings.json'), 'utf8')).show_codex).toBe(true);
+	const kids: { id: string; content: { template?: string } }[] = JSON.parse(
+		fs.readFileSync(path.join(appDir, 'themes', 'multi-claude-accounts.json'), 'utf8')
+	).surfaces[0].children;
+	expect(kids.find((k) => k.id === 'tag-autologin_cx-dark')?.content.template).toBe('Codex');
+	expect(kids.find((k) => k.id === 'val-autologin_cx-session-dark')?.content.template).toContain('accounts.codex.autologin_cx.session');
+	await expect.poll(() => portOpen(1455)).toBe(false); // the CLI's callback server is gone
+});
+
+test('codex: fallback paste of the localhost:1455 callback address (strict validation)', async ({ page }) => {
+	const panel = await startCodex(page, 'cxpaste');
+	await expect(panel.getByTestId('codex-waiting')).toBeVisible();
+	await panel.getByText("Edge window didn't open, or the sign-in is stuck?").click();
+	const href = (await panel.getByRole('link', { name: 'Open link' }).getAttribute('href')) ?? '';
+	expect(new URL(href).origin).toBe('https://auth.openai.com');
+	expect(new URL(href).searchParams.get('redirect_uri')).toBe('http://localhost:1455/auth/callback');
+	const state = new URL(href).searchParams.get('state');
+	const field = panel.getByLabel('Address from the browser');
+	await field.fill(`http://evil.example:1455/auth/callback?code=good&state=${state}`);
+	await panel.getByRole('button', { name: 'Connect' }).click();
+	await expect(panel.getByRole('alert')).toContainText('starting with http://localhost:1455/auth/callback?');
+	await field.fill(`http://localhost:1455/auth/callback?code=good&scope=openid&state=${state}`);
+	await panel.getByRole('button', { name: 'Connect' }).click();
+	await expect(panel.getByTestId('login-ok')).toContainText('Logged in as cxpaste@example.com (plus)', { timeout: 20_000 });
+	await panel.getByRole('button', { name: 'Done' }).click();
+	await expect(row(page, 'cxpaste')).toContainText('cxpaste@example.com');
+});
+
+test('codex: cancel stops the waiting CLI and frees port 1455', async ({ page }) => {
+	await page.goto('/');
+	await row(page, 'cxpaste').getByRole('button', { name: 'Re-login' }).click();
+	const panel = page.getByTestId('login-panel');
+	await expect(panel.getByTestId('codex-waiting')).toBeVisible();
+	expect(await portOpen(1455)).toBe(true);
+	await panel.getByRole('button', { name: 'Cancel' }).click();
+	await expect(panel).toHaveCount(0);
+	await expect.poll(() => portOpen(1455)).toBe(false);
+});
+
+test('codex: Usage page covers both providers, light + dark', async ({ page }) => {
+	const now = Math.floor(Date.now() / 1000);
+	const win = (pct: number, inSec: number) => ({ available: true, percentage: pct, resets_at: { secs_since_epoch: now + inSec, nanos_since_epoch: 0 } });
+	const cache = JSON.parse(fs.readFileSync(path.join(appDir, 'usage-cache.json'), 'utf8'));
+	cache.updated_unix = now;
+	cache.data.accounts = cache.data.accounts.filter((e: { provider: string }) => e.provider === 'claude');
+	cache.data.accounts.push({
+		provider: 'codex',
+		source_path: path.join(home, '.codex-cxpaste', 'auth.json'),
+		usage: { session: win(7, 7200), weekly: win(33, 3 * 86400) },
+		error: null
+	});
+	fs.writeFileSync(path.join(appDir, 'usage-cache.json'), JSON.stringify(cache));
+	await page.goto('/usage');
+	await expect(page.locator('.card .title')).toHaveText('Claude & Codex usage');
+	const cx = page.locator('li[data-account="cxpaste"]');
+	await expect(cx.getByTestId('codex-tag')).toHaveText('Codex');
+	await expect(cx).toContainText('7%');
+	await expect(cx).toContainText('33%');
+	await expect(page.locator('li[data-account="alpha"]').getByTestId('codex-tag')).toHaveCount(0);
+	await page.setViewportSize({ width: 1280, height: 800 });
+	for (const mode of ['Light', 'Dark'] as const) {
+		await page.getByRole('button', { name: mode }).click();
+		await page.screenshot({ path: path.join(shots, `usage-codex-${mode.toLowerCase()}.png`), fullPage: true });
+		await page.goto('/');
+		await page.screenshot({ path: path.join(shots, `manager-codex-${mode.toLowerCase()}.png`), fullPage: true });
+		await page.goto('/usage');
+	}
+	await page.getByRole('button', { name: 'Auto' }).click();
+});
+
+test('codex: remove deletes only the .codex-<id> folder, never %USERPROFILE%\\.codex', async ({ page }) => {
+	await page.goto('/');
+	for (const name of ['autologin cx', 'cxpaste']) {
+		await row(page, name).getByRole('button', { name: 'Remove' }).click();
+		const dialog = page.getByRole('dialog');
+		await expect(dialog).toContainText('Your main .codex folder is never touched.');
+		await dialog.getByRole('button', { name: 'Remove and delete folder' }).click();
+		await expect(row(page, name)).toHaveCount(0);
+	}
+	expect(fs.readdirSync(home).filter((n) => n.startsWith('.codex-'))).toEqual([]);
+	expect(fs.existsSync(path.join(home, '.codex', 'keep.txt'))).toBe(true);
 });
 
 test('cleanup: remove every account -> zero-account card', async ({ page }) => {

@@ -50,7 +50,9 @@ describe('colour tokens meet WCAG AA', () => {
 		['card-text', 'card-bg'], ['card-muted', 'card-bg'], ['card-red', 'card-bg'], ['card-amber', 'card-bg'],
 		['card-link', 'card-bg'], ['card-pill-text', 'card-red'], ['card-text', 'card-track'],
 		// login-needed notice + badge + Usage-page Re-login button
-		['text', 'err-bg'], ['card-muted', 'card-bg']
+		['text', 'err-bg'], ['card-muted', 'card-bg'],
+		// the small "Codex" provider tag (Accounts + Usage pages)
+		['codex-text', 'codex-bg'], ['codex-text', 'surface'], ['codex-text', 'card-bg']
 	];
 	for (const [name, t] of [['light', light], ['dark', dark]] as const) {
 		it(`${name}: every text pair >= 4.5:1`, () => {

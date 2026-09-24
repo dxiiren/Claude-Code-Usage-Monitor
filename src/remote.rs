@@ -1,10 +1,14 @@
-//! Remote mode: Claude accounts and usage read from an Account Manager server.
+//! Remote mode: Claude (and Codex) accounts and usage read from an Account
+//! Manager server.
 //!
 //! When `settings.json` carries both `remote_server_url` and
 //! `remote_server_token`, the Claude provider stops reading local credential
 //! files. Its accounts, usage and login state come from the server's
 //! `GET /api/v1/widget` (see `docs/account-manager-contract.md`, "Server mode").
-//! Precedence: remote mode > `accounts.db` > `settings.json` profiles.
+//! Each account carries a `provider` (`claude` when missing). Once the server
+//! speaks about Codex (payload schema >= 2, or any `codex` account) the Codex
+//! provider comes from the server too; otherwise Codex stays local.
+//! Precedence, per provider: remote mode > `accounts.db` > `settings.json`.
 //! The token is a bearer secret: it is only sent to https URLs (or plain http
 //! on loopback / private LAN addresses) and is never logged.
 use std::sync::{Mutex, OnceLock};
@@ -16,7 +20,7 @@ use crate::accounts::{fingerprint, AccountProfile, AccountSettings, ProviderAcco
 use crate::app_settings::SettingsFile;
 use crate::models::{AccountUsage, UsageData, UsageSection};
 use crate::poller::PollError;
-use crate::providers::ProviderId;
+use crate::providers::{ProviderId, ProviderSet};
 
 /// How often the widget asks the server whether its payload changed.
 pub const CHECK_INTERVAL_MS: u32 = 30_000;
@@ -28,6 +32,8 @@ const REUSE_WINDOW: Duration = Duration::from_secs(10);
 const MAX_BODY_BYTES: u64 = 1024 * 1024;
 const SNAPSHOT_FILE: &str = "remote-accounts.json";
 const SIGNATURE_PREFIX: &str = "remote:";
+/// The first payload schema whose account list is authoritative for Codex.
+const CODEX_SCHEMA: i64 = 2;
 
 /// A bearer secret. Serialized as a plain string; `Debug` never prints it.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,6 +196,35 @@ pub struct RemoteAccount {
     pub status_message: String,
     #[serde(default)]
     pub usage: Option<RemoteUsage>,
+    /// `claude` | `codex`; missing or empty means `claude`.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub provider: String,
+}
+
+impl RemoteAccount {
+    /// The widget provider this account belongs to, `None` for a provider
+    /// this widget does not know.
+    pub fn provider_id(&self) -> Option<ProviderId> {
+        match self.provider.trim() {
+            "" => Some(ProviderId::Claude),
+            value if value.eq_ignore_ascii_case("claude") => Some(ProviderId::Claude),
+            value if value.eq_ignore_ascii_case("codex") => Some(ProviderId::Codex),
+            _ => None,
+        }
+    }
+}
+
+impl Payload {
+    /// Whether the server's list is authoritative for Codex: it declares a
+    /// provider-aware schema, or it lists a Codex account. Otherwise Codex
+    /// keeps its local (`accounts.db` / `settings.json`) accounts.
+    pub fn owns_codex(&self) -> bool {
+        self.schema >= CODEX_SCHEMA
+            || self
+                .accounts
+                .iter()
+                .any(|account| account.provider_id() == Some(ProviderId::Codex))
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -231,6 +266,13 @@ pub fn parse_payload(body: &str) -> Result<Payload, FetchError> {
     let mut seen = std::collections::HashSet::new();
     payload.accounts.retain(|account| {
         let id = account.id.as_str();
+        if account.provider_id().is_none() {
+            crate::diagnose::log(format!(
+                "remote: ignoring account {id:?} with unknown provider {:?}",
+                account.provider
+            ));
+            return false;
+        }
         let valid = !id.is_empty()
             && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
             && seen.insert(id.to_ascii_lowercase());
@@ -293,10 +335,18 @@ pub fn account_result(account: &RemoteAccount) -> (Option<UsageData>, Option<Pol
     }
 }
 
+/// The server's Claude accounts as profiles.
+#[cfg(test)]
 pub fn profiles(payload: &Payload) -> Vec<AccountProfile> {
+    provider_profiles(payload, ProviderId::Claude)
+}
+
+/// The server's accounts of one provider as profiles, in the server's order.
+pub fn provider_profiles(payload: &Payload, provider: ProviderId) -> Vec<AccountProfile> {
     payload
         .accounts
         .iter()
+        .filter(|account| account.provider_id() == Some(provider))
         .map(|account| AccountProfile {
             id: account.id.clone(),
             name: if account.name.trim().is_empty() {
@@ -312,28 +362,48 @@ pub fn profiles(payload: &Payload) -> Vec<AccountProfile> {
 }
 
 fn provider_accounts(profiles: Vec<AccountProfile>) -> ProviderAccounts {
-    ProviderAccounts {
-        selected: profiles
-            .first()
-            .map(|profile| profile.id.clone())
-            .unwrap_or_default(),
-        used_ids: profiles.iter().map(|profile| profile.id.clone()).collect(),
-        profiles,
+    ProviderAccounts::from_profiles(profiles)
+}
+
+/// The account lists remote mode owns.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RemoteProfiles {
+    pub claude: Vec<AccountProfile>,
+    /// `Some` when the server owns Codex (see [`Payload::owns_codex`]).
+    pub codex: Option<Vec<AccountProfile>>,
+}
+
+impl RemoteProfiles {
+    pub fn from_payload(payload: &Payload) -> Self {
+        Self {
+            claude: provider_profiles(payload, ProviderId::Claude),
+            codex: payload
+                .owns_codex()
+                .then(|| provider_profiles(payload, ProviderId::Codex)),
+        }
     }
 }
 
-/// Precedence: remote mode > `accounts.db` > `settings.json` profiles.
+/// Precedence, per provider: remote mode > `accounts.db` > `settings.json`.
 /// `remote` is `Some` whenever remote mode is on, even before the first
-/// fetch (zero accounts then, never a local fallback).
+/// fetch (zero Claude accounts then, never a local fallback). Codex falls
+/// back to the local accounts unless the server owns it.
 pub fn resolve(
     accounts: &AccountSettings,
-    remote: Option<Vec<AccountProfile>>,
+    remote: Option<RemoteProfiles>,
     local: impl FnOnce() -> AccountSettings,
 ) -> AccountSettings {
     match remote {
-        Some(profiles) => {
-            let mut effective = accounts.clone();
-            effective.claude = provider_accounts(profiles);
+        Some(remote) => {
+            let mut effective = match remote.codex {
+                Some(codex) => {
+                    let mut effective = accounts.clone();
+                    effective.codex = provider_accounts(codex);
+                    effective
+                }
+                None => local(),
+            };
+            effective.claude = provider_accounts(remote.claude);
             effective
         }
         None => local(),
@@ -352,11 +422,12 @@ pub fn is_remote_signature(signature: &str) -> bool {
     signature.starts_with(SIGNATURE_PREFIX)
 }
 
-/// One `AccountUsage` per configured remote profile. A failed fetch gives
-/// every account the same error; transient ones keep the last reading stale
-/// through the normal carry-forward rules (same signature).
+/// One `AccountUsage` per configured remote profile of `provider`. A failed
+/// fetch gives every account the same error; transient ones keep the last
+/// reading stale through the normal carry-forward rules (same signature).
 pub fn account_usages(
     config: &RemoteConfig,
+    provider: ProviderId,
     profiles: &[AccountProfile],
     outcome: &Result<Payload, FetchError>,
 ) -> Vec<AccountUsage> {
@@ -365,16 +436,13 @@ pub fn account_usages(
         .filter(|profile| profile.enabled)
         .filter_map(|profile| {
             let (usage, error) = match outcome {
-                Ok(payload) => account_result(
-                    payload
-                        .accounts
-                        .iter()
-                        .find(|account| account.id == profile.id)?,
-                ),
+                Ok(payload) => account_result(payload.accounts.iter().find(|account| {
+                    account.id == profile.id && account.provider_id() == Some(provider)
+                })?),
                 Err(error) => (None, Some(error.poll_error())),
             };
             Some(AccountUsage {
-                provider: ProviderId::Claude,
+                provider,
                 profile: profile.clone(),
                 source_signature: source_signature(config, &profile.id),
                 source_path: None,
@@ -486,9 +554,11 @@ fn fetch_endpoint(agent: &ureq::Agent, endpoint: &str, token: &str) -> Result<Pa
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Outcome {
     Fetched {
+        schema: i64,
         revision: i64,
         manager_url: String,
-        accounts: Vec<(String, String)>,
+        /// `(provider, id, name)`.
+        accounts: Vec<(String, String, String)>,
     },
     Failed(String),
 }
@@ -496,16 +566,30 @@ enum Outcome {
 fn outcome_of(result: &Result<Payload, FetchError>) -> Outcome {
     match result {
         Ok(payload) => Outcome::Fetched {
+            schema: payload.schema,
             revision: payload.revision,
             manager_url: payload.manager_url.clone(),
             accounts: payload
                 .accounts
                 .iter()
-                .map(|account| (account.id.clone(), account.name.clone()))
+                .map(|account| {
+                    (
+                        provider_key(account).to_string(),
+                        account.id.clone(),
+                        account.name.clone(),
+                    )
+                })
                 .collect(),
         },
         Err(error) => Outcome::Failed(error.kind()),
     }
+}
+
+fn provider_key(account: &RemoteAccount) -> &'static str {
+    account
+        .provider_id()
+        .map(|provider| provider.descriptor().key)
+        .unwrap_or("?")
 }
 
 /// Refetch/apply decision of the 30 s check: reload the widget when the
@@ -519,6 +603,9 @@ fn should_reload(previous: Option<&Outcome>, current: &Outcome) -> bool {
 struct PersistedAccount {
     id: String,
     name: String,
+    /// Missing in files written before Codex support: Claude.
+    #[serde(default)]
+    provider: String,
 }
 
 /// The account list survives restarts (and reaches the Theme Studio process)
@@ -526,9 +613,16 @@ struct PersistedAccount {
 #[derive(Serialize, Deserialize)]
 struct Persisted {
     key: String,
+    /// Missing in files written before Codex support: the original schema 1.
+    #[serde(default = "persisted_schema_default")]
+    schema: i64,
     revision: i64,
     manager_url: String,
     accounts: Vec<PersistedAccount>,
+}
+
+fn persisted_schema_default() -> i64 {
+    1
 }
 
 fn snapshot_path() -> std::path::PathBuf {
@@ -543,6 +637,8 @@ struct Tracker {
     /// When `payload` came from the network; `None` for the persisted copy.
     fetched_at: Option<Instant>,
     last: Option<Outcome>,
+    /// Whether the accounts the widget last adopted took Codex from the server.
+    codex_applied: bool,
 }
 
 impl Tracker {
@@ -552,6 +648,7 @@ impl Tracker {
             payload: None,
             fetched_at: None,
             last: None,
+            codex_applied: false,
         }
     }
 
@@ -601,8 +698,15 @@ impl Tracker {
             .and(self.payload.clone())
     }
 
-    fn profiles(&self) -> Vec<AccountProfile> {
-        self.payload.as_ref().map(profiles).unwrap_or_default()
+    fn profiles(&self) -> RemoteProfiles {
+        self.payload
+            .as_ref()
+            .map(RemoteProfiles::from_payload)
+            .unwrap_or_default()
+    }
+
+    fn owns_codex(&self) -> bool {
+        self.payload.as_ref().is_some_and(Payload::owns_codex)
     }
 }
 
@@ -610,7 +714,7 @@ fn load_persisted(key: &str) -> Option<Payload> {
     let text = std::fs::read_to_string(snapshot_path()).ok()?;
     let persisted: Persisted = serde_json::from_str(&text).ok()?;
     (persisted.key == key).then(|| Payload {
-        schema: 1,
+        schema: persisted.schema,
         revision: persisted.revision,
         manager_url: persisted.manager_url,
         accounts: persisted
@@ -619,6 +723,7 @@ fn load_persisted(key: &str) -> Option<Payload> {
             .map(|account| RemoteAccount {
                 id: account.id,
                 name: account.name,
+                provider: account.provider,
                 ..Default::default()
             })
             .collect(),
@@ -628,6 +733,7 @@ fn load_persisted(key: &str) -> Option<Payload> {
 fn persist(key: &str, payload: &Payload) {
     let persisted = Persisted {
         key: key.into(),
+        schema: payload.schema,
         revision: payload.revision,
         manager_url: payload.manager_url.clone(),
         accounts: payload
@@ -636,6 +742,7 @@ fn persist(key: &str, payload: &Payload) {
             .map(|account| PersistedAccount {
                 id: account.id.clone(),
                 name: account.name.clone(),
+                provider: provider_key(account).to_string(),
             })
             .collect(),
     };
@@ -657,7 +764,9 @@ pub fn effective(settings: &SettingsFile) -> AccountSettings {
     let config = RemoteConfig::from_settings(settings);
     let remote = with_tracker(|tracker| {
         tracker.sync(config.as_ref());
-        config.is_some().then(|| tracker.profiles())
+        let remote = config.is_some().then(|| tracker.profiles());
+        tracker.codex_applied = remote.as_ref().is_some_and(|remote| remote.codex.is_some());
+        remote
     });
     resolve(&settings.accounts, remote, || {
         crate::accounts_db::effective(&settings.accounts)
@@ -667,6 +776,11 @@ pub fn effective(settings: &SettingsFile) -> AccountSettings {
 /// The remote configuration the running widget adopted with its accounts.
 pub fn active_config() -> Option<RemoteConfig> {
     with_tracker(|tracker| tracker.config.clone())
+}
+
+/// Whether the Codex provider currently comes from the server.
+pub fn codex_is_remote() -> bool {
+    with_tracker(|tracker| tracker.config.is_some() && tracker.owns_codex())
 }
 
 fn log_fetch(endpoint: &str, result: &Result<Payload, FetchError>) {
@@ -682,7 +796,8 @@ fn log_fetch(endpoint: &str, result: &Result<Payload, FetchError>) {
                     .map(|account| {
                         let usage = account.usage.as_ref().map(usage_data);
                         format!(
-                            "{}({}) status={} session={} weekly={}",
+                            "{}:{}({}) status={} session={} weekly={}",
+                            provider_key(account),
                             account.id,
                             account.name,
                             account.status,
@@ -716,12 +831,32 @@ fn fetch_and_record(config: &RemoteConfig) -> (Result<Payload, FetchError>, bool
     (result, changed)
 }
 
-/// One poll cycle for the Claude provider in remote mode. `Err` only when
-/// the server failed and there is no account to attach the error to.
+/// What one remote poll produced.
+pub struct RemotePoll {
+    /// `Err` only when the server failed and there is no account to attach
+    /// the error to.
+    pub result: Result<Vec<AccountUsage>, PollError>,
+    /// The providers this poll answered for; the caller polls the rest locally.
+    pub providers: ProviderSet,
+}
+
+/// The providers remote mode answers for, among `enabled`: Claude, and Codex
+/// once the server owns it.
+pub fn remote_providers(enabled: ProviderSet, owns_codex: bool) -> ProviderSet {
+    ProviderSet::from_enabled(enabled.iter().filter(|provider| match provider {
+        ProviderId::Claude => true,
+        ProviderId::Codex => owns_codex,
+        _ => false,
+    }))
+}
+
+/// One poll cycle for the providers remote mode owns (Claude, and Codex when
+/// the server owns it).
 pub fn poll_accounts(
     config: &RemoteConfig,
-    claude: &ProviderAccounts,
-) -> Result<Vec<AccountUsage>, PollError> {
+    accounts: &AccountSettings,
+    enabled: ProviderSet,
+) -> RemotePoll {
     let reused = with_tracker(|tracker| {
         (tracker.config.as_ref() == Some(config))
             .then(|| tracker.recent(REUSE_WINDOW))
@@ -738,11 +873,34 @@ pub fn poll_accounts(
         }
         None => fetch_and_record(config).0,
     };
-    let usages = account_usages(config, &claude.profiles, &result);
-    match result {
+    let owns_codex = match &result {
+        Ok(payload) => payload.owns_codex(),
+        // A failed fetch keeps whatever the last good payload said.
+        Err(_) => with_tracker(|tracker| tracker.owns_codex()),
+    };
+    let providers = remote_providers(enabled, owns_codex);
+    let usages = remote_usages(config, accounts, providers, &result);
+    let result = match result {
         Err(error) if usages.is_empty() => Err(error.poll_error()),
         _ => Ok(usages),
-    }
+    };
+    RemotePoll { result, providers }
+}
+
+/// Usage for every configured profile of the remote-owned `providers`.
+fn remote_usages(
+    config: &RemoteConfig,
+    accounts: &AccountSettings,
+    providers: ProviderSet,
+    result: &Result<Payload, FetchError>,
+) -> Vec<AccountUsage> {
+    providers
+        .iter()
+        .filter_map(|provider| Some((provider, accounts.get(provider)?)))
+        .flat_map(|(provider, configured)| {
+            account_usages(config, provider, &configured.profiles, result)
+        })
+        .collect()
 }
 
 /// The 30 s check (run off the UI thread). Re-reads `settings.json`, asks the
@@ -768,13 +926,22 @@ pub fn check_for_changes() -> bool {
 }
 
 /// `true` when the server's account list differs from the accounts the
-/// widget is showing (for example after the first fetch).
+/// widget is showing (for example after the first fetch, or when the server
+/// starts or stops owning Codex).
 pub fn profiles_differ(current: &AccountSettings) -> bool {
     with_tracker(|tracker| {
         tracker.config.is_some()
             && tracker.payload.is_some()
-            && tracker.profiles() != current.claude.profiles
+            && differs(&tracker.profiles(), tracker.codex_applied, current)
     })
+}
+
+fn differs(remote: &RemoteProfiles, codex_applied: bool, current: &AccountSettings) -> bool {
+    remote.claude != current.claude.profiles
+        || match &remote.codex {
+            Some(codex) => !codex_applied || *codex != current.codex.profiles,
+            None => codex_applied,
+        }
 }
 
 /// The "Manage accounts" target: the server's `manager_url` in remote mode
@@ -951,7 +1118,12 @@ mod tests {
             ..Default::default()
         };
         let mut data = crate::models::AppUsageData::default();
-        data.accounts = account_usages(&config, &accounts.claude.profiles, &Ok(payload));
+        data.accounts = account_usages(
+            &config,
+            ProviderId::Claude,
+            &accounts.claude.profiles,
+            &Ok(payload),
+        );
         data.select_accounts(&accounts);
         assert_eq!(data.accounts.len(), 5);
         let context = crate::theme_engine::DataContext::from_usage(
@@ -981,7 +1153,12 @@ mod tests {
             claude: provider_accounts(profiles(&payload)),
             ..Default::default()
         };
-        let good = account_usages(&config, &accounts.claude.profiles, &Ok(payload));
+        let good = account_usages(
+            &config,
+            ProviderId::Claude,
+            &accounts.claude.profiles,
+            &Ok(payload),
+        );
         let mut previous = crate::models::AppUsageData::default();
         previous.accounts = good;
 
@@ -1004,8 +1181,12 @@ mod tests {
             ),
         ] {
             let mut fresh = crate::models::AppUsageData::default();
-            fresh.accounts =
-                account_usages(&config, &accounts.claude.profiles, &Err(error.clone()));
+            fresh.accounts = account_usages(
+                &config,
+                ProviderId::Claude,
+                &accounts.claude.profiles,
+                &Err(error.clone()),
+            );
             assert!(fresh
                 .accounts
                 .iter()
@@ -1038,6 +1219,7 @@ mod tests {
         settings.claude.profiles[0].config_dir = "C:\\settings-claude".into();
         settings.codex.profiles[0].config_dir = "C:\\codex".into();
         let db = crate::accounts_db::Source::Present(crate::accounts_db::Snapshot {
+            schema: 1,
             revision: 1,
             manager_url: crate::accounts_db::DEFAULT_MANAGER_URL.into(),
             profiles: vec![AccountProfile {
@@ -1047,6 +1229,7 @@ mod tests {
                 credentials_path: String::new(),
                 enabled: true,
             }],
+            codex_profiles: None,
         });
         let local = |source: crate::accounts_db::Source| {
             let settings = settings.clone();
@@ -1064,13 +1247,21 @@ mod tests {
             enabled: true,
         }];
 
-        let resolved = resolve(&settings, Some(remote.clone()), local(db.clone()));
+        let claude_only = |claude: Vec<AccountProfile>| RemoteProfiles {
+            claude,
+            codex: None,
+        };
+        let resolved = resolve(
+            &settings,
+            Some(claude_only(remote.clone())),
+            local(db.clone()),
+        );
         assert_eq!(resolved.claude.profiles, remote);
         assert_eq!(resolved.claude.selected, "server");
         assert_eq!(resolved.codex, settings.codex, "other providers unchanged");
 
         // Remote mode with nothing fetched yet: zero accounts, no local fallback.
-        let resolved = resolve(&settings, Some(Vec::new()), local(db.clone()));
+        let resolved = resolve(&settings, Some(claude_only(Vec::new())), local(db.clone()));
         assert!(resolved.claude.profiles.is_empty());
 
         let resolved = resolve(&settings, None, local(db));
@@ -1206,7 +1397,11 @@ mod tests {
         assert!(!tracker.record(&Ok(payload(12, &["ba"]))));
         assert!(tracker.recent(REUSE_WINDOW).is_some());
         assert!(tracker.record(&Err(FetchError::Http(502))));
-        assert_eq!(tracker.profiles()[0].id, "ba", "last good accounts kept");
+        assert_eq!(
+            tracker.profiles().claude[0].id,
+            "ba",
+            "last good accounts kept"
+        );
         assert!(tracker.record(&Ok(payload(13, &["ba"]))));
         assert!(tracker.recent(Duration::ZERO).is_none());
     }
@@ -1227,6 +1422,213 @@ mod tests {
             "https://claude.example.com"
         );
         assert_eq!(manager_url_for(&config, None), "https://claude.example.com");
+    }
+
+    const WITH_CODEX: &str = r#"{
+      "schema": 2,
+      "revision": 20,
+      "manager_url": "https://claude.example.com",
+      "accounts": [
+        { "id": "ba", "name": "BA", "provider": "claude", "status": "ok",
+          "usage": { "session": { "available": true, "percentage": 12.0, "resets_at_unix": 1790248799 },
+                     "weekly": { "available": true, "percentage": 44.0, "resets_at_unix": 1790456399 } } },
+        { "id": "cx", "name": "Codex Work", "provider": "codex", "status": "ok",
+          "usage": { "session": { "available": true, "percentage": 30.0, "resets_at_unix": 1790248799 },
+                     "weekly": { "available": true, "percentage": 55.0, "resets_at_unix": 1790456399 } } },
+        { "id": "cy", "name": "cy", "provider": "CODEX", "status": "expired" },
+        { "id": "cz", "name": "cz", "provider": "codex", "status": "logged_out" },
+        { "id": "old", "name": "old", "status": "ok",
+          "usage": { "session": { "available": true, "percentage": 1.0 }, "weekly": null } },
+        { "id": "gm", "name": "gm", "provider": "gemini", "status": "ok" }
+      ]
+    }"#;
+
+    #[test]
+    fn remote_codex_accounts_map_to_the_codex_provider() {
+        let config = config("https://claude.example.com");
+        let payload = parse_payload(WITH_CODEX).unwrap();
+        // Unknown providers are dropped; a missing provider is Claude.
+        assert!(payload.accounts.iter().all(|a| a.id != "gm"));
+        assert_eq!(
+            account(&payload, "old").provider_id(),
+            Some(ProviderId::Claude)
+        );
+        assert!(payload.owns_codex());
+        let remote = RemoteProfiles::from_payload(&payload);
+        let ids =
+            |profiles: &[AccountProfile]| profiles.iter().map(|p| p.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&remote.claude), ["ba", "old"]);
+        assert_eq!(ids(remote.codex.as_deref().unwrap()), ["cx", "cy", "cz"]);
+
+        let mut settings = AccountSettings::default();
+        settings.codex.profiles[0].config_dir = "C:\\local-codex".into();
+        let resolved = resolve(&settings, Some(remote.clone()), || {
+            panic!("the server owns both providers; no local lookup")
+        });
+        assert_eq!(ids(&resolved.claude.profiles), ["ba", "old"]);
+        assert_eq!(ids(&resolved.codex.profiles), ["cx", "cy", "cz"]);
+        assert_eq!(resolved.codex.selected, "cx");
+        assert_eq!(resolved.codex.profiles[0].name, "Codex Work");
+
+        // A poll produces Codex usage only for Codex profiles, never Claude's.
+        let enabled = ProviderSet::from_enabled([ProviderId::Claude, ProviderId::Codex]);
+        let providers = remote_providers(enabled, payload.owns_codex());
+        assert!(providers.contains(ProviderId::Codex));
+        let mut data = crate::models::AppUsageData::default();
+        data.accounts = remote_usages(&config, &resolved, providers, &Ok(payload.clone()));
+        data.select_accounts(&resolved);
+        let find = |provider, id: &str| {
+            data.accounts
+                .iter()
+                .find(|a| a.provider == provider && a.profile.id == id)
+                .unwrap_or_else(|| panic!("{provider:?} {id}"))
+        };
+        assert_eq!(data.accounts.len(), 5);
+        assert_eq!(
+            find(ProviderId::Codex, "cx")
+                .usage
+                .as_ref()
+                .unwrap()
+                .weekly
+                .percentage,
+            55.0
+        );
+        assert!(is_remote_signature(
+            &find(ProviderId::Codex, "cx").source_signature
+        ));
+        assert_eq!(
+            data.get(ProviderId::Codex).unwrap().session.percentage,
+            30.0
+        );
+        assert_eq!(
+            data.get(ProviderId::Claude).unwrap().session.percentage,
+            12.0
+        );
+
+        let context = crate::theme_engine::DataContext::from_usage(
+            Some(&data),
+            &crate::theme_engine::Canvas::default(),
+        );
+        let value = |expression: &str| {
+            crate::theme_engine::evaluate(expression, &context).unwrap_or(f64::NAN)
+        };
+        assert_eq!(value("accounts.codex.cx.login_required"), 0.0);
+        assert_eq!(value("accounts.codex.cx.session.percentage"), 30.0);
+        assert_eq!(value("accounts.codex.cy.login_required"), 1.0);
+        assert_eq!(value("accounts.codex.cz.login_required"), 1.0);
+        assert_eq!(value("accounts.claude.ba.login_required"), 0.0);
+        assert_eq!(value("codex.login_required"), 0.0);
+
+        // Codex disabled in settings: the server answers for Claude only.
+        let claude_only = remote_providers(ProviderSet::from_enabled([ProviderId::Claude]), true);
+        assert!(!claude_only.contains(ProviderId::Codex));
+        assert!(remote_usages(&config, &resolved, claude_only, &Ok(payload))
+            .iter()
+            .all(|a| a.provider == ProviderId::Claude));
+    }
+
+    #[test]
+    fn a_server_without_codex_leaves_codex_local() {
+        // The original payload: no provider fields, schema 1.
+        let payload = parse_payload(FULL).unwrap();
+        assert!(!payload.owns_codex());
+        let remote = RemoteProfiles::from_payload(&payload);
+        assert_eq!(remote.codex, None);
+        assert_eq!(remote.claude.len(), 5);
+        let enabled = ProviderSet::from_enabled([ProviderId::Claude, ProviderId::Codex]);
+        assert_eq!(
+            remote_providers(enabled, false),
+            ProviderSet::from_enabled([ProviderId::Claude])
+        );
+        let mut local = AccountSettings::default();
+        local.codex.profiles[0].config_dir = "C:\\local-codex".into();
+        let resolved = resolve(&AccountSettings::default(), Some(remote.clone()), || {
+            local.clone()
+        });
+        assert_eq!(
+            resolved.codex, local.codex,
+            "Codex keeps its local accounts"
+        );
+        assert_eq!(resolved.claude.profiles, remote.claude);
+
+        // Schema 2 with zero Codex accounts: zero Codex accounts, no local fallback.
+        let empty = parse_payload(
+            r#"{"schema":2,"revision":1,"accounts":[{"id":"ba","provider":"claude","status":"ok"}]}"#,
+        )
+        .unwrap();
+        assert!(empty.owns_codex());
+        let resolved = resolve(
+            &AccountSettings::default(),
+            Some(RemoteProfiles::from_payload(&empty)),
+            || panic!("no local lookup"),
+        );
+        assert!(resolved.codex.profiles.is_empty());
+        assert!(resolved.codex.selected().is_none());
+    }
+
+    #[test]
+    fn provider_changes_reload_and_survive_the_persisted_copy() {
+        let base = parse_payload(WITH_CODEX).unwrap();
+        let mut moved = base.clone();
+        moved.accounts[1].provider = "claude".into();
+        assert!(should_reload(
+            Some(&outcome_of(&Ok(base.clone()))),
+            &outcome_of(&Ok(moved))
+        ));
+        let mut bumped = base.clone();
+        bumped.schema = 3;
+        assert!(should_reload(
+            Some(&outcome_of(&Ok(base.clone()))),
+            &outcome_of(&Ok(bumped))
+        ));
+
+        // Whether the widget adopted the server's Codex list decides a reload.
+        let remote = RemoteProfiles::from_payload(&base);
+        let adopted = resolve(
+            &AccountSettings::default(),
+            Some(remote.clone()),
+            || unreachable!(),
+        );
+        assert!(!differs(&remote, true, &adopted));
+        assert!(
+            differs(&remote, false, &adopted),
+            "server started owning Codex"
+        );
+        let claude_only = RemoteProfiles {
+            codex: None,
+            ..remote.clone()
+        };
+        assert!(
+            differs(&claude_only, true, &adopted),
+            "server stopped owning Codex"
+        );
+
+        // The persisted account list keeps providers and schema; old files are Claude.
+        let persisted: Persisted = serde_json::from_str(
+            r#"{"key":"k","revision":4,"manager_url":"","accounts":[{"id":"ba","name":"BA"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(persisted.schema, 1);
+        assert_eq!(persisted.accounts[0].provider, "");
+        let text = serde_json::to_string(&Persisted {
+            key: "k".into(),
+            schema: base.schema,
+            revision: base.revision,
+            manager_url: String::new(),
+            accounts: base
+                .accounts
+                .iter()
+                .map(|account| PersistedAccount {
+                    id: account.id.clone(),
+                    name: account.name.clone(),
+                    provider: provider_key(account).to_string(),
+                })
+                .collect(),
+        })
+        .unwrap();
+        let back: Persisted = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.schema, 2);
+        assert_eq!(back.accounts[2].provider, "codex");
     }
 
     /// Serve one canned HTTP response and return the request head it received.

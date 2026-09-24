@@ -89,6 +89,19 @@ impl Default for ProviderAccounts {
 }
 
 impl ProviderAccounts {
+    /// An externally owned account list (Account Manager database or server):
+    /// the first profile is selected and only these IDs are reserved.
+    pub fn from_profiles(profiles: Vec<AccountProfile>) -> Self {
+        Self {
+            selected: profiles
+                .first()
+                .map(|profile| profile.id.clone())
+                .unwrap_or_default(),
+            used_ids: profiles.iter().map(|profile| profile.id.clone()).collect(),
+            profiles,
+        }
+    }
+
     pub fn selected(&self) -> Option<&AccountProfile> {
         self.profiles
             .iter()

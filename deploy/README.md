@@ -43,6 +43,7 @@ All settings live in `deploy/.env` (see `.env.example`):
 | `ACCTMGR_SESSION_SECRET` | generated | session signing secret; generated once into `/data/session-secret` |
 | `ACCTMGR_NETWORK` | none | external Docker network to join (tunnel overlay) |
 | `CLAUDE_CODE_VERSION` | `2.1.273` | Claude Code CLI version baked into the image |
+| `CODEX_VERSION` | `0.142.5` | Codex CLI (`@openai/codex`) version baked into the image |
 
 ## Behind a Cloudflare tunnel
 
@@ -68,6 +69,23 @@ Usage is polled right after the login, then every `ACCTMGR_POLL_SECONDS`, the sa
 widget polls (same endpoint and headers, token refresh by running the CLI, 429 / Retry-After
 honoured).
 
+### Codex (ChatGPT) accounts
+
+Pick **Codex** before **Start**. The server asks the Codex CLI in the container for a ChatGPT sign-in
+link (`codex app-server`, the CLI's own login server, with `CODEX_HOME=/data/accounts/<id>`) and
+shows **Open sign-in page**. Open it in your own browser (a private window), sign in. Your browser
+then lands on a `http://localhost:1455/auth/callback?...` page that does not load: that is expected,
+because the CLI waiting for it runs inside the container. Copy that page's full address and paste it
+into the manager. The server checks it (host `localhost` / `127.0.0.1`, port `1455`, path
+`/auth/callback` only) and replays it to the CLI's own `127.0.0.1:1455` inside the container, which
+finishes the login and writes `auth.json`. The server never calls OpenAI OAuth endpoints itself.
+
+Status comes from `codex login status`; the email from the id_token in `auth.json`. Usage is polled
+from `https://chatgpt.com/backend-api/wham/usage` like the widget (same headers incl.
+`ChatGPT-Account-Id`, 5-hour / weekly windows by length, a rejected token refreshed by the CLI,
+429 / Retry-After honoured). Only one Codex sign-in can wait at a time (the CLI has one callback
+port); starting another cancels the first.
+
 ## Connecting a widget
 
 Open **Widget tokens**, create a token (it is shown once), and put these in the widget's
@@ -84,15 +102,17 @@ token at once (`401`).
 ## Data, backup and upgrades
 
 Everything is in the `claude-usage-data` volume (`/data`): `accounts.db`, `session-secret`, and one
-Claude config folder per account under `accounts/`. Back up the volume to keep the logins.
+config folder per account under `accounts/` (Claude: `CLAUDE_CONFIG_DIR`; Codex: `CODEX_HOME` with
+`auth.json`). Back up the volume to keep the logins.
 
 ```sh
 docker run --rm -v claude-usage_claude-usage-data:/data -v "$PWD":/backup debian:bookworm-slim \
   tar czf /backup/claude-usage-data.tgz -C /data .
 ```
 
-Upgrade the CLI: change `CLAUDE_CODE_VERSION`, then `docker compose up -d --build`. The CLI's own
-auto-updater is off in the image.
+Upgrade the CLIs: change `CLAUDE_CODE_VERSION` / `CODEX_VERSION`, then `docker compose up -d --build`.
+The Claude CLI's own auto-updater is off in the image; the Codex CLI only updates when asked
+(`codex update`), which nothing in the image runs.
 
 ## Security notes
 
@@ -103,4 +123,4 @@ auto-updater is off in the image.
   time only (`docker compose logs | grep "failed sign-in"`), never what was typed.
 - Session cookie: `HttpOnly`, `SameSite=Strict`, and `Secure` (as `__Host-acctmgr_session`) when the
   public origin is https. Sessions and widget tokens are stored as SHA-256 hashes only.
-- Tokens and Claude credentials are never returned by any endpoint or written to logs.
+- Tokens and Claude / Codex credentials are never returned by any endpoint or written to logs.

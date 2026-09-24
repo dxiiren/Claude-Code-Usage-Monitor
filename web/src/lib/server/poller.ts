@@ -5,6 +5,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+/** src/poller/codex.rs CODEX_USAGE_URL. */
+export const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
+/** codex.rs sends exactly this User-Agent. */
+export const CODEX_USER_AGENT = 'codex-cli';
+/** codex.rs WEEKLY_WINDOW_THRESHOLD_SECONDS: a window of a day or longer is the weekly allowance. */
+const WEEKLY_WINDOW_THRESHOLD_SECONDS = 86_400;
 export const MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 /** Header probes stay on the low-cost Haiku tier (claude.rs MODEL_FALLBACK_CHAIN). */
 const MODEL_FALLBACK_CHAIN = ['claude-haiku-4-5'];
@@ -47,13 +53,18 @@ export interface PollDeps {
 	nowMs: () => number;
 	usageUrl: string;
 	messagesUrl: string;
+	/** Codex: the wham/usage endpoint (defaults to CODEX_USAGE_URL). */
+	codexUsageUrl?: string;
+	/** Codex: runs the CLI so it refreshes its own token (codex.ts refreshCodexTokenViaCli). */
+	refreshCodex?: (codexHome: string) => Promise<void>;
 }
 
-export function defaultUrls(): { usageUrl: string; messagesUrl: string } {
+export function defaultUrls(): { usageUrl: string; messagesUrl: string; codexUsageUrl: string } {
 	// Overrides exist for tests only (e2e points them at a local fake).
 	return {
 		usageUrl: process.env.ACCTMGR_USAGE_URL || USAGE_URL,
-		messagesUrl: process.env.ACCTMGR_MESSAGES_URL || MESSAGES_URL
+		messagesUrl: process.env.ACCTMGR_MESSAGES_URL || MESSAGES_URL,
+		codexUsageUrl: process.env.ACCTMGR_CODEX_USAGE_URL || CODEX_USAGE_URL
 	};
 }
 
@@ -278,11 +289,113 @@ export async function pollAccount(configDir: string, deps: PollDeps): Promise<Po
 	}
 }
 
+// ---------- Codex (port of src/poller/codex.rs) ----------
+
+interface CodexCreds {
+	accessToken: string;
+	accountId: string | null;
+}
+
+/** codex.rs read_codex_credentials_at: auth.json tokens.access_token (non-blank) + account_id. Never logged. */
+export function readCodexCredentials(codexHome: string): CodexCreds | null {
+	try {
+		const j = JSON.parse(fs.readFileSync(path.join(codexHome, 'auth.json'), 'utf8').trimStart());
+		const t = j?.tokens;
+		if (typeof t?.access_token !== 'string' || !t.access_token.trim()) return null;
+		return { accessToken: t.access_token, accountId: typeof t.account_id === 'string' && t.account_id ? t.account_id : null };
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * codex.rs codex_usage_from_response_at (windows only; the credits gauge is widget-side). Windows
+ * are assigned by length, not slot: >= 1 day is weekly; a window without a length keeps the legacy
+ * slot mapping (primary = session, secondary = weekly). reset_at < 0 = no usable reset.
+ */
+export function codexUsageFromResponse(body: unknown): Usage | null {
+	if (!body || typeof body !== 'object') return null;
+	const rl = (body as { rate_limit?: unknown }).rate_limit;
+	if (!rl || typeof rl !== 'object') return null;
+	const u: Usage = { session: emptyWindow(), weekly: emptyWindow() };
+	const slots: [unknown, boolean][] = [
+		[(rl as Record<string, unknown>).primary_window, false],
+		[(rl as Record<string, unknown>).secondary_window, true]
+	];
+	for (const [w, defaultWeekly] of slots) {
+		if (!w || typeof w !== 'object') continue;
+		const x = w as { used_percent?: unknown; reset_at?: unknown; limit_window_seconds?: unknown };
+		if (typeof x.used_percent !== 'number' || typeof x.reset_at !== 'number') continue; // serde would reject it
+		const section: WindowUsage = { available: true, percentage: x.used_percent, resets_at_unix: x.reset_at >= 0 ? x.reset_at : null };
+		const weekly = typeof x.limit_window_seconds === 'number' ? x.limit_window_seconds >= WEEKLY_WINDOW_THRESHOLD_SECONDS : defaultWeekly;
+		if (weekly) u.weekly = section;
+		else u.session = section;
+	}
+	return u;
+}
+
+class CodexAuthRequired {}
+
+async function fetchCodexUsage(creds: CodexCreds, deps: PollDeps): Promise<Usage> {
+	const headers: Record<string, string> = { Authorization: `Bearer ${creds.accessToken}`, 'User-Agent': CODEX_USER_AGENT };
+	if (creds.accountId) headers['ChatGPT-Account-Id'] = creds.accountId;
+	let res: Response;
+	try {
+		res = await deps.fetch(deps.codexUsageUrl || CODEX_USAGE_URL, { method: 'GET', headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+	} catch {
+		throw 'network_error' as const;
+	}
+	if (res.status >= 400) {
+		void res.body?.cancel().catch(() => undefined);
+		if (res.status === 401 || res.status === 403) throw new CodexAuthRequired();
+		// 429 / 5xx: honour Retry-After through the scheduler's backoff; anything else is request_failed.
+		if (res.status === 429 || res.status >= 500)
+			throw new HttpStatus(res.status, parseRetryAfter(res.headers.get('retry-after'), deps.nowMs()));
+		throw 'request_failed' as const;
+	}
+	let body: unknown;
+	try {
+		body = await res.json();
+	} catch {
+		throw 'request_failed' as const;
+	}
+	const u = codexUsageFromResponse(body);
+	if (!u) throw 'request_failed' as const;
+	return u;
+}
+
+/** codex.rs poll_account: on 401/403 refresh via the CLI, re-read auth.json, try once more. */
+export async function pollCodexAccount(codexHome: string, deps: PollDeps): Promise<PollResult> {
+	const wrap = (e: unknown): PollResult => {
+		if (e instanceof CodexAuthRequired) return { ok: false, error: 'auth_required' };
+		if (e instanceof HttpStatus) return { ok: false, error: { http_status: e.status }, ...(e.retryAfter ? { retryAfter: e.retryAfter } : {}) };
+		if (typeof e === 'string') return { ok: false, error: e as PollErrorJson };
+		return { ok: false, error: 'request_failed' };
+	};
+	const creds = readCodexCredentials(codexHome);
+	if (!creds) return { ok: false, error: 'no_credentials' };
+	try {
+		return { ok: true, usage: await fetchCodexUsage(creds, deps) };
+	} catch (e) {
+		if (!(e instanceof CodexAuthRequired)) return wrap(e);
+	}
+	await deps.refreshCodex?.(codexHome);
+	const again = readCodexCredentials(codexHome);
+	if (!again) return { ok: false, error: 'token_expired' };
+	try {
+		return { ok: true, usage: await fetchCodexUsage(again, deps) };
+	} catch (e) {
+		return wrap(e);
+	}
+}
+
 // ---------- scheduling ----------
 
 export interface PollTarget {
 	id: string;
 	configDir: string;
+	/** Default 'claude'. */
+	provider?: 'claude' | 'codex';
 }
 
 export interface PollStore {
@@ -319,7 +432,7 @@ export class Poller {
 		if (!force && (this.cooldownUntil.get(t.id) ?? 0) > now) return Promise.resolve();
 		const p = (async () => {
 			try {
-				const r = await pollAccount(t.configDir, this.deps);
+				const r = t.provider === 'codex' ? await pollCodexAccount(t.configDir, this.deps) : await pollAccount(t.configDir, this.deps);
 				const at = this.deps.nowMs();
 				this.applyBackoff(t.id, r, at);
 				this.store.save(t.id, r, at);

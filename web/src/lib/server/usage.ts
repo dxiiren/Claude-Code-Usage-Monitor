@@ -1,5 +1,6 @@
-// Usage numbers come from the widget's own cache (no API call), matched by
-// source_path = <config_dir>\.credentials.json -- same as kit Show-UsageStatus.
+// Usage numbers come from the widget's own cache (no API call), matched by provider +
+// source_path = <config_dir>\.credentials.json (Claude, same as kit Show-UsageStatus) or
+// <config_dir>\auth.json (Codex).
 import fs from 'node:fs';
 import path from 'node:path';
 import { USAGE_CACHE_FILE, pathKey } from './paths';
@@ -30,7 +31,10 @@ function win(w: unknown): UsageWindow | null {
 	return { percentage: o.percentage, resetsAt: typeof r === 'number' ? r : null };
 }
 
-export function readUsage(accounts: Account[]): UsageSnapshot {
+/** provider may be missing (rows from before schema 2): Claude. */
+type UsageAccount = Pick<Account, 'id' | 'config_dir'> & { provider?: Account['provider'] };
+
+export function readUsage(accounts: UsageAccount[]): UsageSnapshot {
 	const byId: Record<string, AccountUsage | null> = {};
 	for (const a of accounts) byId[a.id] = null;
 	let cache: { updated_unix?: unknown; data?: { accounts?: unknown } };
@@ -41,9 +45,11 @@ export function readUsage(accounts: Account[]): UsageSnapshot {
 	}
 	const entries = Array.isArray(cache.data?.accounts) ? (cache.data!.accounts as Record<string, unknown>[]) : [];
 	for (const a of accounts) {
-		const want = pathKey(path.join(a.config_dir, '.credentials.json'));
+		// Claude: <config_dir>\.credentials.json; Codex: <CODEX_HOME>\auth.json (src/accounts.rs).
+		const provider = a.provider === 'codex' ? 'codex' : 'claude';
+		const want = pathKey(path.join(a.config_dir, provider === 'codex' ? 'auth.json' : '.credentials.json'));
 		const e = entries.find(
-			(x) => x.provider === 'claude' && typeof x.source_path === 'string' && pathKey(x.source_path) === want
+			(x) => x.provider === provider && typeof x.source_path === 'string' && pathKey(x.source_path) === want
 		);
 		if (!e) continue;
 		const u = (e.usage ?? {}) as { session?: unknown; weekly?: unknown };

@@ -7,6 +7,8 @@
   `just web`. Idempotent. → [getting-started](02-setup/getting-started.md)
 - **Add an account:** type a name → **Start** → sign in in the fresh Edge window → **Authorize** →
   paste the code → **Connect**. The widget updates within seconds.
+- **Codex account:** pick **Codex** first. On a PC the Edge sign-in finishes by itself; on a server,
+  paste the `http://localhost:1455/auth/callback?...` address the browser ends on.
 - **Where data lives:** SQLite `accounts.db` (names, emails, order; server also usage, sessions,
   hashed widget tokens) + one Claude config folder per account holding its login. Tokens are never
   shown, logged or committed.

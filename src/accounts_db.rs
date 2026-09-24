@@ -1,14 +1,18 @@
-//! Claude accounts owned by the Account Manager web app.
+//! Accounts owned by the Account Manager web app.
 //!
 //! The web app keeps the account list in `accounts.db` (see
 //! `docs/account-manager-contract.md`). When that database exists and carries a
 //! `meta.schema` row, it replaces the Claude profiles from `settings.json`.
-//! When it is missing, unreadable or has no schema row, nothing changes.
-//! The monitor only ever opens it read-only.
+//! From schema 2 on, rows with `provider = 'codex'` also replace the Codex
+//! profiles; a schema 1 database (or one without the `provider` column) only
+//! ever holds Claude accounts and Codex keeps its `settings.json` profiles.
+//! When the database is missing, unreadable or has no schema row, nothing
+//! changes. The monitor only ever opens it read-only.
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::accounts::{AccountProfile, AccountSettings, ProviderAccounts};
+use crate::providers::ProviderId;
 use crate::winsqlite::{self, Connection};
 
 pub const DEFAULT_MANAGER_URL: &str = "http://127.0.0.1:47291";
@@ -18,19 +22,28 @@ pub const PATH_OVERRIDE_VARIABLE: &str = "CCUM_ACCOUNTS_DB";
 pub const REVISION_CHECK_INTERVAL_MS: u32 = 5_000;
 /// A write by the web app holds the lock for milliseconds; never wait long.
 const BUSY_TIMEOUT_MS: u32 = 250;
+/// The first schema whose `provider` column makes the database own Codex accounts.
+pub const CODEX_SCHEMA: i64 = 2;
 
 const ACCOUNTS_QUERY: &str =
     "SELECT id, name, config_dir FROM accounts WHERE enabled = 1 ORDER BY sort_order, name";
+const ACCOUNTS_WITH_PROVIDER_QUERY: &str = "SELECT id, name, config_dir, provider FROM accounts \
+     WHERE enabled = 1 ORDER BY sort_order, name";
 
 /// The accounts and settings read from one consistent database snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
+    pub schema: i64,
     pub revision: i64,
     pub manager_url: String,
+    /// Claude profiles (every row of a database without a `provider` column).
     pub profiles: Vec<AccountProfile>,
+    /// Codex profiles when the database owns them (schema >= 2), otherwise
+    /// `None` and Codex keeps its `settings.json` profiles.
+    pub codex_profiles: Option<Vec<AccountProfile>>,
 }
 
-/// What the database currently says about the Claude account list.
+/// What the database currently says about the account lists.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
     /// No usable database: keep using `settings.json`.
@@ -38,11 +51,19 @@ pub enum Source {
     Present(Snapshot),
 }
 
+/// `(schema, revision)`: a change in either reloads the accounts.
+type Version = (i64, i64);
+
 impl Source {
+    #[cfg(test)]
     fn revision(&self) -> Option<i64> {
+        self.version().map(|(_, revision)| revision)
+    }
+
+    fn version(&self) -> Option<Version> {
         match self {
             Source::Absent => None,
-            Source::Present(snapshot) => Some(snapshot.revision),
+            Source::Present(snapshot) => Some((snapshot.schema, snapshot.revision)),
         }
     }
 }
@@ -102,21 +123,57 @@ fn meta_integer(connection: &Connection, key: &str) -> Result<Option<i64>, winsq
     Ok(value)
 }
 
-/// `Some(revision)` when the database is active, `None` when it is absent or
-/// has no schema row. This is the cheap check run every few seconds.
-pub fn read_revision(path: &Path) -> Result<Option<i64>, winsqlite::Error> {
+/// The schema as a number: `"2"` is 2; a present but non-numeric value is
+/// treated as the original schema 1 so the database still counts as active.
+fn meta_schema(connection: &Connection) -> Result<Option<i64>, winsqlite::Error> {
+    Ok(meta_text(connection, "schema")?.map(|schema| schema.trim().parse().unwrap_or(1)))
+}
+
+/// `Some((schema, revision))` when the database is active, `None` when it is
+/// absent or has no schema row. This is the cheap check run every few seconds.
+fn read_version(path: &Path) -> Result<Option<Version>, winsqlite::Error> {
     let Some(connection) = open(path)? else {
         return Ok(None);
     };
     connection.execute("BEGIN")?;
-    let revision = if meta_table_exists(&connection)? && meta_text(&connection, "schema")?.is_some()
-    {
-        Some(meta_integer(&connection, "revision")?.unwrap_or(0))
-    } else {
-        None
+    let version = match meta_table_exists(&connection)? {
+        true => match meta_schema(&connection)? {
+            Some(schema) => Some((schema, meta_integer(&connection, "revision")?.unwrap_or(0))),
+            None => None,
+        },
+        false => None,
     };
     connection.execute("COMMIT")?;
-    Ok(revision)
+    Ok(version)
+}
+
+/// `Some(revision)` when the database is active, `None` when it is absent or
+/// has no schema row.
+#[cfg(test)]
+pub fn read_revision(path: &Path) -> Result<Option<i64>, winsqlite::Error> {
+    Ok(read_version(path)?.map(|(_, revision)| revision))
+}
+
+fn has_provider_column(connection: &Connection) -> Result<bool, winsqlite::Error> {
+    let mut found = false;
+    connection.query_rows("PRAGMA table_info(accounts)", |row| {
+        found |= row
+            .text(1)?
+            .is_some_and(|name| name.eq_ignore_ascii_case("provider"));
+        Ok(())
+    })?;
+    Ok(found)
+}
+
+/// `claude` (or empty) and `codex`; anything else is a provider this widget
+/// does not know and the row is skipped.
+fn row_provider(value: Option<String>) -> Option<ProviderId> {
+    match value.as_deref().map(str::trim) {
+        None | Some("") => Some(ProviderId::Claude),
+        Some(value) if value.eq_ignore_ascii_case("claude") => Some(ProviderId::Claude),
+        Some(value) if value.eq_ignore_ascii_case("codex") => Some(ProviderId::Codex),
+        Some(_) => None,
+    }
 }
 
 /// Read the whole account list inside one read transaction, so the revision
@@ -126,20 +183,38 @@ pub fn load(path: &Path) -> Result<Source, winsqlite::Error> {
         return Ok(Source::Absent);
     };
     connection.execute("BEGIN")?;
-    if !meta_table_exists(&connection)? || meta_text(&connection, "schema")?.is_none() {
+    let schema = match meta_table_exists(&connection)? {
+        true => meta_schema(&connection)?,
+        false => None,
+    };
+    let Some(schema) = schema else {
         connection.execute("COMMIT")?;
         return Ok(Source::Absent);
-    }
+    };
     let revision = meta_integer(&connection, "revision")?.unwrap_or(0);
     let manager_url = meta_text(&connection, "manager_url")?
         .map(|url| url.trim().to_string())
         .filter(|url| crate::context_menu::supported_url(url))
         .unwrap_or_else(|| DEFAULT_MANAGER_URL.into());
+    let with_provider = has_provider_column(&connection)?;
+    let owns_codex = schema >= CODEX_SCHEMA;
     let mut profiles = Vec::new();
-    connection.query_rows(ACCOUNTS_QUERY, |row| {
+    let mut codex_profiles = Vec::new();
+    let mut ignored = Vec::new();
+    let query = if with_provider {
+        ACCOUNTS_WITH_PROVIDER_QUERY
+    } else {
+        ACCOUNTS_QUERY
+    };
+    connection.query_rows(query, |row| {
         let id = row.text(0)?.unwrap_or_default();
         let name = row.text(1)?.unwrap_or_default();
-        profiles.push(AccountProfile {
+        let provider = if with_provider {
+            row_provider(row.text(3)?)
+        } else {
+            Some(ProviderId::Claude)
+        };
+        let profile = AccountProfile {
             name: if name.trim().is_empty() {
                 id.clone()
             } else {
@@ -149,36 +224,40 @@ pub fn load(path: &Path) -> Result<Source, winsqlite::Error> {
             config_dir: row.text(2)?.unwrap_or_default(),
             credentials_path: String::new(),
             enabled: true,
-        });
+        };
+        match provider {
+            Some(ProviderId::Claude) => profiles.push(profile),
+            Some(ProviderId::Codex) if owns_codex => codex_profiles.push(profile),
+            _ => ignored.push(profile.id),
+        }
         Ok(())
     })?;
     connection.execute("COMMIT")?;
+    if !ignored.is_empty() {
+        crate::diagnose::log(format!(
+            "accounts db: schema={schema} ignoring row(s) [{}] (unknown provider, or codex before schema {CODEX_SCHEMA})",
+            ignored.join(", ")
+        ));
+    }
     Ok(Source::Present(Snapshot {
+        schema,
         revision,
         manager_url,
         profiles,
+        codex_profiles: owns_codex.then_some(codex_profiles),
     }))
 }
 
-/// Replace the Claude profiles with the database's list. Codex and every
-/// other provider keep their `settings.json` configuration.
+/// Replace the Claude profiles (and, from schema 2 on, the Codex profiles)
+/// with the database's lists. Every other provider keeps `settings.json`.
 pub fn apply(source: &Source, accounts: &mut AccountSettings) {
     let Source::Present(snapshot) = source else {
         return;
     };
-    accounts.claude = ProviderAccounts {
-        profiles: snapshot.profiles.clone(),
-        selected: snapshot
-            .profiles
-            .first()
-            .map(|profile| profile.id.clone())
-            .unwrap_or_default(),
-        used_ids: snapshot
-            .profiles
-            .iter()
-            .map(|profile| profile.id.clone())
-            .collect(),
-    };
+    accounts.claude = ProviderAccounts::from_profiles(snapshot.profiles.clone());
+    if let Some(codex) = &snapshot.codex_profiles {
+        accounts.codex = ProviderAccounts::from_profiles(codex.clone());
+    }
 }
 
 /// Tracks the last database state seen by this process.
@@ -214,8 +293,8 @@ impl Tracker {
             self.current(path);
             return true;
         };
-        let revision = match read_revision(path) {
-            Ok(revision) => revision,
+        let version = match read_version(path) {
+            Ok(version) => version,
             Err(error) => {
                 crate::diagnose::log(format!(
                     "accounts db: revision check failed, retrying next tick: {error}"
@@ -223,15 +302,20 @@ impl Tracker {
                 return false;
             }
         };
-        if revision == known.revision() {
+        if version == known.version() {
             return false;
         }
-        let previous = known.revision();
+        let previous = known.version();
         match load(path) {
             Ok(source) => {
+                let describe = |version: Option<Version>| match version {
+                    Some((schema, revision)) => format!("revision={revision} schema={schema}"),
+                    None => "inactive".into(),
+                };
                 crate::diagnose::log(format!(
-                    "accounts db: revision changed {previous:?} -> {:?}",
-                    source.revision()
+                    "accounts db: revision changed {} -> {}",
+                    describe(previous),
+                    describe(source.version())
                 ));
                 log_source(path, &source);
                 self.current = Some(source);
@@ -253,18 +337,34 @@ fn log_source(path: &Path, source: &Source) {
             "accounts db: not active at {}; using settings.json accounts",
             path.display()
         )),
-        Source::Present(snapshot) => crate::diagnose::log(format!(
-            "accounts db: {} enabled Claude account(s) from {} revision={} profiles=[{}]",
-            snapshot.profiles.len(),
-            path.display(),
-            snapshot.revision,
-            snapshot
-                .profiles
-                .iter()
-                .map(|profile| format!("{}={}", profile.id, profile.config_dir))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
+        Source::Present(snapshot) => {
+            let list = |profiles: &[AccountProfile]| {
+                profiles
+                    .iter()
+                    .map(|profile| format!("{}={}", profile.id, profile.config_dir))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            crate::diagnose::log(format!(
+                "accounts db: {} enabled Claude account(s) from {} schema={} revision={} profiles=[{}]",
+                snapshot.profiles.len(),
+                path.display(),
+                snapshot.schema,
+                snapshot.revision,
+                list(&snapshot.profiles)
+            ));
+            crate::diagnose::log(match &snapshot.codex_profiles {
+                Some(codex) => format!(
+                    "accounts db: {} enabled Codex account(s) from the database profiles=[{}]",
+                    codex.len(),
+                    list(codex)
+                ),
+                None => format!(
+                    "accounts db: schema {} < {CODEX_SCHEMA}; Codex keeps its settings.json accounts",
+                    snapshot.schema
+                ),
+            });
+        }
     }
 }
 
@@ -277,7 +377,8 @@ fn with_tracker<T>(f: impl FnOnce(&mut Tracker, &Path) -> T) -> T {
 }
 
 /// The account settings the monitor should use: `settings.json` with the
-/// Claude profiles replaced by the database when it is active.
+/// Claude (and, from schema 2, Codex) profiles replaced by the database when
+/// it is active.
 pub fn effective(accounts: &AccountSettings) -> AccountSettings {
     let mut effective = accounts.clone();
     with_tracker(|tracker, path| apply(tracker.current(path), &mut effective));
@@ -342,6 +443,22 @@ mod tests {
             self.run(&format!(
                 "INSERT INTO accounts (id, name, config_dir, enabled, sort_order, created_at, updated_at)
                  VALUES ('{id}', '{name}', 'C:\\Users\\me\\.claude-{id}', {enabled}, {sort_order},
+                         '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');"
+            ));
+        }
+
+        /// What the web app does to an old database: add the column, bump the schema.
+        fn upgrade_to_v2(&self) {
+            self.run(
+                "ALTER TABLE accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude';
+                 UPDATE meta SET value = '2' WHERE key = 'schema';",
+            );
+        }
+
+        fn codex_account(&self, id: &str, name: &str, enabled: i64, sort_order: i64) {
+            self.run(&format!(
+                "INSERT INTO accounts (id, name, config_dir, enabled, sort_order, provider, created_at, updated_at)
+                 VALUES ('{id}', '{name}', 'C:\\Users\\me\\.codex-{id}', {enabled}, {sort_order}, 'codex',
                          '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');"
             ));
         }
@@ -506,6 +623,164 @@ mod tests {
         );
         data.select_accounts(&applied);
         assert!(data.get(crate::providers::ProviderId::Claude).is_none());
+    }
+
+    fn codex(source: &Source) -> Option<Vec<(String, String)>> {
+        match source {
+            Source::Absent => panic!("database should be active"),
+            Source::Present(snapshot) => snapshot.codex_profiles.as_ref().map(|profiles| {
+                profiles
+                    .iter()
+                    .map(|p| (p.id.clone(), p.config_dir.clone()))
+                    .collect()
+            }),
+        }
+    }
+
+    fn ids(profiles: &[AccountProfile]) -> Vec<&str> {
+        profiles.iter().map(|p| p.id.as_str()).collect()
+    }
+
+    #[test]
+    fn schema_1_without_provider_column_is_all_claude_and_codex_keeps_settings() {
+        let db = TempDb::new();
+        db.contract(3);
+        db.account("ba", "ba", 1, 0);
+        db.account("kv", "kv", 1, 1);
+        let source = load(&db.0).unwrap();
+        let Source::Present(snapshot) = &source else {
+            panic!("database should be active")
+        };
+        assert_eq!(snapshot.schema, 1);
+        assert_eq!(ids(&snapshot.profiles), ["ba", "kv"]);
+        assert_eq!(codex(&source), None);
+        let settings = settings_with_claude_and_codex();
+        let mut applied = settings.clone();
+        apply(&source, &mut applied);
+        assert_eq!(ids(&applied.claude.profiles), ["ba", "kv"]);
+        assert_eq!(
+            applied.codex, settings.codex,
+            "schema 1: settings.json Codex"
+        );
+    }
+
+    #[test]
+    fn schema_1_with_a_provider_column_never_turns_codex_rows_into_claude() {
+        let db = TempDb::new();
+        db.contract(3);
+        db.account("ba", "ba", 1, 0);
+        db.run("ALTER TABLE accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude';");
+        db.codex_account("cx", "cx", 1, 0);
+        let source = load(&db.0).unwrap();
+        assert_eq!(
+            profiles(&source)
+                .into_iter()
+                .map(|(id, _, _)| id)
+                .collect::<Vec<_>>(),
+            ["ba"]
+        );
+        assert_eq!(codex(&source), None);
+        let settings = settings_with_claude_and_codex();
+        let mut applied = settings.clone();
+        apply(&source, &mut applied);
+        assert_eq!(applied.codex, settings.codex);
+    }
+
+    #[test]
+    fn schema_2_splits_mixed_rows_by_provider_in_sort_order() {
+        let db = TempDb::new();
+        db.contract(5);
+        db.account("ba", "ba", 1, 2);
+        db.upgrade_to_v2();
+        db.account("kv", "kv", 1, 0);
+        db.codex_account("cz", "zeta", 1, 1);
+        db.codex_account("ca", "alpha", 1, 1);
+        db.codex_account("c0", "first", 1, -3);
+        db.codex_account("off", "off", 0, -9);
+        db.account("hidden", "hidden", 0, -9);
+        db.run(
+            "INSERT INTO accounts (id, name, config_dir, enabled, sort_order, provider, created_at, updated_at)
+             VALUES ('gm', 'gm', 'C:\\gm', 1, 0, 'gemini', 'x', 'x');",
+        );
+        let source = load(&db.0).unwrap();
+        let Source::Present(snapshot) = &source else {
+            panic!("database should be active")
+        };
+        assert_eq!(snapshot.schema, 2);
+        assert_eq!(ids(&snapshot.profiles), ["kv", "ba"]);
+        assert_eq!(
+            codex(&source).unwrap(),
+            [
+                ("c0".to_string(), "C:\\Users\\me\\.codex-c0".to_string()),
+                ("ca".to_string(), "C:\\Users\\me\\.codex-ca".to_string()),
+                ("cz".to_string(), "C:\\Users\\me\\.codex-cz".to_string()),
+            ],
+            "enabled codex rows only, ordered by sort_order then name"
+        );
+
+        let mut applied = settings_with_claude_and_codex();
+        apply(&source, &mut applied);
+        assert_eq!(ids(&applied.claude.profiles), ["kv", "ba"]);
+        assert_eq!(ids(&applied.codex.profiles), ["c0", "ca", "cz"]);
+        assert_eq!(applied.codex.selected, "c0");
+        assert!(applied.codex.profiles.iter().all(|p| p.enabled));
+        // Each Codex profile reads auth.json in its own CODEX_HOME.
+        assert_eq!(
+            applied.codex.profiles[1]
+                .credential_path(ProviderId::Codex)
+                .unwrap(),
+            Some(PathBuf::from("C:\\Users\\me\\.codex-ca\\auth.json"))
+        );
+    }
+
+    #[test]
+    fn schema_2_with_zero_enabled_codex_rows_means_zero_codex_accounts() {
+        let db = TempDb::new();
+        db.contract(1);
+        db.upgrade_to_v2();
+        db.account("ba", "ba", 1, 0);
+        db.codex_account("cx", "cx", 0, 0);
+        let source = load(&db.0).unwrap();
+        assert_eq!(codex(&source), Some(Vec::new()));
+        let mut applied = settings_with_claude_and_codex();
+        apply(&source, &mut applied);
+        assert!(applied.codex.profiles.is_empty());
+        assert!(applied.codex.selected().is_none());
+        // No invented "default" profile: select_accounts must drop Codex usage.
+        let mut data = crate::models::AppUsageData::default();
+        data.insert(ProviderId::Codex, crate::models::UsageData::default());
+        data.select_accounts(&applied);
+        assert!(data.get(ProviderId::Codex).is_none());
+    }
+
+    #[test]
+    fn a_schema_upgrade_or_codex_change_reloads_both_providers() {
+        let db = TempDb::new();
+        db.contract(1);
+        db.account("ba", "ba", 1, 0);
+        let mut tracker = Tracker::default();
+        assert_eq!(codex(tracker.current(&db.0)), None);
+
+        // The web app upgrades the schema without bumping the revision.
+        db.upgrade_to_v2();
+        assert!(tracker.check(&db.0), "a schema change alone reloads");
+        assert_eq!(codex(tracker.current(&db.0)), Some(Vec::new()));
+
+        db.codex_account("cx", "cx", 1, 0);
+        db.bump(2);
+        assert!(tracker.check(&db.0));
+        assert_eq!(
+            codex(tracker.current(&db.0)).unwrap()[0].0,
+            "cx",
+            "a codex row added under a new revision is picked up"
+        );
+        assert_eq!(profiles(tracker.current(&db.0)).len(), 1);
+
+        db.run("UPDATE accounts SET enabled = 0 WHERE provider = 'codex';");
+        db.bump(3);
+        assert!(tracker.check(&db.0));
+        assert_eq!(codex(tracker.current(&db.0)), Some(Vec::new()));
+        assert!(!tracker.check(&db.0));
     }
 
     #[test]

@@ -1,7 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { UserError, getAccount, moveAccount, removeAccount, renameAccount, setEnabled } from '$lib/server/db';
-import { activeSessionFor, cancelLogin, startLogin } from '$lib/server/claude';
-import { authCache, body, handle } from '$lib/server/api';
+import { authCache, body, cancelAnyLogin, codexAuthCache, handle, pendingLoginFor, startLoginFor } from '$lib/server/api';
 
 /** One endpoint per account, `action` in the body: rename | enable | move | relogin | remove. */
 export const POST = ({ request, params }) =>
@@ -22,14 +21,15 @@ export const POST = ({ request, params }) =>
 			case 'relogin': {
 				const a = getAccount(id);
 				if (!a) throw new UserError('That account no longer exists. Reload the page.', 404);
-				const login = await startLogin(a.id, a.config_dir);
-				return json({ account: { id: a.id, name: a.name }, login });
+				const login = await startLoginFor(a);
+				return json({ account: { id: a.id, name: a.name, provider: a.provider }, login });
 			}
 			case 'remove': {
-				const pending = activeSessionFor(id);
-				if (pending) await cancelLogin(pending);
+				const pending = pendingLoginFor(id);
+				if (pending) await cancelAnyLogin(pending);
 				const removed = removeAccount(id);
 				authCache.invalidate(removed.folder);
+				codexAuthCache.invalidate(removed.folder);
 				return json({ ok: true, ...removed });
 			}
 			default:

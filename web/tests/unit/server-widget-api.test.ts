@@ -33,14 +33,14 @@ describe('server-mode data layout', () => {
 		expect(fs.existsSync(path.join(env.data, 'accounts.db'))).toBe(true);
 		for (const f of ['settings.json', 'themes', 'context-menus']) expect(fs.existsSync(path.join(env.data, f))).toBe(false);
 		const meta = db.getMeta();
-		expect(meta).toMatchObject({ schema: '1', manager_url: 'https://claude.example.com' });
+		expect(meta).toMatchObject({ schema: '2', manager_url: 'https://claude.example.com' });
 		// contract schema unchanged for the widget; server tables are extra
 		const d = new DatabaseSync(path.join(env.data, 'accounts.db'), { readOnly: true });
 		const cols = (d.prepare('PRAGMA table_info(accounts)').all() as { name: string }[]).map((c) => c.name);
 		const mode = (d.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode;
 		const tables = (d.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[]).map((t) => t.name);
 		d.close();
-		expect(cols).toEqual(['id', 'name', 'config_dir', 'email', 'plan', 'enabled', 'sort_order', 'created_at', 'updated_at']);
+		expect(cols).toEqual(['id', 'name', 'config_dir', 'email', 'plan', 'enabled', 'sort_order', 'created_at', 'updated_at', 'provider']);
 		expect(mode).toBe('delete');
 		expect(tables).toEqual(['account_usage', 'accounts', 'admin_sessions', 'api_tokens', 'meta']);
 	});
@@ -137,7 +137,7 @@ describe('GET /api/v1/widget', () => {
 		const r = await api.handleWidgetRequest(`Bearer ${t.token}`, loggedIn);
 		expect(r.status).toBe(200);
 		expect(r.body).toEqual({
-			schema: 1,
+			schema: 2,
 			revision: rev, // poll results never bump the revision
 			updated_unix: 1790240810,
 			manager_url: 'https://claude.example.com',
@@ -148,11 +148,12 @@ describe('GET /api/v1/widget', () => {
 					name: 'kv',
 					email: 'k@v',
 					plan: 'pro',
+					provider: 'claude',
 					status: 'expired',
 					status_message: 'Claude rejected the saved login (HTTP 401).',
 					usage: null
 				},
-				{ id: 'ba', name: 'ba', email: 'x@y', plan: 'max', status: 'ok', status_message: '', usage }
+				{ id: 'ba', name: 'ba', provider: 'claude', email: 'x@y', plan: 'max', status: 'ok', status_message: '', usage }
 			]
 		});
 		expect(JSON.stringify(r.body)).not.toContain(t.token);
