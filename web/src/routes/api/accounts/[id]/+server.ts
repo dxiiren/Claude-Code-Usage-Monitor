@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { UserError, getAccount, moveAccount, removeAccount, renameAccount, setEnabled } from '$lib/server/db';
 import { activeSessionFor, cancelLogin, startLogin } from '$lib/server/claude';
-import { body, handle } from '$lib/server/api';
+import { authCache, body, handle } from '$lib/server/api';
 
 /** One endpoint per account, `action` in the body: rename | enable | move | relogin | remove. */
 export const POST = ({ request, params }) =>
@@ -28,7 +28,9 @@ export const POST = ({ request, params }) =>
 			case 'remove': {
 				const pending = activeSessionFor(id);
 				if (pending) await cancelLogin(pending);
-				return json({ ok: true, ...removeAccount(id) });
+				const removed = removeAccount(id);
+				authCache.invalidate(removed.folder);
+				return json({ ok: true, ...removed });
 			}
 			default:
 				throw new UserError('Unknown action.');

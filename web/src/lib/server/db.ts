@@ -122,9 +122,17 @@ function assertNameFree(d: DatabaseSync, name: string, exceptId?: string): void 
 	if (clash) throw new UserError(`There is already an account called "${name}".`, 409);
 }
 
-/** Slug the name like the kit did; never reuse an id the widget has seen, never collide with a folder on disk. */
+/**
+ * Id = the name as [a-z0-9_] only: the widget's theme language reads `accounts.claude.<id>.x` and
+ * accepts only [A-Za-z0-9_] ids ('-' would parse as minus). Anything else -> '_', repeats collapsed.
+ * Never reuse an id the widget has seen, never collide with a folder on disk.
+ */
+export function slugId(name: string): string {
+	return name.toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+}
+
 function newId(d: DatabaseSync, name: string): string {
-	let base = name.toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/^_+|_+$/g, '') || 'account';
+	let base = slugId(name) || 'account';
 	if (base === 'default') base = 'account';
 	const taken = new Set([
 		...(d.prepare('SELECT id FROM accounts').all() as unknown as { id: string }[]).map((r) => r.id),
@@ -132,7 +140,7 @@ function newId(d: DatabaseSync, name: string): string {
 		'default'
 	]);
 	let id = base;
-	for (let i = 2; taken.has(id) || fs.existsSync(configDirFor(id)); i++) id = `${base}-${i}`;
+	for (let i = 2; taken.has(id) || fs.existsSync(configDirFor(id)); i++) id = `${base}_${i}`;
 	return id;
 }
 

@@ -22,10 +22,19 @@ interface Palette {
 	muted: string;
 	track: string;
 	divider: string;
+	/** "Expired" text: needs AA contrast on this palette's bg, so it differs per palette. */
+	alert: string;
 }
 
-export const DARK: Palette = { bg: '#0D1117FF', text: '#FFFFFFFF', muted: '#C9D1D9FF', track: '#4A515BFF', divider: '#2D333BFF' };
-export const LIGHT: Palette = { bg: '#FFFFFFFF', text: '#1F2328FF', muted: '#59636EFF', track: '#D0D7DEFF', divider: '#D8DEE4FF' };
+export const DARK: Palette = { bg: '#0D1117FF', text: '#FFFFFFFF', muted: '#C9D1D9FF', track: '#4A515BFF', divider: '#2D333BFF', alert: '#FF7B72FF' };
+export const LIGHT: Palette = { bg: '#FFFFFFFF', text: '#1F2328FF', muted: '#59636EFF', track: '#D0D7DEFF', divider: '#D8DEE4FF', alert: '#CF222EFF' };
+
+/** Render expressions multiply (the widget treats non-zero as visible); '1' is the identity. */
+export function mul(a: string, b: string): string {
+	if (a === '1') return b;
+	if (b === '1') return a;
+	return `(${a}) * (${b})`;
+}
 // Bars keep the widget's colours in every mode (they are not text).
 export const GREEN = '#3FB950FF';
 export const AMBER = '#D29922FF';
@@ -152,6 +161,9 @@ export function buildTheme(accounts: ThemeAccount[], mode: CardTheme = 'dark', o
 	accounts.forEach((a, i) => {
 		const y0 = PAD + TOP + i * BLOCK;
 		const b = `accounts.claude.${a.id}`;
+		// The widget sets login_required = 1 when the account's login expired, was rejected or is missing.
+		const L = `${b}.login_required`;
+		const live = `1 - ${L}`;
 		if (i > 0) {
 			n++;
 			for (const v of vs)
@@ -166,9 +178,9 @@ export function buildTheme(accounts: ThemeAccount[], mode: CardTheme = 'dark', o
 		rows.forEach(([lab, win], j) => {
 			const y = y0 + j * LINE;
 			const p = `${b}.${win}.percentage`;
-			for (const v of vs) kids.push(textLayer(`lab-${a.id}-${win}${v.suffix}`, LX, y, 20, LINE, lab, 11, v.p.muted, 'medium', v.render));
+			for (const v of vs) kids.push(textLayer(`lab-${a.id}-${win}${v.suffix}`, LX, y, 20, LINE, lab, 11, v.p.muted, 'medium', mul(live, v.render)));
 			n++;
-			for (const v of vs) kids.push(boxLayer(`track${n}${v.suffix}`, BX, y + 6, BW, 6, v.p.track, v.render, 3, '1'));
+			for (const v of vs) kids.push(boxLayer(`track${n}${v.suffix}`, BX, y + 6, BW, 6, v.p.track, mul(live, v.render), 3, '1'));
 			const fw = `max(1, ${BW} * clamp(${p}, 0, 100) / 100)`;
 			for (const [color, cond] of [
 				[GREEN, `${p} < 70`],
@@ -176,13 +188,18 @@ export function buildTheme(accounts: ThemeAccount[], mode: CardTheme = 'dark', o
 				[RED, `${p} >= 90`]
 			]) {
 				n++;
-				kids.push(boxLayer(`bar${n}`, BX, y + 6, fw, 6, color, cond, 3, '1'));
+				kids.push(boxLayer(`bar${n}`, BX, y + 6, fw, 6, color, mul(live, cond), 3, '1'));
 			}
 			for (const v of vs)
 				kids.push(
-					textLayer(`val-${a.id}-${win}${v.suffix}`, TX, y, TW, LINE, `{${p}:0}% ${DOT} {${b}.${win}.reset.seconds:duration}`, 11, v.p.text, 'medium', v.render)
+					textLayer(`val-${a.id}-${win}${v.suffix}`, TX, y, TW, LINE, `{${p}:0}% ${DOT} {${b}.${win}.reset.seconds:duration}`, 11, v.p.text, 'medium', mul(live, v.render))
 				);
 		});
+		// In place of the two bar rows while the login needs renewing.
+		for (const v of vs)
+			kids.push(
+				textLayer(`expired-${a.id}${v.suffix}`, LX, y0 + Math.floor(LINE / 2), W - LX - PAD, LINE, `Expired ${DOT} re-login`, 11, v.p.alert, 'semibold', mul(L, v.render))
+			);
 	});
 
 	return {

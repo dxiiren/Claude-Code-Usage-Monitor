@@ -48,6 +48,10 @@ describe('folder deletion guard', () => {
 		expect(isDeletableConfigDir(path.join(env.home, 'Documents'))).toBe(false);
 		expect(isDeletableConfigDir(path.join(env.root, '.claude-kv'))).toBe(false);
 		expect(isDeletableConfigDir(path.join(env.home, '.claude-a b'))).toBe(false);
+		// ids are [a-z0-9_] only, so a hyphen or upper case after the prefix is not one of ours
+		expect(isDeletableConfigDir(path.join(env.home, '.claude-my-work'))).toBe(false);
+		expect(isDeletableConfigDir(path.join(env.home, '.claude-my_work'))).toBe(true);
+		expect(isDeletableConfigDir(path.join(env.home, '.claude-KV'))).toBe(false);
 	});
 	it('pathKey normalises case, slashes, trailing separator and the \\\\?\\ prefix', () => {
 		expect(pathKey('\\\\?\\C:\\Users\\Me\\.claude-kv\\')).toBe(pathKey('c:/users/me/.claude-kv'));

@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { accountsWithEmail, getAccount, setAuth } from '$lib/server/db';
 import { authStatus, submitCode } from '$lib/server/claude';
-import { body, handle } from '$lib/server/api';
+import { body, handle, markLoggedIn } from '$lib/server/api';
 
 /** Feed the pasted code to the waiting CLI, then read `claude auth status` for email + plan. */
 export const POST = ({ request }) =>
@@ -10,7 +10,7 @@ export const POST = ({ request }) =>
 		const r = await submitCode(String(b.sessionId ?? ''), b.code);
 		// A rejected code is a normal outcome, not an HTTP error.
 		if (!r.ok) return json({ ok: false, error: r.message });
-		const auth = await authStatus(r.configDir);
+		const auth = await authStatus(r.configDir); // always fresh here, never the cache
 		if (!auth.loggedIn || !auth.email) {
 			return json(
 				{ ok: false, error: 'Claude Code reported success, but `claude auth status` says this folder is not logged in. Try Re-login.' },
@@ -18,6 +18,7 @@ export const POST = ({ request }) =>
 			);
 		}
 		if (getAccount(r.accountId)) setAuth(r.accountId, auth.email, auth.plan);
+		markLoggedIn(r.accountId, r.configDir);
 		const same = accountsWithEmail(auth.email, r.accountId).map((a) => a.name);
 		return json({ ok: true, email: auth.email, plan: auth.plan, sameEmailAs: same });
 	});

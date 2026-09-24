@@ -206,6 +206,76 @@ test('countdown updates every second', async ({ page }) => {
 	expect(b).not.toBe(a);
 });
 
+test('expired login: badge + Re-login on both pages, skipped by "Best to use now", cleared by re-login', async ({ page }) => {
+	const cacheFile = path.join(appDir, 'usage-cache.json');
+	const now = Math.floor(Date.now() / 1000);
+	const win = (pct: number, inSec: number) => ({ available: true, percentage: pct, resets_at: { secs_since_epoch: now + inSec, nanos_since_epoch: 0 } });
+	const entry = (id: string, s: number, w: number, error: unknown) => ({
+		provider: 'claude',
+		source_path: path.join(home, `.claude-${id}`, '.credentials.json'),
+		usage: { session: win(s, 2 * 3600), weekly: win(w, 3 * 86400) },
+		error
+	});
+	// beta has the most room on paper, but its token expired -> must not be "Best to use now"
+	const writeCache = (betaError: unknown, at: number) =>
+		fs.writeFileSync(
+			cacheFile,
+			JSON.stringify({ updated_unix: at, poll_ok: true, data: { accounts: [entry('alpha', 40, 72, null), entry('beta', 5, 20, betaError)] } })
+		);
+	writeCache('token_expired', now - 5);
+
+	await page.goto('/usage');
+	const notice = page.getByTestId('needs-login');
+	await expect(notice).toContainText('1 account needs login');
+	await expect(notice.getByRole('link', { name: 'beta' })).toHaveAttribute('href', '/?relogin=beta');
+	await expect(page.getByTestId('best')).toContainText('alpha');
+	const betaCard = page.locator('li[data-account="beta"]');
+	await expect(betaCard.getByTestId('status-badge')).toHaveText('Expired — log in again');
+	await expect(betaCard.getByRole('link', { name: 'Re-login' })).toBeVisible();
+	await expect(betaCard.locator('[role="meter"]')).toHaveCount(0); // stale bars hidden
+	await expect(page.locator('li[data-account="alpha"] [role="meter"]')).toHaveCount(2);
+
+	for (const mode of ['Light', 'Dark'] as const) {
+		await page.getByRole('button', { name: mode }).click();
+		await page.screenshot({ path: path.join(shots, `usage-expired-${mode.toLowerCase()}.png`), fullPage: true });
+	}
+	await page.getByRole('button', { name: 'Auto' }).click();
+
+	// Accounts page shows it too, with a prominent Re-login
+	await page.goto('/');
+	const betaRow = row(page, 'beta');
+	await expect(betaRow.getByTestId('status-badge')).toHaveText('Expired — log in again');
+	await expect(betaRow.getByRole('alert')).toContainText('The login token expired.');
+	await expect(betaRow.locator('.bars.stale')).toBeVisible();
+	await expect(row(page, 'alpha').getByTestId('status-badge')).toHaveCount(0);
+
+	// Re-login from the Usage page opens the login for that account on the Accounts page
+	await page.goto('/usage');
+	await page.locator('li[data-account="beta"]').getByRole('link', { name: 'Re-login' }).click();
+	await expect(page).toHaveURL(`${ORIGIN}/`);
+	const panel = page.getByTestId('login-panel');
+	await expect(panel).toContainText('Log in "beta"');
+	await panel.getByLabel('Authentication code').fill('good');
+	await panel.getByRole('button', { name: 'Connect' }).click();
+	await expect(panel.getByTestId('login-ok')).toContainText('beta@example.com');
+	await panel.getByRole('button', { name: 'Done' }).click();
+	// the poll error predates this login, so it no longer counts
+	await expect(row(page, 'beta').getByTestId('status-badge')).toHaveCount(0);
+
+	// and once the widget re-polls (fixture updated) the account is healthy and eligible again
+	writeCache(null, Math.floor(Date.now() / 1000) + 1);
+	await page.goto('/usage');
+	await expect(page.getByTestId('needs-login')).toHaveCount(0);
+	await expect(page.locator('li[data-account="beta"] [role="meter"]')).toHaveCount(2);
+	await expect(page.getByTestId('best')).toContainText('beta');
+
+	// a transient error is shown but asks for no re-login
+	writeCache('network_error', Math.floor(Date.now() / 1000) + 2);
+	await page.goto('/usage');
+	await expect(page.locator('li[data-account="beta"]').getByTestId('status-error')).toContainText('network error');
+	await expect(page.getByTestId('needs-login')).toHaveCount(0);
+});
+
 test('page theme switch: Auto follows OS, Light/Dark apply and persist across reload', async ({ page }) => {
 	const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 	const cardBg = () => page.locator('.card').first().evaluate((e) => getComputedStyle(e).backgroundColor);

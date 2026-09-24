@@ -110,11 +110,26 @@ describe('writes', () => {
 	});
 });
 
+describe('account ids are theme-safe [a-z0-9_]', () => {
+	it('maps "-" and other characters to "_", collapses repeats, trims', () => {
+		expect(db.slugId('my-work!')).toBe('my_work');
+		expect(db.slugId('  KV -- Team.2 ')).toBe('kv_team_2');
+		expect(db.slugId('___')).toBe('');
+		const a = db.createAccount('my-work!');
+		expect(a.id).toBe('my_work');
+		expect(a.config_dir).toBe(path.join(env.home, '.claude-my_work'));
+		expect(db.createAccount('My Work').id).toBe('my_work_2');
+		for (const r of db.listAccounts()) expect(r.id).toMatch(/^[a-z0-9_]+$/);
+		db.removeAccount('my_work');
+		db.removeAccount('my_work_2');
+	});
+});
+
 describe('duplicate-email detection', () => {
-	it('flags other rows with the same email (case-insensitive) both ways', () => {
+	it('flags other rows with the same email (case-insensitive) both ways', async () => {
 		db.setAuth('second', 'KV@example.com', 'pro');
 		expect(db.accountsWithEmail('kv@example.com', 'second').map((a) => a.id)).toEqual(['work_kv']);
-		const snap = api.snapshot();
+		const snap = await api.snapshot();
 		expect(snap.accounts.find((a) => a.id === 'second')!.sameEmailAs).toEqual(['Work KV']);
 		expect(snap.accounts.find((a) => a.id === 'work_kv')!.sameEmailAs).toEqual(['Second!']);
 		expect(snap.accounts.find((a) => a.id === 'third')!.sameEmailAs).toEqual([]);
@@ -169,7 +184,7 @@ describe('remove + folder deletion guard', () => {
 
 	it('never reuses a removed id for a new account', () => {
 		const again = db.createAccount('third');
-		expect(again.id).toBe('third-2');
-		expect(settings().accounts.claude.used_ids).toEqual(expect.arrayContaining(['work_kv', 'second', 'third', 'third-2']));
+		expect(again.id).toBe('third_2');
+		expect(settings().accounts.claude.used_ids).toEqual(expect.arrayContaining(['work_kv', 'second', 'third', 'third_2']));
 	});
 });

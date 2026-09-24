@@ -13,7 +13,8 @@ export interface UsageWindow {
 export interface AccountUsage {
 	session: UsageWindow | null;
 	weekly: UsageWindow | null;
-	error: string | null;
+	/** The widget's PollError as serialized (e.g. "token_expired", {"http_status":401}); null when the last poll was fine. */
+	pollError: unknown;
 }
 
 export interface UsageSnapshot {
@@ -49,7 +50,7 @@ export function readUsage(accounts: Account[]): UsageSnapshot {
 		byId[a.id] = {
 			session: win(u.session),
 			weekly: win(u.weekly),
-			error: typeof e.error === 'string' ? e.error : e.error ? JSON.stringify(e.error) : null
+			pollError: e.error ?? null
 		};
 	}
 	return { updatedUnix: typeof cache.updated_unix === 'number' ? cache.updated_unix : null, byId };

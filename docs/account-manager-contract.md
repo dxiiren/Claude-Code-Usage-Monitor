@@ -11,7 +11,7 @@ read-only, and a read-only connection cannot recover a WAL file.
 
 ```sql
 CREATE TABLE IF NOT EXISTS accounts (
-  id          TEXT PRIMARY KEY,            -- slug: lowercase [a-z0-9_-], stable, never reused for another person
+  id          TEXT PRIMARY KEY,            -- slug: lowercase [a-z0-9_] (theme expressions reject '-'), stable, never reused for another person
   name        TEXT NOT NULL UNIQUE,        -- display label ("ba", "kv")
   config_dir  TEXT NOT NULL,               -- ABSOLUTE Windows path, e.g. C:\Users\me\.claude-ba
   email       TEXT,                        -- from `claude auth status` after login; NULL until logged in

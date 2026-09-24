@@ -1517,6 +1517,14 @@ impl DataContext {
                     &format!("{key}.has_error"),
                     account.error.is_some() as u8 as f64,
                 );
+                // Only a fresh sign-in fixes these (expired, rejected or missing login);
+                // themes use it to swap an account's bars for a "log in again" notice.
+                context.insert(
+                    &format!("{key}.login_required"),
+                    account.error.is_some_and(|error| {
+                        error.is_auth() || error == crate::poller::PollError::NoCredentials
+                    }) as u8 as f64,
+                );
                 context.insert_provider(
                     &key,
                     account.usage.as_ref(),
@@ -1525,16 +1533,24 @@ impl DataContext {
                 );
             }
             for descriptor in PROVIDER_DESCRIPTORS {
-                if let Some(account) = data
+                let selected = data
                     .accounts
                     .iter()
-                    .find(|account| account.provider == descriptor.id && account.selected)
-                {
+                    .find(|account| account.provider == descriptor.id && account.selected);
+                if let Some(account) = selected {
                     context.insert(
                         &format!("{}.has_error", descriptor.key),
                         account.error.is_some() as u8 as f64,
                     );
                 }
+                context.insert(
+                    &format!("{}.login_required", descriptor.key),
+                    selected
+                        .and_then(|account| account.error)
+                        .is_some_and(|error| {
+                            error.is_auth() || error == crate::poller::PollError::NoCredentials
+                        }) as u8 as f64,
+                );
                 context.insert_string(
                     &format!("{}.account.name", descriptor.key),
                     data.selected_account_name(descriptor.id).unwrap_or(""),
@@ -1557,6 +1573,7 @@ impl DataContext {
             );
         } else {
             for descriptor in PROVIDER_DESCRIPTORS {
+                context.insert(&format!("{}.login_required", descriptor.key), 0.0);
                 context.insert_provider(
                     descriptor.key,
                     None,
@@ -1813,6 +1830,7 @@ impl DataContext {
             context.insert_string("account.name", "");
             context.insert("account.selected", 0.0);
             context.insert("account.has_error", 0.0);
+            context.insert("account.login_required", 0.0);
             context
         })
     }

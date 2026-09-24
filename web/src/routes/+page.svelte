@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import UsageBar from '$lib/UsageBar.svelte';
 	import LoginPanel, { type LoginInfo } from '$lib/LoginPanel.svelte';
-	import { post } from '$lib/format';
+	import { needsLogin, post } from '$lib/format';
 	import type { Snapshot } from '$lib/server/api';
 
 	let { data } = $props();
@@ -34,6 +34,12 @@
 	}
 
 	onMount(() => {
+		// /?relogin=<id> (from the Usage page): open that account's login straight away.
+		const want = new URL(location.href).searchParams.get('relogin');
+		if (want && snap.accounts.some((a) => a.id === want)) {
+			history.replaceState(history.state, '', '/');
+			void relogin(want);
+		}
 		const t = setInterval(refresh, 15_000);
 		return () => clearInterval(t);
 	});
@@ -199,6 +205,8 @@
 						<div class="who">
 							<span class="name">{a.name}</span>
 							{#if a.plan}<span class="plan">{a.plan}</span>{/if}
+							{#if a.status.state === 'expired'}<span class="badge" data-testid="status-badge">Expired &mdash; log in again</span>
+							{:else if a.status.state === 'logged_out' && a.email}<span class="badge" data-testid="status-badge">Not logged in</span>{/if}
 							<span class="email">{a.email ?? 'Not logged in'}</span>
 						</div>
 					{/if}
@@ -219,8 +227,16 @@
 					</p>
 				{/if}
 
+				{#if needsLogin(a.status.state) && a.email}
+					<div class="needs" role="alert">
+						<span>{a.status.message} Usage below is the last known and may be out of date.</span>
+						<button type="button" class="primary" onclick={() => relogin(a.id)} disabled={starting}>Re-login</button>
+					</div>
+				{:else if a.status.state === 'error'}
+					<p class="transient" data-testid="status-error">{a.status.message}</p>
+				{/if}
 				{#if a.email}
-					<div class="bars">
+					<div class="bars" class:stale={needsLogin(a.status.state)}>
 						<UsageBar label="5h" title="5-hour session" pct={a.usage?.session?.percentage} resetsAt={a.usage?.session?.resetsAt} {now} />
 						<UsageBar label="7d" title="Weekly" pct={a.usage?.weekly?.percentage} resetsAt={a.usage?.weekly?.resetsAt} {now} />
 					</div>
@@ -235,7 +251,7 @@
 						onclick={() => act(a.id, { action: 'move', direction: 'down' })}><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 6l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button
 					>
 					<button type="button" onclick={() => startRename(a)}>Rename</button>
-					<button type="button" class:primary={!a.email} onclick={() => relogin(a.id)} disabled={starting}>
+					<button type="button" class:primary={!a.email || needsLogin(a.status.state)} onclick={() => relogin(a.id)} disabled={starting}>
 						{a.email ? 'Re-login' : 'Log in'}
 					</button>
 					<button type="button" class="danger" onclick={() => askRemove(a)}>Remove</button>
@@ -412,6 +428,34 @@
 	.bars {
 		display: grid;
 		gap: 0.35rem;
+	}
+	.bars.stale {
+		opacity: 0.4;
+		filter: grayscale(1);
+	}
+	.badge {
+		font-size: 0.75rem;
+		font-weight: 600;
+		padding: 0.05rem 0.5rem;
+		border-radius: 999px;
+		background: var(--danger-solid);
+		color: #fff;
+	}
+	.needs {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		padding: 0.55rem 0.75rem;
+		border-radius: 6px;
+		background: var(--err-bg);
+		border: 1px solid var(--err-border);
+	}
+	.transient {
+		margin: 0;
+		font-size: 0.85rem;
+		color: var(--muted);
 	}
 	.tools {
 		display: flex;

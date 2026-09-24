@@ -535,6 +535,7 @@ const OWNER_FIELDS: &[(&str, &str)] = &[
     (".available", "Provider available"),
     (".stale", "Showing earlier figures"),
     (".has_error", "Has an error"),
+    (".login_required", "Login expired or missing"),
     (".selected", "Selected account"),
     (".name", "Account name"),
     (".account.name", "Account name"),

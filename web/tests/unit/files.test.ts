@@ -93,7 +93,7 @@ describe('usage-cache matching', () => {
 		);
 		const u = usage.readUsage([kv, ba]);
 		expect(u.updatedUnix).toBe(1790000000);
-		expect(u.byId.kv).toEqual({ session: { percentage: 42.5, resetsAt: 1790001000 }, weekly: { percentage: 71, resetsAt: 1790500000 }, error: null });
+		expect(u.byId.kv).toEqual({ session: { percentage: 42.5, resetsAt: 1790001000 }, weekly: { percentage: 71, resetsAt: 1790500000 }, pollError: null });
 		expect(u.byId.ba).toBeNull();
 	});
 

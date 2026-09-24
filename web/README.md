@@ -34,6 +34,24 @@ Anthropic OAuth endpoints itself, and it never reads, logs or returns credential
 
 **Remove** deletes the account's `%USERPROFILE%\.claude-<id>` folder. `%USERPROFILE%\.claude` is never deleted.
 
+Account ids use only `[a-z0-9_]` (for example `my-work!` becomes `my_work`), because the widget's theme expressions
+read `accounts.claude.<id>.…` and would parse a `-` as minus. Ids are never reused.
+
+## Login status
+
+Each account's status comes from two sources: the widget's last poll error in `usage-cache.json`, and
+`claude auth status` for that folder (cached for 60 s).
+
+- `ok`: the login works.
+- `expired`: `token_expired`, `auth_required`, or HTTP 401/403 from Claude.
+- `logged_out`: `no_credentials`, or the CLI says the folder is not logged in.
+- `error`: a temporary problem (network error, request failed, unexpected response, other HTTP codes).
+  The page shows the message but does not ask you to log in again.
+
+`expired` and `logged_out` accounts get a red badge and a **Re-login** button on both pages. The Usage page lists
+them at the top and leaves them out of "Best to use now". On the desktop card they show "Expired · re-login" in place
+of their bars (`accounts.claude.<id>.login_required`).
+
 ## Safety
 
 - Every non-GET request must carry `Origin: http://127.0.0.1:47291`, or the server returns 403.

@@ -16,5 +16,8 @@ export function isolateHome(): { root: string; home: string; appData: string; ap
 	process.env.APPDATA = appData;
 	process.env.LOCALAPPDATA = path.join(root, 'localappdata');
 	process.env.WIDGET_EXE = path.join(root, 'no-widget.exe');
+	// Never spawn the real Claude CLI or Edge from unit tests.
+	process.env.CLAUDE_BIN = path.resolve(__dirname, '../fixtures/fake-claude.cmd');
+	process.env.EDGE_EXE = 'none';
 	return { root, home, appData, appDir: path.join(appData, 'ClaudeCodeUsageMonitor') };
 }

@@ -195,6 +195,55 @@ fn named_account_bindings_show_independent_usage_and_errors() {
 }
 
 #[test]
+fn login_required_flags_only_errors_a_fresh_sign_in_fixes() {
+    use crate::accounts::AccountProfile;
+    use crate::models::AccountUsage;
+    use crate::poller::PollError;
+    let cases = [
+        ("expired", Some(PollError::TokenExpired), 1.0),
+        ("rejected", Some(PollError::AuthRequired), 1.0),
+        ("forbidden", Some(PollError::HttpStatus(401)), 1.0),
+        ("missing", Some(PollError::NoCredentials), 1.0),
+        ("offline", Some(PollError::NetworkError), 0.0),
+        ("throttled", Some(PollError::HttpStatus(429)), 0.0),
+        ("healthy", None, 0.0),
+    ];
+    let mut data = AppUsageData::default();
+    for (id, error, _) in cases {
+        data.accounts.push(AccountUsage {
+            provider: ProviderId::Claude,
+            profile: AccountProfile {
+                id: id.into(),
+                name: id.into(),
+                config_dir: format!("C:\\{id}"),
+                ..Default::default()
+            },
+            source_signature: "fixture".into(),
+            source_path: None,
+            selected: id == "expired",
+            usage: None,
+            error,
+        });
+    }
+    let context = DataContext::from_usage(Some(&data), &Canvas::default());
+    for (id, _, expected) in cases {
+        assert_eq!(
+            evaluate(&format!("accounts.claude.{id}.login_required"), &context).unwrap(),
+            expected,
+            "{id}"
+        );
+    }
+    // Provider level follows the selected account; always defined, even without data.
+    assert_eq!(evaluate("claude.login_required", &context).unwrap(), 1.0);
+    let empty = DataContext::from_usage(None, &Canvas::default());
+    assert_eq!(evaluate("claude.login_required", &empty).unwrap(), 0.0);
+    assert_eq!(
+        evaluate("accounts.claude.never_polled.login_required", &empty).unwrap(),
+        0.0
+    );
+}
+
+#[test]
 fn managed_asset_paths_stay_inside_the_asset_directory() {
     assert_eq!(managed_asset_file_name("assets/logo.png"), Some("logo.png"));
     assert_eq!(managed_asset_file_name("logo.png"), None);

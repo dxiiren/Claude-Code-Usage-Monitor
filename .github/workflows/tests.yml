@@ -43,6 +43,8 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      # Generates .svelte-kit/tsconfig.json, which vitest's tsconfig extends.
+      - run: npx svelte-kit sync
       - name: Unit tests
         run: npm test
       - name: Build

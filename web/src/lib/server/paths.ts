@@ -36,7 +36,8 @@ export function isDeletableConfigDir(dir: string): boolean {
 	if (path.dirname(full).toLowerCase() !== path.resolve(USER_HOME).toLowerCase()) return false;
 	const base = path.basename(full);
 	if (base.toLowerCase() === '.claude') return false;
-	return /^\.claude-[a-z0-9_-]+$/i.test(base);
+	// `.claude-` + an account id; ids are [a-z0-9_] only (see slugId in db.ts).
+	return /^\.claude-[a-z0-9_]+$/.test(base);
 }
 
 /** Path comparison key: strips the `\\?\` prefix, unifies slashes, lower-cases. */

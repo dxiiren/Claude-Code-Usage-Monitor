@@ -3,7 +3,7 @@ import { createAccount } from '$lib/server/db';
 import { LoginError, startLogin } from '$lib/server/claude';
 import { body, handle, snapshot } from '$lib/server/api';
 
-export const GET = () => handle(() => json(snapshot()));
+export const GET = () => handle(async () => json(await snapshot()));
 
 /** Add account: create the row, then start the CLI login and open the isolated Edge window. */
 export const POST = ({ request }) =>

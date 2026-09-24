@@ -40,3 +40,8 @@ export async function post<T = Record<string, unknown>>(url: string, data: unkno
 	if (!res.ok) throw Object.assign(new Error(out.error || `Request failed (${res.status})`), { data: out, status: res.status });
 	return out;
 }
+
+/** Login states that need the user to sign in again (mirrors needsLogin in server/status.ts). */
+export function needsLogin(state: string): boolean {
+	return state === 'expired' || state === 'logged_out';
+}

@@ -48,7 +48,9 @@ describe('colour tokens meet WCAG AA', () => {
 		['text', 'bg'], ['text', 'surface'], ['muted', 'bg'], ['muted', 'surface'],
 		['accent-text', 'accent'], ['red', 'surface'], ['tag-text', 'green'], ['tag-text', 'red'], ['tag-text', 'muted'],
 		['card-text', 'card-bg'], ['card-muted', 'card-bg'], ['card-red', 'card-bg'], ['card-amber', 'card-bg'],
-		['card-link', 'card-bg'], ['card-pill-text', 'card-red'], ['card-text', 'card-track']
+		['card-link', 'card-bg'], ['card-pill-text', 'card-red'], ['card-text', 'card-track'],
+		// login-needed notice + badge + Usage-page Re-login button
+		['text', 'err-bg'], ['card-muted', 'card-bg']
 	];
 	for (const [name, t] of [['light', light], ['dark', dark]] as const) {
 		it(`${name}: every text pair >= 4.5:1`, () => {

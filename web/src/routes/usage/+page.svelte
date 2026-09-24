@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import UsageBar from '$lib/UsageBar.svelte';
-	import { pctText, resetsIn } from '$lib/format';
+	import { needsLogin, pctText, resetsIn } from '$lib/format';
 	import type { Snapshot } from '$lib/server/api';
 
 	let { data } = $props();
@@ -31,7 +31,10 @@
 		};
 	});
 
-	const loggedIn = $derived(snap.accounts.filter((a) => a.email));
+	/** Accounts whose numbers can be trusted right now (logged in, login not expired). */
+	const loggedIn = $derived(snap.accounts.filter((a) => a.email && !needsLogin(a.status.state)));
+	const needing = $derived(snap.accounts.filter((a) => needsLogin(a.status.state)));
+	const badgeText = (state: string) => (state === 'expired' ? 'Expired — log in again' : 'Not logged in');
 
 	/** Most room right now: lowest 5h % among accounts whose weekly is under 100 and 5h under 100. */
 	const best = $derived.by(() => {
@@ -71,6 +74,15 @@
 		<a href="/">Add an account</a>
 	</div>
 {:else}
+	{#if needing.length}
+		<div class="attention" role="alert" data-testid="needs-login">
+			<strong>{needing.length} {needing.length === 1 ? 'account needs' : 'accounts need'} login:</strong>
+			{#each needing as a, i (a.id)}
+				{#if i > 0}, {/if}<a href="/?relogin={encodeURIComponent(a.id)}">{a.name}</a>
+			{/each}
+		</div>
+	{/if}
+
 	<p class="summary" data-testid="best">
 		{#if best}
 			<span class="tag">Best to use now</span>
@@ -97,22 +109,27 @@
 		</div>
 		<ul>
 			{#each snap.accounts as a (a.id)}
-				{@const blocked = (a.usage?.session?.percentage ?? 0) >= 100 || (a.usage?.weekly?.percentage ?? 0) >= 100}
-				<li class:off={!a.enabled} class:blocked class:best={best?.id === a.id}>
+				{@const login = needsLogin(a.status.state)}
+				{@const blocked = !login && ((a.usage?.session?.percentage ?? 0) >= 100 || (a.usage?.weekly?.percentage ?? 0) >= 100)}
+				<li class:off={!a.enabled} class:blocked class:login class:best={best?.id === a.id} data-account={a.id}>
 					<div class="who">
 						<span class="name">{a.name}</span>
+						{#if login}<span class="pill" data-testid="status-badge">{badgeText(a.status.state)}</span>{/if}
 						{#if blocked}<span class="pill">blocked</span>{/if}
 						{#if !a.enabled}<span class="pill dim">hidden on widget</span>{/if}
 						<span class="email">{a.email ?? 'not logged in'}</span>
 					</div>
-					{#if a.email}
+					{#if login}
+						<div class="relogin">
+							<a class="btn" href="/?relogin={encodeURIComponent(a.id)}">Re-login</a>
+							<span class="small">{a.email ? 'Last known usage hidden: it may be out of date.' : a.status.message}</span>
+						</div>
+					{:else if a.email}
 						<div class="bars">
 							<UsageBar label="5h" title="5-hour session" pct={a.usage?.session?.percentage} resetsAt={a.usage?.session?.resetsAt} {now} seconds />
 							<UsageBar label="7d" title="Weekly" pct={a.usage?.weekly?.percentage} resetsAt={a.usage?.weekly?.resetsAt} {now} seconds />
 						</div>
-						{#if a.usage?.error}<p class="error">{a.usage.error}</p>{/if}
-					{:else}
-						<p class="muted small"><a href="/">Log it in</a> to see usage.</p>
+						{#if a.status.state === 'error'}<p class="error" data-testid="status-error">{a.status.message}</p>{/if}
 					{/if}
 				</li>
 			{/each}
@@ -265,6 +282,40 @@
 		margin: 0;
 		font-size: 0.75rem;
 		color: var(--card-amber);
+	}
+	.attention {
+		background: var(--err-bg);
+		border: 1px solid var(--err-border);
+		border-radius: 8px;
+		padding: 0.6rem 0.8rem;
+		margin: 0.5rem 0 0.75rem;
+	}
+	.attention a {
+		color: var(--text);
+		font-weight: 600;
+	}
+	li.login {
+		box-shadow: inset 3px 0 0 var(--card-red);
+		padding-left: 0.6rem;
+	}
+	.relogin {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.4rem 0.75rem;
+		color: var(--card-muted);
+	}
+	.relogin .small {
+		font-size: 0.8rem;
+	}
+	.card a.btn {
+		display: inline-block;
+		padding: 0.3rem 0.9rem;
+		border-radius: 6px;
+		background: var(--card-red);
+		color: var(--card-pill-text);
+		font-weight: 600;
+		text-decoration: none;
 	}
 	.empty {
 		text-align: center;

@@ -69,9 +69,24 @@ export interface AuthStatus {
 	plan: string | null;
 }
 
-export function authStatus(configDir: string): Promise<AuthStatus> {
+/** Like authStatus, but null when the CLI could not answer (missing, crashed, unparseable output). */
+export async function authStatusOrNull(configDir: string): Promise<AuthStatus | null> {
+	const r = await authStatusRaw(configDir);
+	return r;
+}
+
+export async function authStatus(configDir: string): Promise<AuthStatus> {
+	return (await authStatusRaw(configDir)) ?? { loggedIn: false, email: null, plan: null };
+}
+
+function authStatusRaw(configDir: string): Promise<AuthStatus | null> {
 	return new Promise((resolve) => {
-		const exe = findClaude();
+		let exe: string;
+		try {
+			exe = findClaude();
+		} catch {
+			return resolve(null);
+		}
 		const isCmd = /\.(cmd|bat)$/i.test(exe);
 		execFile(
 			isCmd ? 'cmd.exe' : exe,
@@ -88,7 +103,7 @@ export function authStatus(configDir: string): Promise<AuthStatus> {
 						plan: typeof j.subscriptionType === 'string' ? j.subscriptionType : null
 					});
 				} catch {
-					resolve({ loggedIn: false, email: null, plan: null });
+					resolve(null);
 				}
 			}
 		);
