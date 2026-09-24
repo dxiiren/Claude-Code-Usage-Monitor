@@ -99,7 +99,26 @@ if ($nodeOk) {
     exit 1
 }
 
-# ---------- 3. just (task runner for the everyday recipes) ----------
+# ---------- 3. Codex CLI (only for Codex accounts; the Account Manager logs them in through it) ----------
+Refresh-Path
+if (Test-Command "codex") {
+    Write-Host "[OK] Codex CLI already installed: $(& codex --version 2>&1 | Select-Object -First 1)" -ForegroundColor Green
+} else {
+    Write-Host "[INSTALL] Installing the Codex CLI (npm install -g @openai/codex)..." -ForegroundColor Yellow
+    $savedEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    # through cmd.exe so npm's stderr is plain output, not a NativeCommandError in PowerShell 5.1
+    & cmd.exe /c "npm install -g @openai/codex 2>&1" | Out-Host
+    $ErrorActionPreference = $savedEAP
+    Refresh-Path
+    if (Test-Command "codex") {
+        Write-Host "[OK] Codex CLI installed: $(& codex --version 2>&1 | Select-Object -First 1)" -ForegroundColor Green
+    } else {
+        Write-Host "[WARN] Codex CLI not installed -- only needed for Codex accounts. Later: npm install -g @openai/codex" -ForegroundColor Yellow
+    }
+}
+
+# ---------- 4. just (task runner for the everyday recipes) ----------
 Refresh-Path
 if (Test-Command "just") {
     Write-Host "[OK] just already installed: $(& just --version 2>&1 | Select-Object -First 1)" -ForegroundColor Green
@@ -110,7 +129,7 @@ if (Test-Command "just") {
     Write-Host "[WARN] just not installed -- everything works without it; recipes need it (https://just.systems)." -ForegroundColor Yellow
 }
 
-# ---------- 4. The widget (this fork's build) ----------
+# ---------- 5. The widget (this fork's build) ----------
 if ($WidgetFromSource) {
     Install-MonitorFromSource
 } else {
@@ -123,13 +142,13 @@ if ($upstream) {
 }
 Install-CloseMenu
 
-# ---------- 5. Account Manager web app ----------
+# ---------- 6. Account Manager web app ----------
 Write-Host ""
 Write-Host "Building the Account Manager..." -ForegroundColor Cyan
 Stop-Manager
 Install-ManagerApp
 
-# ---------- 6. Start with Windows + shortcuts ----------
+# ---------- 7. Start with Windows + shortcuts ----------
 if ($NoStartup) { Write-Host "[INFO] Start with Windows skipped (-NoStartup)" -ForegroundColor Cyan } else { Enable-Startup }
 if ($NoShortcuts) { Write-Host "[INFO] Shortcuts skipped (-NoShortcuts)" -ForegroundColor Cyan } else { New-Shortcuts }
 
@@ -143,6 +162,7 @@ Start-Monitor
 Start-Sleep -Seconds 3
 $proc = Get-Process claude-code-usage-monitor -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($proc -and $proc.Path -ieq (Get-MonitorExe)) { Write-Ok "Widget running: $($proc.Path)" } else { Write-Fail "Widget is not running from $(Get-MonitorExe)"; $failed++ }
+if (Test-Command "codex") { Write-Ok "Codex CLI on PATH (for Codex accounts)" } else { Write-Warn "Codex CLI not on PATH -- Codex accounts need it (npm install -g @openai/codex); Claude accounts work without it" }
 $menu = Join-Path $env:APPDATA 'ClaudeCodeUsageMonitor\context-menus\dashboard-v2.json'
 if ((Test-Path $menu) -and ((Get-Content $menu -Raw) -match '47291')) { Write-Ok "Widget menu has 'Manage accounts'" } else { Write-Warn "Widget menu has no 'Manage accounts' item yet" }
 

@@ -1,8 +1,10 @@
 // Re-shoots the README screenshots (docs/images/) from a throwaway demo instance:
 //   cd web && npm run build && node scripts/demo-screenshots.mjs
 // Runs the BUILT app on 127.0.0.1:47591 against a temp APPDATA/USERPROFILE with the fake Claude
-// CLI (tests/fixtures), adds four example.com accounts, writes a usage cache (one account
-// expired), and captures the pages in light and dark. Never touches real accounts.
+// and Codex CLIs (tests/fixtures), adds four example.com Claude accounts and one Codex account
+// (signed in by pasting the localhost:1455 callback address, as on a server), writes a usage cache
+// (one account expired), and captures the pages in light and dark. Never touches real accounts.
+// Needs port 1455 free (the fake Codex CLI's callback server, like the real one).
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -31,6 +33,7 @@ const server = spawn(process.execPath, [path.join(web, 'build', 'index.js')], {
 		TEMP: path.join(root, 'tmp'),
 		TMP: path.join(root, 'tmp'),
 		CLAUDE_BIN: path.join(web, 'tests', 'fixtures', 'fake-claude.cmd'),
+		CODEX_BIN: path.join(web, 'tests', 'fixtures', `fake-codex.${process.platform === 'win32' ? 'cmd' : 'sh'}`),
 		EDGE_EXE: 'none',
 		WIDGET_EXE: path.join(root, 'no-widget.exe')
 	},
@@ -60,6 +63,18 @@ try {
 		const done = await post('/api/login/code', { sessionId: r.login.sessionId, code: `good:${name}@example.com` });
 		if (!done.ok) throw new Error(`login ${name}: ${JSON.stringify(done)}`);
 	}
+	// Codex: the fake CLI's login server takes the callback address the browser would land on
+	const codex = [['codex', 12, 41]];
+	for (const [name] of codex) {
+		const r = await post('/api/accounts', { name, provider: 'codex' });
+		if (!r.login) throw new Error(`codex ${name}: ${JSON.stringify(r)}`);
+		const state = new URL(r.login.url).searchParams.get('state');
+		const done = await post('/api/login/callback', {
+			sessionId: r.login.sessionId,
+			url: `http://localhost:1455/auth/callback?code=good:${name}@example.com&state=${state}`
+		});
+		if (!done.ok) throw new Error(`codex login ${name}: ${JSON.stringify(done)}`);
+	}
 	const now = Math.floor(Date.now() / 1000);
 	const win = (pct, inSec) => ({ available: true, percentage: pct, resets_at: { secs_since_epoch: now + inSec, nanos_since_epoch: 0 } });
 	const entry = ([id, s, w], i) => ({
@@ -70,7 +85,21 @@ try {
 	});
 	fs.writeFileSync(
 		path.join(appDir, 'usage-cache.json'),
-		JSON.stringify({ updated_unix: now + 5, poll_ok: true, data: { accounts: accounts.map(entry) } }) // newer than the logins: errors older than a login are ignored
+		JSON.stringify({
+			updated_unix: now + 5,
+			poll_ok: true,
+			data: {
+				accounts: [
+					...accounts.map(entry),
+					...codex.map(([id, s, w]) => ({
+						provider: 'codex',
+						source_path: path.join(home, `.codex-${id}`, 'auth.json'),
+						usage: { session: win(s, 9000), weekly: win(w, 86400 * 4) },
+						error: null
+					}))
+				]
+			}
+		}) // newer than the logins: errors older than a login are ignored
 	);
 
 	await new Promise((r) => setTimeout(r, 6000)); // let the cache timestamp pass
@@ -87,7 +116,7 @@ try {
 	};
 	await shot('usage-dark.png', '/usage', 'dark');
 	await shot('usage-light.png', '/usage', 'light');
-	await shot('accounts-light.png', '/', 'light', 1100, 900);
+	await shot('accounts-light.png', '/', 'light', 1100, 1210); // tall enough for the Codex card
 	await shot('usage-mobile.png', '/usage', 'dark', 390, 780);
 	await browser.close();
 } finally {
