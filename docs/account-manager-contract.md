@@ -159,18 +159,21 @@ unique across providers. Rows without the column (old DBs) are Claude.
 
 ### Web app
 
-- Add account: a provider choice (Claude / Codex). Codex login drives the official CLI:
-  `codex login` with `CODEX_HOME` set, BROWSER intercepted (as for Claude) to capture the
-  authorize URL. Its OAuth redirect goes to `http://localhost:1455/auth/callback` on the
-  machine running the CLI:
-  - **local mode**: open the URL in the isolated Edge profile; the callback completes by itself.
-    The page polls the session and shows success (no paste). A paste box still accepts the
-    final `http://localhost:1455/auth/callback?...` URL as a fallback.
+- Add account: a provider choice (Claude / Codex). Codex login drives the official CLI in its
+  app-server mode (`codex app-server`, JSON-RPC `account/login/start {type: "chatgpt"}`), because
+  `codex login` ignores `BROWSER` on Windows and opens the default browser itself (which would sign
+  in whatever ChatGPT account that browser already has). `CODEX_HOME` points at the account folder
+  and every call passes `-c cli_auth_credentials_store=file` so the login lands in `auth.json`.
+  The login server listens on `127.0.0.1:1455` and redirects to `http://localhost:1455/auth/callback`;
+  one Codex login at a time (single port); `account/login/cancel` frees it.
+  - **local mode**: open the returned URL in the isolated Edge profile; the callback completes by
+    itself. A paste box still accepts the final `http://localhost:1455/auth/callback?...` URL.
   - **server mode**: the page shows the sign-in link for the user's own browser; after signing
-    in, their browser lands on a `localhost:1455/...` page that fails to load — the user copies
+    in, their browser lands on a `localhost:1455/...` page that fails to load -- the user copies
     that address and pastes it; the server replays it (HTTP GET) against its own
-    `127.0.0.1:1455` so the waiting CLI completes. Accept only URLs whose host is
-    localhost/127.0.0.1, port 1455, path `/auth/callback`.
+    `127.0.0.1:1455`. Accept only host localhost/127.0.0.1, port 1455, path `/auth/callback`;
+    always replay to 127.0.0.1, never to the pasted host.
+  - Token refresh uses the CLI (`account/read {refreshToken: true}`), never a model request.
 - Status: `codex login status` (logged in / not) + the poller's errors, mapped to the same
   `ok | expired | logged_out | error` states. Email: from the id_token in `auth.json` if present
   (decode the JWT payload `email`; never log the token), else "ChatGPT account".
