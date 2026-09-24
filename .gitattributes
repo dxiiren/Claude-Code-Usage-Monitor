@@ -1,0 +1,2 @@
+# Shell scripts run in the Linux container / CI: never convert to CRLF.
+*.sh text eol=lf
