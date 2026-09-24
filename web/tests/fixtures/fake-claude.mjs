@@ -54,19 +54,23 @@ if (cmd === 'auth' && sub === 'login') {
 	const manual = `${base}&redirect_uri=${encodeURIComponent('https://platform.claude.com/oauth/code/callback')}`;
 	if (process.env.BROWSER) spawnSync(`"${process.env.BROWSER}" "${local}"`, { shell: true, stdio: 'ignore' });
 	process.stdout.write(`Opening browser to sign in...\nIf the browser didn't open, visit: ${manual}\nPaste code here if prompted > `);
+	const succeed = (email) => {
+		fs.mkdirSync(dir, { recursive: true });
+		// Same shape as the real CLI's file; the token is fake (tests' fake usage server keys on it).
+		const creds = { claudeAiOauth: { accessToken: `fake-${email}`, expiresAt: Date.now() + 3600_000 } };
+		fs.writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify(creds));
+		fs.writeFileSync(authFile, JSON.stringify({ loggedIn: true, email, plan: 'max' }));
+		console.log('\nLogin successful.');
+		process.exit(0);
+	};
+	const defaultEmail = `${path.basename(dir).replace(/^\.claude-/, '')}@example.com`;
+	// Accounts named "autologin...": the browser completed the localhost callback, so the real CLI
+	// logs in and exits on its own before any code is pasted.
+	if (/autologin/i.test(path.basename(dir))) setTimeout(() => succeed(defaultEmail), 800);
 	const rl = readline.createInterface({ input: process.stdin });
 	rl.once('line', (line) => {
 		const code = line.trim();
-		if (code.startsWith('good')) {
-			const email = code.includes(':') ? code.slice(code.indexOf(':') + 1) : `${path.basename(dir).replace(/^\.claude-/, '')}@example.com`;
-			fs.mkdirSync(dir, { recursive: true });
-			// Same shape as the real CLI's file; the token is fake (tests' fake usage server keys on it).
-			const creds = { claudeAiOauth: { accessToken: `fake-${email}`, expiresAt: Date.now() + 3600_000 } };
-			fs.writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify(creds));
-			fs.writeFileSync(authFile, JSON.stringify({ loggedIn: true, email, plan: 'max' }));
-			console.log('\nLogin successful.');
-			process.exit(0);
-		}
+		if (code.startsWith('good')) succeed(code.includes(':') ? code.slice(code.indexOf(':') + 1) : defaultEmail);
 		console.error('Login failed: Request failed with status code 400');
 		process.exit(1);
 	});
