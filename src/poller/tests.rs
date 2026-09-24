@@ -463,3 +463,77 @@ fn all_failed_providers_can_carry_their_previous_readings() {
     assert_eq!(claude.session.percentage, 21.0);
     assert!(claude.stale, "the carried reading must be marked stale");
 }
+
+#[test]
+fn remote_claude_accounts_replace_local_polling_and_failures_surface() {
+    use crate::accounts::{AccountProfile, AccountSettings, ProviderAccounts};
+    let profile = AccountProfile {
+        id: "ba".into(),
+        name: "BA".into(),
+        config_dir: String::new(),
+        credentials_path: String::new(),
+        enabled: true,
+    };
+    let settings = AccountSettings {
+        claude: ProviderAccounts {
+            profiles: vec![profile.clone()],
+            selected: "ba".into(),
+            used_ids: ["ba".to_string()].into(),
+        },
+        ..Default::default()
+    };
+    let enabled = ProviderSet::from_enabled([ProviderId::Claude]);
+    let usage = UsageData {
+        session: UsageSection {
+            available: true,
+            percentage: 12.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut progress = 0;
+    let data = poll_with_remote_claude(
+        enabled,
+        &settings,
+        None,
+        false,
+        |_| progress += 1,
+        |claude| {
+            assert_eq!(claude.profiles, vec![profile.clone()]);
+            Ok(vec![crate::models::AccountUsage {
+                provider: ProviderId::Claude,
+                profile: profile.clone(),
+                source_signature: "remote:x".into(),
+                source_path: None,
+                usage: Some(usage.clone()),
+                error: None,
+                selected: false,
+            }])
+        },
+    )
+    .unwrap();
+    assert_eq!(progress, 1);
+    assert!(data.accounts[0].selected);
+    assert_eq!(data.get(ProviderId::Claude), Some(&usage));
+
+    // Server down before any account is known: a Claude failure, no local fallback.
+    let failure = poll_with_remote_claude(
+        enabled,
+        &AccountSettings::default(),
+        None,
+        false,
+        |_| {},
+        |_| Err(PollError::NetworkError),
+    )
+    .unwrap_err();
+    assert_eq!(
+        failure,
+        PollFailure {
+            provider: ProviderId::Claude,
+            error: PollError::NetworkError
+        }
+    );
+    assert!(PollError::ServerTokenRejected.is_transient());
+    assert!(!PollError::ServerTokenRejected.is_auth());
+    assert!(!PollError::InsecureServerUrl.is_transient());
+}

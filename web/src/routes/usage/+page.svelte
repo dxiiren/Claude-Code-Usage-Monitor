@@ -95,7 +95,7 @@
 			<span class="muted">next account frees up in {resetsIn(nextFree, now, true)}</span>
 		{:else}
 			<span class="tag none">No usage data yet</span>
-			<span class="muted">the widget has not polled these accounts</span>
+			<span class="muted">{snap.mode === 'server' ? 'the server has not polled these accounts yet' : 'the widget has not polled these accounts'}</span>
 		{/if}
 	</p>
 
@@ -103,7 +103,7 @@
 		<div class="cardhead">
 			<p class="title">Claude usage</p>
 			<p class="updated" class:stale>
-				{#if updated}updated {updated.toLocaleTimeString()}{:else}no widget data yet{/if}
+				{#if updated}updated {updated.toLocaleTimeString()}{:else}{snap.mode === 'server' ? 'not polled yet' : 'no widget data yet'}{/if}
 				{#if stale}&middot; server unreachable{/if}
 			</p>
 		</div>

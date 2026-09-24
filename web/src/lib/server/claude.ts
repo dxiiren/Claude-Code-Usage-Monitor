@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { IS_WINDOWS, SERVER } from './paths';
 
 const env = process.env;
 /** Our own temp prefix (the PowerShell kit uses a different one), so the startup sweep only touches ours. */
@@ -25,6 +26,19 @@ export function findClaude(): string {
 	if (override) {
 		if (fs.existsSync(override)) return (claudeExe = override);
 		throw new Error(`CLAUDE_BIN points at ${override}, which does not exist.`);
+	}
+	if (!IS_WINDOWS) {
+		// Linux (the server image): scan PATH, no shell involved.
+		for (const dir of (env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
+			const p = path.join(dir, 'claude');
+			try {
+				fs.accessSync(p, fs.constants.X_OK);
+				return (claudeExe = p);
+			} catch {
+				/* not here */
+			}
+		}
+		throw new Error('Claude Code (claude) was not found on PATH. Install it, or set CLAUDE_BIN.');
 	}
 	try {
 		const hits = execFileSync('where.exe', ['claude'], { encoding: 'utf8', windowsHide: true })
@@ -51,6 +65,7 @@ function spawnClaude(args: string[], extraEnv: Record<string, string>): ChildPro
 }
 
 export function findEdge(): string | null {
+	if (SERVER) return null; // the user opens the link in their own browser
 	// EDGE_EXE: explicit msedge.exe path, or "none" to never open a window (tests).
 	if (env.EDGE_EXE) return env.EDGE_EXE.toLowerCase() === 'none' ? null : env.EDGE_EXE;
 	const candidates = [
@@ -114,6 +129,14 @@ function authStatusRaw(configDir: string): Promise<AuthStatus | null> {
 
 function killTree(pid: number | undefined): void {
 	if (!pid) return;
+	if (!IS_WINDOWS) {
+		try {
+			process.kill(pid, 'SIGKILL');
+		} catch {
+			/* already gone */
+		}
+		return;
+	}
 	try {
 		execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
 	} catch {
@@ -123,6 +146,7 @@ function killTree(pid: number | undefined): void {
 
 /** Kill every msedge.exe whose command line contains `match` (the throwaway profile dir). */
 function killEdgeMatching(match: string): Promise<void> {
+	if (SERVER || !IS_WINDOWS) return Promise.resolve(); // no Edge is ever opened there
 	return new Promise((resolve) => {
 		execFile(
 			'powershell.exe',
@@ -162,8 +186,10 @@ export async function sweepStaleLogins(): Promise<void> {
 		return;
 	}
 	if (stale.length === 0) return;
-	await killEdgeMatching(TMP_PREFIX);
-	await new Promise((r) => setTimeout(r, 800));
+	if (!SERVER) {
+		await killEdgeMatching(TMP_PREFIX);
+		await new Promise((r) => setTimeout(r, 800));
+	}
 	for (const n of stale) await removeDir(path.join(tmp, n));
 }
 
@@ -206,8 +232,10 @@ export function activeSessionFor(accountId: string): string | null {
 async function cleanup(s: Session): Promise<void> {
 	clearTimeout(s.timer);
 	if (!s.exited) killTree(s.proc.pid);
-	await killEdgeMatching(s.profileDir);
-	await new Promise((r) => setTimeout(r, 800));
+	if (!SERVER) {
+		await killEdgeMatching(s.profileDir);
+		await new Promise((r) => setTimeout(r, 800));
+	}
 	await removeDir(s.work);
 	sessions.delete(s.id);
 }
@@ -231,11 +259,17 @@ export async function startLogin(accountId: string, configDir: string): Promise<
 	const id = crypto.randomUUID();
 	const work = fs.mkdtempSync(path.join(os.tmpdir(), TMP_PREFIX));
 	const urlFile = path.join(work, 'url.txt');
-	const browser = path.join(work, 'browser.cmd');
-	// BROWSER only records the URL: the CLI must never open the default (signed-in) browser.
-	fs.writeFileSync(browser, `@echo %* > "${urlFile}"\r\n`, { encoding: 'latin1' });
+	// BROWSER only records the URL: the CLI must never open the default (signed-in) browser,
+	// and on a server there is no browser at all.
+	const browser = path.join(work, IS_WINDOWS ? 'browser.cmd' : 'browser.sh');
+	if (IS_WINDOWS) fs.writeFileSync(browser, `@echo %* > "${urlFile}"\r\n`, { encoding: 'latin1' });
+	else fs.writeFileSync(browser, `#!/bin/sh\nprintf '%s\\n' "$*" > "$ACCTMGR_URL_FILE"\n`, { mode: 0o700 });
 
-	const proc = spawnClaude(['auth', 'login', '--claudeai'], { BROWSER: browser, CLAUDE_CONFIG_DIR: configDir });
+	const proc = spawnClaude(['auth', 'login', '--claudeai'], {
+		BROWSER: browser,
+		CLAUDE_CONFIG_DIR: configDir,
+		ACCTMGR_URL_FILE: urlFile // read by browser.sh (no path quoting inside the script)
+	});
 	const s: Session = {
 		id,
 		accountId,
@@ -265,11 +299,31 @@ export async function startLogin(accountId: string, configDir: string): Promise<
 
 	const deadline = Date.now() + URL_WAIT_MS;
 	let url = '';
-	while (Date.now() < deadline && !url) {
-		await new Promise((r) => setTimeout(r, 250));
-		if (fs.existsSync(urlFile)) url = fs.readFileSync(urlFile, 'latin1').replace(/"/g, '').trim();
-		if (!url) url = s.stdout.match(/https:\/\/\S+/)?.[0] ?? '';
-		if (!url && s.exited) break;
+	if (SERVER) {
+		// The URL the CLI hands to BROWSER redirects to http://localhost:<port>/callback: that only
+		// works in a browser on THIS machine. The one it prints ("If the browser didn't open, visit:")
+		// uses the hosted callback page that shows a code to paste, which works from any device.
+		let browserUrl = '';
+		let browserSeenAt = 0;
+		while (Date.now() < deadline && !url) {
+			await new Promise((r) => setTimeout(r, 250));
+			const printed = (s.stdout.match(/https:\/\/\S+/g) ?? []).find((u) => !isLocalCallback(u));
+			if (printed) url = printed;
+			else if (!browserUrl && fs.existsSync(urlFile)) {
+				browserUrl = fs.readFileSync(urlFile, 'latin1').replace(/"/g, '').trim();
+				browserSeenAt = Date.now();
+			}
+			// A CLI that never prints a link: use BROWSER's, unless it is a localhost callback.
+			if (!url && browserUrl && !isLocalCallback(browserUrl) && Date.now() - browserSeenAt > 3000) url = browserUrl;
+			if (!url && s.exited) break;
+		}
+	} else {
+		while (Date.now() < deadline && !url) {
+			await new Promise((r) => setTimeout(r, 250));
+			if (fs.existsSync(urlFile)) url = fs.readFileSync(urlFile, 'latin1').replace(/"/g, '').trim();
+			if (!url) url = s.stdout.match(/https:\/\/\S+/)?.[0] ?? '';
+			if (!url && s.exited) break;
+		}
 	}
 	if (!/^https:\/\/[^\s"<>]+$/.test(url)) {
 		const why = failureReason(s) || 'Claude Code never produced a login link.';
@@ -292,6 +346,18 @@ export async function startLogin(accountId: string, configDir: string): Promise<
 		s.edgeOpened = true;
 	}
 	return { sessionId: id, url, edgeOpened: s.edgeOpened };
+}
+
+/** True for an OAuth URL whose redirect_uri is a loopback callback (unusable from another device). */
+export function isLocalCallback(url: string): boolean {
+	try {
+		const r = new URL(url).searchParams.get('redirect_uri');
+		if (!r) return false;
+		const h = new URL(r).hostname;
+		return h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
+	} catch {
+		return false;
+	}
 }
 
 /** Last meaningful CLI lines, without links or prompts. Never includes tokens (the CLI prints none). */
@@ -364,4 +430,46 @@ export async function cancelLogin(sessionId: string): Promise<boolean> {
 	s.state = 'cancelled';
 	await cleanup(s);
 	return true;
+}
+
+// ---------- token refresh (server poller) ----------
+
+/**
+ * Port of the widget's cli_refresh_windows_token (src/poller/claude.rs): run `claude -p .` with
+ * CLAUDE_CONFIG_DIR set and let the CLI refresh its own token. We never call the OAuth token
+ * endpoint ourselves. Output is discarded (never logged); killed after 30 s like the widget.
+ */
+export function refreshTokenViaCli(configDir: string, timeoutMs = 30_000): Promise<void> {
+	return new Promise((resolve) => {
+		let exe: string;
+		try {
+			exe = findClaude();
+		} catch {
+			return resolve();
+		}
+		const childEnv: NodeJS.ProcessEnv = { ...env, CLAUDE_CONFIG_DIR: configDir };
+		delete childEnv.CLAUDECODE;
+		delete childEnv.CLAUDE_CODE_ENTRYPOINT;
+		const isCmd = /\.(cmd|bat)$/i.test(exe);
+		let child: ChildProcess;
+		try {
+			child = isCmd
+				? spawn('cmd.exe', ['/d', '/s', '/c', `"${exe}" -p .`], {
+						env: childEnv,
+						stdio: 'ignore',
+						windowsHide: true,
+						windowsVerbatimArguments: true
+					})
+				: spawn(exe, ['-p', '.'], { env: childEnv, stdio: 'ignore', windowsHide: true });
+		} catch {
+			return resolve();
+		}
+		const timer = setTimeout(() => killTree(child.pid), timeoutMs);
+		const done = () => {
+			clearTimeout(timer);
+			resolve();
+		};
+		child.on('exit', done);
+		child.on('error', done);
+	});
 }

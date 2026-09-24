@@ -1,0 +1,2 @@
+# Real settings (password, public origin) never go into git; .env.example is the template.
+.env

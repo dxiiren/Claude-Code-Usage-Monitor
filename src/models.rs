@@ -270,6 +270,8 @@ impl AppUsageData {
                     }) || crate::poller::account_source_signature(account.provider, path)
                         != account.source_signature
                 }
+                // Remote-mode readings belong to the server, not to local files.
+                None if crate::remote::is_remote_signature(&account.source_signature) => false,
                 None => crate::accounts::environment_directory(account.provider).is_some(),
             };
             if changed {

@@ -1,7 +1,8 @@
 // accounts.db -- schema and write rules from docs/account-manager-contract.md.
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { APP_DIR, DB_FILE, MANAGER_URL, configDirFor, isDeletableConfigDir, pathKey } from './paths';
+import path from 'node:path';
+import { APP_DIR, DB_FILE, MANAGER_URL, SERVER, configDirFor, isDeletableConfigDir, pathKey } from './paths';
 import { usedClaudeIds, writeSettings, writeTheme } from './widgetFiles';
 import { CARD_THEMES, type CardTheme } from './theme';
 
@@ -28,6 +29,35 @@ export class UserError extends Error {
 
 let db: DatabaseSync | null = null;
 
+/**
+ * Server mode only (the local DB keeps exactly the contract's two tables).
+ * - api_tokens: widget API tokens, SHA-256 hashes only (contract).
+ * - account_usage: the server's own poll result per account. Poll results are NOT account writes,
+ *   so they never bump meta.revision (the widget's read contract is unchanged).
+ * - admin_sessions: browser sessions, SHA-256 of the session id only.
+ */
+const SERVER_SCHEMA = `
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id           TEXT PRIMARY KEY,
+  name         TEXT,
+  token_hash   TEXT UNIQUE,
+  created_at   TEXT,
+  last_used_at TEXT
+);
+CREATE TABLE IF NOT EXISTS account_usage (
+  account_id   TEXT PRIMARY KEY,
+  usage_json   TEXT,               -- last GOOD usage: {"session":{available,percentage,resets_at_unix},"weekly":{...}}
+  error_json   TEXT,               -- last poll error, serialized like the widget's PollError; NULL = last poll ok
+  polled_at    TEXT,               -- ISO-8601 UTC of the last poll attempt
+  polled_unix  INTEGER,
+  ok_unix      INTEGER             -- last successful poll
+);
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  id_hash      TEXT PRIMARY KEY,
+  created_at   TEXT NOT NULL,
+  expires_unix INTEGER NOT NULL
+);`;
+
 function open(): DatabaseSync {
 	if (db) return db;
 	fs.mkdirSync(APP_DIR, { recursive: true });
@@ -52,6 +82,7 @@ CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );`);
+	if (SERVER) d.exec(SERVER_SCHEMA);
 	const ins = d.prepare('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)');
 	ins.run('revision', '0');
 	ins.run('schema', '1');
@@ -60,6 +91,7 @@ CREATE TABLE IF NOT EXISTS meta (
 		MANAGER_URL
 	);
 	db = d;
+	if (SERVER) return d; // no widget files on a server
 	// Deliberately NO import from kit/accounts.json or settings.json: a new DB starts empty.
 	if (fresh) syncWidgetFiles();
 	// Existing DB from before card_theme existed: apply the default once, as a normal write.
@@ -84,6 +116,7 @@ export function getMeta(): Record<string, string> {
 
 /** Theme + settings.json for the official widget, from the enabled rows in card order. */
 function syncWidgetFiles(): void {
+	if (SERVER) return; // no settings.json / theme on a server: remote widgets read /api/v1/widget
 	const rows = listAccounts().filter((a) => a.enabled);
 	const list = rows.map((a) => ({ id: a.id, name: a.name, config_dir: a.config_dir }));
 	writeTheme(list, getCardTheme());
@@ -136,12 +169,23 @@ function newId(d: DatabaseSync, name: string): string {
 	if (base === 'default') base = 'account';
 	const taken = new Set([
 		...(d.prepare('SELECT id FROM accounts').all() as unknown as { id: string }[]).map((r) => r.id),
-		...usedClaudeIds(),
+		...(SERVER ? serverUsedIds(d) : usedClaudeIds()),
 		'default'
 	]);
 	let id = base;
 	for (let i = 2; taken.has(id) || fs.existsSync(configDirFor(id)); i++) id = `${base}_${i}`;
 	return id;
+}
+
+/** Server mode: ids ever handed out (meta.used_ids, JSON array), so an id is never reused. */
+function serverUsedIds(d: DatabaseSync): string[] {
+	const v = (d.prepare("SELECT value FROM meta WHERE key = 'used_ids'").get() as { value: string } | undefined)?.value;
+	try {
+		const a = JSON.parse(v ?? '[]');
+		return Array.isArray(a) ? a.filter((x): x is string => typeof x === 'string') : [];
+	} catch {
+		return [];
+	}
 }
 
 export function createAccount(rawName: unknown): Account {
@@ -154,6 +198,10 @@ export function createAccount(rawName: unknown): Account {
 		d.prepare(
 			'INSERT INTO accounts (id, name, config_dir, email, plan, enabled, sort_order, created_at, updated_at) VALUES (?, ?, ?, NULL, NULL, 1, ?, ?, ?)'
 		).run(id, name, configDirFor(id), max + 1, t, t);
+		if (SERVER)
+			d.prepare("INSERT INTO meta (key, value) VALUES ('used_ids', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+				JSON.stringify([...new Set([...serverUsedIds(d), id])])
+			);
 		return getAccount(id)!;
 	});
 }
@@ -217,12 +265,22 @@ export function removeAccount(id: string): RemoveResult {
 	const a = mustGet(id);
 	write((d) => {
 		d.prepare('DELETE FROM accounts WHERE id = ?').run(id);
+		if (SERVER) d.prepare('DELETE FROM account_usage WHERE account_id = ?').run(id);
 	});
 	const folder = a.config_dir;
 	const sharedWith = listAccounts().some((o) => pathKey(o.config_dir) === pathKey(folder));
 	if (sharedWith) return { folder, folderDeleted: false, folderNote: 'Another account still uses this folder, so it was kept.' };
+	// Server: only `<data>/accounts/<id>` of THIS row, never another folder the row might point at.
+	if (SERVER && path.resolve(folder) !== path.resolve(configDirFor(a.id)))
+		return { folder, folderDeleted: false, folderNote: "The folder is not this account's own data folder, so it was left alone." };
 	if (!isDeletableConfigDir(folder))
-		return { folder, folderDeleted: false, folderNote: 'The folder is not a %USERPROFILE%\\.claude-* folder, so it was left alone.' };
+		return {
+			folder,
+			folderDeleted: false,
+			folderNote: SERVER
+				? 'The folder is not under the data volume accounts folder, so it was left alone.'
+				: 'The folder is not a %USERPROFILE%\\.claude-* folder, so it was left alone.'
+		};
 	if (!fs.existsSync(folder)) return { folder, folderDeleted: true, folderNote: 'The folder did not exist.' };
 	try {
 		fs.rmSync(folder, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 });
@@ -243,6 +301,11 @@ export function setCardTheme(raw: unknown): void {
 	write((d) => {
 		d.prepare("INSERT INTO meta (key, value) VALUES ('card_theme', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(raw as string);
 	});
+}
+
+/** Server mode: the shared connection for auth / tokens / usage tables (same file, same rules). */
+export function database(): DatabaseSync {
+	return open();
 }
 
 /** Called at startup so the DB and its meta rows exist before the first request. */

@@ -16,6 +16,10 @@ pub enum PollError {
     UnexpectedResponse,
     /// Preserve the last HTTP failure so account status can explain the result.
     HttpStatus(u16),
+    /// Remote mode: the Account Manager server refused the widget token (401).
+    ServerTokenRejected,
+    /// Remote mode: the server URL may not receive the token (plain http off the LAN).
+    InsecureServerUrl,
 }
 
 impl PollError {
@@ -33,6 +37,7 @@ impl PollError {
                 | Self::NetworkError
                 | Self::UnexpectedResponse
                 | Self::HttpStatus(_)
+                | Self::ServerTokenRejected
         ) && !self.is_auth()
     }
 
@@ -64,6 +69,12 @@ impl PollError {
                 };
                 format!("HTTP {code}: {reason}. {}", language.text(action))
             }
+            Self::ServerTokenRejected => language
+                .text("Server token rejected; check remote_server_token in settings")
+                .into(),
+            Self::InsecureServerUrl => language
+                .text("Server URL rejected; use https (plain http only on localhost or a LAN address)")
+                .into(),
         }
     }
 }
@@ -91,6 +102,87 @@ pub fn account_source_signature(provider: ProviderId, path: &std::path::Path) ->
 }
 
 pub fn poll(
+    enabled_providers: ProviderSet,
+    settings: &crate::accounts::AccountSettings,
+    previous: Option<&AppUsageData>,
+    force: bool,
+    on_progress: impl FnMut(AppUsageData),
+) -> Result<AppUsageData, PollFailure> {
+    if enabled_providers.contains(ProviderId::Claude) {
+        if let Some(config) = crate::remote::active_config() {
+            return poll_with_remote_claude(
+                enabled_providers,
+                settings,
+                previous,
+                force,
+                on_progress,
+                |claude| crate::remote::poll_accounts(&config, claude),
+            );
+        }
+    }
+    poll_local(enabled_providers, settings, previous, force, on_progress)
+}
+
+/// Remote mode: Claude comes from the Account Manager server (no local
+/// credential files, no CLI refresh); every other provider polls as usual.
+fn poll_with_remote_claude(
+    enabled_providers: ProviderSet,
+    settings: &crate::accounts::AccountSettings,
+    previous: Option<&AppUsageData>,
+    force: bool,
+    mut on_progress: impl FnMut(AppUsageData),
+    poll_claude: impl FnOnce(
+        &crate::accounts::ProviderAccounts,
+    ) -> Result<Vec<crate::models::AccountUsage>, PollError>,
+) -> Result<AppUsageData, PollFailure> {
+    let claude = poll_claude(&settings.claude);
+    if let Ok(accounts) = &claude {
+        if !accounts.is_empty() {
+            let mut update = AppUsageData::default();
+            update.accounts = accounts.clone();
+            on_progress(update);
+        }
+    }
+    let others = ProviderSet::from_enabled(
+        enabled_providers
+            .iter()
+            .filter(|provider| *provider != ProviderId::Claude),
+    );
+    let others = if others.is_empty() {
+        Ok(AppUsageData::default())
+    } else {
+        poll_local(others, settings, previous, force, &mut on_progress)
+    };
+    let claude_failure = |error| PollFailure {
+        provider: ProviderId::Claude,
+        error,
+    };
+    let mut data = match (claude, others) {
+        (Ok(accounts), Ok(mut data)) => {
+            data.accounts.extend(accounts);
+            data
+        }
+        (Ok(accounts), Err(failure)) => {
+            if accounts.is_empty() {
+                return Err(failure);
+            }
+            let mut data = AppUsageData::default();
+            data.accounts = accounts;
+            data
+        }
+        (Err(error), Ok(data)) => {
+            if data.is_empty() && data.accounts.is_empty() {
+                return Err(claude_failure(error));
+            }
+            data
+        }
+        (Err(error), Err(_)) => return Err(claude_failure(error)),
+    };
+    data.select_accounts(settings);
+    Ok(data)
+}
+
+fn poll_local(
     enabled_providers: ProviderSet,
     settings: &crate::accounts::AccountSettings,
     previous: Option<&AppUsageData>,

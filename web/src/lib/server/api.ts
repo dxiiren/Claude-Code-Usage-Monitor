@@ -4,6 +4,8 @@ import { LoginError, activeSessionFor, authStatusOrNull } from './claude';
 import { AuthStatusCache, loginStatus } from './status';
 import { readUsage } from './usage';
 import { findWidgetExe, widgetRunning } from './widget';
+import { SERVER } from './paths';
+import { readServerUsage } from './serverUsage';
 
 export async function body(request: Request): Promise<Record<string, unknown>> {
 	try {
@@ -39,18 +41,21 @@ export function markLoggedIn(accountId: string, configDir: string): void {
 
 export async function snapshot() {
 	const accounts = listAccounts();
-	const usage = readUsage(accounts);
+	// Server: the server's own poll results; local: the widget's usage-cache.json.
+	const usage = SERVER ? readServerUsage(accounts) : readUsage(accounts);
 	const meta = getMeta();
 	const auths = await Promise.all(accounts.map((a) => authCache.get(a.config_dir)));
 	return {
+		mode: SERVER ? ('server' as const) : ('local' as const),
 		revision: Number(meta.revision ?? 0),
 		cardTheme: getCardTheme(),
 		usageUpdatedUnix: usage.updatedUnix,
-		widget: { installed: !!findWidgetExe(), running: widgetRunning() },
+		widget: SERVER ? { installed: false, running: false } : { installed: !!findWidgetExe(), running: widgetRunning() },
 		accounts: accounts.map((a, i) => {
 			const u = usage.byId[a.id];
 			// A poll error from before the latest login is stale: the widget has not re-polled yet.
-			const stale = (loginAt.get(a.id) ?? 0) > (usage.updatedUnix ?? 0);
+			// (Server mode clears the stored error on login instead.)
+			const stale = !SERVER && (loginAt.get(a.id) ?? 0) > (usage.updatedUnix ?? 0);
 			return {
 				id: a.id,
 				name: a.name,

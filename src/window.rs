@@ -30,10 +30,11 @@ use crate::localization::{self, LanguageId, Strings};
 use crate::models::AppUsageData;
 use crate::native_interop::{
     self, TIMER_ACCOUNTS_DB, TIMER_CLOCK, TIMER_COUNTDOWN, TIMER_MOUSE_CLICK, TIMER_POLL,
-    TIMER_RESET_POLL, TIMER_TRAY_HOVER, TIMER_TRAY_REPOSITION, TIMER_UPDATE_CHECK,
-    TIMER_WINDOW_STATE, WM_APP_ACCOUNTS_DB_CHANGED, WM_APP_DISABLE_DIAGNOSTICS,
+    TIMER_REMOTE_SERVER, TIMER_RESET_POLL, TIMER_TRAY_HOVER, TIMER_TRAY_REPOSITION,
+    TIMER_UPDATE_CHECK, TIMER_WINDOW_STATE, WM_APP_ACCOUNTS_DB_CHANGED, WM_APP_DISABLE_DIAGNOSTICS,
     WM_APP_ENABLE_DIAGNOSTICS, WM_APP_OPEN_DASHBOARD, WM_APP_QUIT, WM_APP_REFRESH_NOW,
-    WM_APP_SETTINGS_UPDATED, WM_APP_TASKBAR_COLLISION, WM_APP_TRAY, WM_APP_USAGE_UPDATED,
+    WM_APP_REMOTE_CHANGED, WM_APP_SETTINGS_UPDATED, WM_APP_TASKBAR_COLLISION, WM_APP_TRAY,
+    WM_APP_USAGE_UPDATED,
 };
 use crate::poller;
 use crate::providers::{ProviderId, ProviderSet};
@@ -2088,7 +2089,7 @@ pub fn run() {
                 language,
                 install_channel,
                 providers: settings.enabled_providers(),
-                accounts: crate::accounts_db::effective(&settings.accounts),
+                accounts: crate::remote::effective(&settings),
                 data: None,
                 poll_interval_ms: settings.poll_interval_ms,
                 retry_count: 0,
@@ -2173,6 +2174,12 @@ pub fn run() {
             Some(hwnd),
             TIMER_ACCOUNTS_DB,
             crate::accounts_db::REVISION_CHECK_INTERVAL_MS,
+            None,
+        );
+        SetTimer(
+            Some(hwnd),
+            TIMER_REMOTE_SERVER,
+            crate::remote::CHECK_INTERVAL_MS,
             None,
         );
         sync_window_state_timer(hwnd);
@@ -2500,6 +2507,12 @@ fn do_poll_once(hwnd: HWND) {
             }
         },
     );
+    // Remote mode: the first fetch (or a fetch during a poll) can change the
+    // server's account list; reload the accounts, which polls again.
+    if crate::remote::profiles_differ(&accounts) {
+        diagnose::log("remote: server account list differs from the widget's; reloading");
+        post_remote_changed(hwnd);
+    }
     match result {
         Ok(data) => {
             let mut state = lock_state();
@@ -2607,7 +2620,9 @@ fn do_poll_once(hwnd: HWND) {
                 poller::PollError::RequestFailed
                 | poller::PollError::NetworkError
                 | poller::PollError::UnexpectedResponse
-                | poller::PollError::HttpStatus(_) => None,
+                | poller::PollError::HttpStatus(_)
+                | poller::PollError::ServerTokenRejected
+                | poller::PollError::InsecureServerUrl => None,
             };
             // Distinguish auth-required errors from transient errors.
             let (notify_auth_error, cache_data, cache_poll_ok) = {
@@ -2831,6 +2846,39 @@ fn request_accounts_db_check(hwnd: HWND) {
     });
 }
 
+/// Ask the Account Manager server (remote mode) whether its payload changed,
+/// off the UI thread. A change is posted back as `WM_APP_REMOTE_CHANGED`.
+fn request_remote_check(hwnd: HWND) {
+    static CHECK_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+    if CHECK_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let send_hwnd = SendHwnd::from_hwnd(hwnd);
+    std::thread::spawn(move || {
+        let changed = crate::remote::check_for_changes();
+        CHECK_IN_FLIGHT.store(false, Ordering::Release);
+        if changed {
+            post_remote_changed(send_hwnd.to_hwnd());
+        }
+    });
+}
+
+fn post_remote_changed(hwnd: HWND) {
+    unsafe {
+        let _ = PostMessageW(Some(hwnd), WM_APP_REMOTE_CHANGED, WPARAM(0), LPARAM(0));
+    }
+}
+
+/// The server's accounts, usage or reachability changed: reload the accounts
+/// and poll now (the poll reuses the payload the check just fetched).
+fn reload_remote(hwnd: HWND) {
+    diagnose::log("remote: reloading accounts, forcing a usage poll");
+    reload_settings_and_theme(hwnd, true);
+}
+
 /// The Account Manager changed the accounts: reload them and the theme it
 /// regenerated, then poll now instead of waiting for the next interval.
 fn reload_accounts_db(hwnd: HWND) {
@@ -2844,7 +2892,7 @@ fn reload_external_settings(hwnd: HWND) {
 
 fn reload_settings_and_theme(hwnd: HWND, force_poll: bool) {
     let settings = load_settings();
-    let accounts = crate::accounts_db::effective(&settings.accounts);
+    let accounts = crate::remote::effective(&settings);
     let language_override = settings.language.as_deref().and_then(LanguageId::from_code);
     let theme_path = settings
         .active_theme_path

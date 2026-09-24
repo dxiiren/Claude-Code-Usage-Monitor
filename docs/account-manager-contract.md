@@ -64,3 +64,69 @@ The web app creates the file and tables on first start. The widget never writes.
   `kit/UsageKit.psm1` `Write-UsageTheme`), and keep `settings.json` pointing at it.
 - Usage numbers come from the widget's `usage-cache.json` (`data.accounts[]`, matched by
   `source_path` = `<config_dir>\.credentials.json`).
+
+## Server mode (Docker) and the widget's remote mode
+
+The same web app also runs as a Linux container on a server (`ACCTMGR_MODE=server`). Then the
+server, not the PC, owns the logins and fetches usage; Windows widgets only read from it.
+
+### Server responsibilities
+
+- Data lives in one volume, `/data`: `accounts.db` (same schema as above) and one Claude
+  config folder per account, `/data/accounts/<id>` (the CLI's `.credentials.json` lands there).
+- Login: `claude auth login --claudeai` in the container with `CLAUDE_CONFIG_DIR` set and
+  `BROWSER` pointed at a script that only records the URL. The page shows that URL as a link
+  the user opens in THEIR browser (any device), then pastes the code; nothing opens a
+  browser server-side. Never call Anthropic OAuth endpoints directly.
+- Usage: the server polls each enabled account's usage itself, the same way the widget
+  does (`src/poller/claude.rs`: endpoint, headers, token refresh by running the CLI when
+  the access token is expired), every `ACCTMGR_POLL_SECONDS` (default 300), honouring 429 /
+  Retry-After. Results are stored per account (last usage, last error, polled_at).
+- Access control (the page is no longer loopback-only):
+  - `ACCTMGR_ADMIN_USER` (default `Admin`, case-insensitive) + `ACCTMGR_ADMIN_PASSWORD`
+    (required in server mode; refuse to start without it) protect
+    every page and `/api/*` with a login form and an HttpOnly, SameSite=Strict session cookie
+    (`Secure` when `ACCTMGR_PUBLIC_ORIGIN` is https). Login attempts are rate limited.
+  - `ACCTMGR_PUBLIC_ORIGIN` (e.g. `https://claude.yanasharif.com`) replaces the
+    127.0.0.1:47291 Origin/Host check.
+  - `ACCTMGR_TRUST_PROXY=1` counts sign-in attempts per `CF-Connecting-IP` (only when the
+    container is reachable solely through the Cloudflare tunnel); otherwise per socket address.
+  - Widget API tokens: created in the UI (shown once), stored as SHA-256 hashes in table
+    `api_tokens(id TEXT PK, name TEXT, token_hash TEXT UNIQUE, created_at TEXT, last_used_at TEXT)`,
+    revocable. Only `GET /api/v1/widget` accepts them (`Authorization: Bearer <token>`).
+- Tokens / credentials are never returned by any endpoint or written to logs.
+
+### `GET /api/v1/widget` (Bearer token) -- what remote widgets read
+
+```json
+{
+  "schema": 1,
+  "revision": 12,
+  "updated_unix": 1790240810,
+  "manager_url": "https://claude.yanasharif.com",
+  "card_theme": "auto",
+  "accounts": [
+    {
+      "id": "ba", "name": "ba", "email": "x@y", "plan": "max",
+      "status": "ok",                 // ok | expired | logged_out | error
+      "status_message": "",
+      "usage": {                      // null when never fetched
+        "session": { "available": true, "percentage": 12.0, "resets_at_unix": 1790248799 },
+        "weekly":  { "available": true, "percentage": 44.0, "resets_at_unix": 1790456399 }
+      }
+    }
+  ]
+}
+```
+
+Only enabled accounts, in `sort_order`. `401` for a missing/unknown/revoked token.
+
+### Widget remote mode
+
+`settings.json` keys `remote_server_url` + `remote_server_token` (both non-empty) switch the
+Claude provider to remote mode: accounts, usage and login state come from `GET
+/api/v1/widget` (no local credential files are read, no local CLI refresh), fetched on the
+normal poll interval and additionally every 30 s when `revision` may have changed. The
+"Manage accounts" menu item opens `manager_url`. Precedence: remote mode > `accounts.db` >
+settings.json profiles. `login_required` is 1 when `status` is `expired` or `logged_out`. A
+server that is unreachable keeps the last good data marked stale, like any poll failure.

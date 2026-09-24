@@ -67,13 +67,28 @@ of their bars (`accounts.claude.<id>.login_required`).
 | `EDGE_EXE` | path to `msedge.exe`, or `none` to never open a window |
 | `WIDGET_EXE` | path to `claude-code-usage-monitor.exe` (default: the WinGet package) |
 
+## Server mode (Docker)
+
+`ACCTMGR_MODE=server` runs the same app on a Linux server: it owns the logins (`/data/accounts/<id>`), polls
+every account's usage itself (a port of the widget's `src/poller/claude.rs`), and serves `GET /api/v1/widget`
+to remote widgets. Every page and API needs the admin sign-in (`ACCTMGR_ADMIN_USER` / `ACCTMGR_ADMIN_PASSWORD`);
+widgets use tokens from the **Widget tokens** page. Login shows an **Open sign-in page** link for your own
+browser (no Edge, no widget files, no `settings.json`). Build and run it with `deploy/` (see `deploy/README.md`).
+
+Server-mode code: `src/lib/server/auth.ts` (sign-in, sessions, rate limit, tokens), `poller.ts` +
+`serverUsage.ts` (usage polling), `widgetApi.ts` (`/api/v1/widget`), `guard.ts` `checkServerRequest`.
+
 ## Tests
 
 ```powershell
 npm test             # unit (vitest): theme, DB, settings, usage matching, guards, contrast
 npm run test:e2e     # builds, then Playwright against a throwaway APPDATA/USERPROFILE + fake CLI
+npm run test:e2e:server  # server mode: built server via start.js, temp /data, fake CLI + fake usage endpoint
 npm run test:all
 ```
+
+The server-mode e2e (`playwright.server.config.ts`, `tests/e2e-server/`) uses ports 47392 (app) and 47393 (fake usage
+endpoint, via `ACCTMGR_USAGE_URL`).
 
 The e2e run uses port 47391, a temp home folder, and `tests/fixtures/fake-claude.cmd`. It never touches the
 real `accounts.db`, `settings.json`, `.claude*` folders or Edge. Screenshots go to `test-results/screens/`

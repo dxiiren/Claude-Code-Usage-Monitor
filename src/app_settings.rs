@@ -76,6 +76,13 @@ pub struct SettingsFile {
     pub floating_card_opacity: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement_override: Option<PlacementOverride>,
+    /// Account Manager server (`https://...`). With a token, the Claude
+    /// accounts and usage come from its `GET /api/v1/widget` (remote mode).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub remote_server_url: String,
+    /// Bearer token for `remote_server_url`. Never logged.
+    #[serde(default, skip_serializing_if = "crate::remote::SecretToken::is_empty")]
+    pub remote_server_token: crate::remote::SecretToken,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +134,8 @@ impl Default for SettingsFile {
             dashboard_height: None,
             floating_card_opacity: None,
             placement_override: None,
+            remote_server_url: String::new(),
+            remote_server_token: Default::default(),
         }
     }
 }

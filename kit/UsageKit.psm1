@@ -119,6 +119,25 @@ function Start-Manager {
     return $false
 }
 
+# ---------- Remote mode (widget reads a server's Account Manager) ----------
+
+# Sets or clears settings.json remote_server_url / remote_server_token (see
+# docs/account-manager-contract.md "Widget remote mode"), then restarts the widget.
+function Set-RemoteServer([string]$Url, [string]$Token) {
+    $file = Join-Path $script:AppDataDir 'settings.json'
+    if (-not (Test-Path $file)) { throw "Widget settings not found; start the widget once first." }
+    Stop-Monitor
+    $s = Get-Content $file -Raw | ConvertFrom-Json
+    foreach ($pair in @(@('remote_server_url', $Url), @('remote_server_token', $Token))) {
+        if ($s.PSObject.Properties[$pair[0]]) { $s.($pair[0]) = $pair[1] }
+        else { $s | Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] }
+    }
+    [IO.File]::WriteAllText($file, (ConvertTo-Json $s -Depth 20), (New-Object System.Text.UTF8Encoding $false))
+    Start-Monitor
+    if ($Url) { Write-Ok "Widget now reads $Url (token saved in settings.json)" }
+    else { Write-Ok "Widget back to local accounts" }
+}
+
 # ---------- Startup + shortcuts ----------
 
 function Enable-Startup {
@@ -158,4 +177,4 @@ function Install-CloseMenu {
 Export-ModuleMember -Function Write-Ok, Write-Info, Write-Warn, Write-Fail, Get-MonitorExe, Get-UpstreamMonitorExe,
     Stop-Monitor, Start-Monitor, Install-MonitorRelease, Install-MonitorFromSource, Install-ManagerApp,
     Get-ManagerProcess, Stop-Manager, Test-ManagerUp, Start-Manager, Enable-Startup, Disable-Startup, New-Shortcuts,
-    Install-CloseMenu
+    Install-CloseMenu, Set-RemoteServer

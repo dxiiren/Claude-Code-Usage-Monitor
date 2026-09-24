@@ -74,6 +74,15 @@ widget-build: _require-cargo
 widget-update:
     {{kit}}; Install-MonitorRelease; Start-Monitor
 
+# Point the widget at a server, e.g. `just remote https://claude.yanasharif.com <token>`
+# (token: server page -> Widget tokens). Accounts then come from that server.
+remote url token:
+    {{kit}}; Set-RemoteServer '{{url}}' '{{token}}'
+
+# Widget back to this PC's own accounts.
+remote-off:
+    {{kit}}; Set-RemoteServer '' ''
+
 # Widget + Account Manager start with Windows.
 startup-on:
     {{kit}}; Enable-Startup
