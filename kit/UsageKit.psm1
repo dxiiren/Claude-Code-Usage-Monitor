@@ -5,6 +5,14 @@
 # %APPDATA%\ClaudeCodeUsageMonitor\accounts.db) owns them, and the widget reads that DB.
 # See docs/account-manager-contract.md.
 
+# Windows PowerShell 5.1 started from a PowerShell 7 session (e.g. `just` run in pwsh) inherits
+# pwsh's PSModulePath, and then cannot autoload its own built-in modules: Get-FileHash and
+# Get-CimInstance fail with CommandNotFoundException. Drop the PowerShell 7 entries.
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    $env:PSModulePath = (($env:PSModulePath -split ';') |
+        Where-Object { $_ -and $_ -notmatch '\\PowerShell\\7' -and $_ -notmatch '\\Documents\\PowerShell\\Modules' }) -join ';'
+}
+
 $script:KitDir       = $PSScriptRoot
 $script:RepoDir      = Split-Path $PSScriptRoot -Parent
 $script:WebDir       = Join-Path $script:RepoDir 'web'
@@ -63,7 +71,10 @@ function Install-MonitorRelease {
     Invoke-WebRequest $asset.browser_download_url -OutFile $tmp -UseBasicParsing
     if ($asset.digest -and $asset.digest -like 'sha256:*') {
         $want = $asset.digest.Substring(7).ToLower()
-        $got = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+        # .NET, not Get-FileHash: works in any host even if module autoloading is broken.
+        $stream = [IO.File]::OpenRead($tmp)
+        try { $got = -join ([Security.Cryptography.SHA256]::Create().ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }) }
+        finally { $stream.Dispose() }
         if ($want -ne $got) { Remove-Item $tmp -Force; throw "SHA-256 mismatch for the downloaded widget." }
     }
     Stop-Monitor

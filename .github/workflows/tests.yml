@@ -95,3 +95,11 @@ jobs:
             Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }
           if ($missing) { Write-Host "Missing exports: $missing"; $bad++ }
           if ($bad) { exit 1 }
+      # `just` launches Windows PowerShell 5.1 from a pwsh 7 parent, which inherits pwsh's
+      # PSModulePath and breaks autoloading of built-in modules unless the kit repairs it.
+      - name: Kit works in PowerShell 5.1 launched from pwsh 7
+        shell: pwsh
+        run: |
+          $out = powershell.exe -NoProfile -Command "Import-Module ./kit/UsageKit.psm1 -DisableNameChecking; [void](Get-FileHash ./setup.ps1); [void](Get-CimInstance Win32_OperatingSystem); 'KIT-OK'"
+          $out
+          if (($out -join '') -notmatch 'KIT-OK') { exit 1 }
