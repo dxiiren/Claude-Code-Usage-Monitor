@@ -865,8 +865,10 @@ mod tests {
         ] {
             let path = root.join(format!("grok.{extension}"));
             std::fs::write(&path, script).unwrap();
+            // 30 s, not 5: a cold PowerShell start on a busy CI runner can exceed 5 s,
+            // which made this test fail intermittently. Production timeouts are unchanged.
             assert_eq!(
-                read_cli_version(path.to_str().unwrap(), Duration::from_secs(5)).as_deref(),
+                read_cli_version(path.to_str().unwrap(), Duration::from_secs(30)).as_deref(),
                 Some("1.2.3"),
                 "{}",
                 path.display()
