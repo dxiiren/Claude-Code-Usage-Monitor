@@ -130,3 +130,53 @@ normal poll interval and additionally every 30 s when `revision` may have change
 "Manage accounts" menu item opens `manager_url`. Precedence: remote mode > `accounts.db` >
 settings.json profiles. `login_required` is 1 when `status` is `expired` or `logged_out`. A
 server that is unreachable keeps the last good data marked stale, like any poll failure.
+
+## Codex accounts (provider column)
+
+The manager also manages **OpenAI Codex** accounts (ChatGPT sign-in), shown on the widget the
+same way as Claude accounts.
+
+### Schema change (backward compatible)
+
+`accounts` gains `provider TEXT NOT NULL DEFAULT 'claude'` (values `claude` | `codex`). The web
+app adds the column with `ALTER TABLE` when missing and bumps `meta.schema` to `2`. Ids stay
+unique across providers. Rows without the column (old DBs) are Claude.
+
+- Codex config folder = `CODEX_HOME`: `%USERPROFILE%\.codex-<id>` locally,
+  `/data/accounts/<id>` on a server; the CLI writes `auth.json` there. Never touch
+  `%USERPROFILE%\.codex` (the user's own Codex install), exactly like `.claude`.
+
+### Widget
+
+- `accounts_db`: `WHERE enabled = 1` rows with `provider = 'codex'` become the **Codex**
+  provider's profiles (`config_dir` = CODEX_HOME; credentials `auth.json`), replacing
+  settings.json Codex profiles while the DB is present — same rules as Claude. Zero codex rows =
+  zero Codex accounts only if the DB has schema >= 2; with schema 1 Codex keeps its current
+  settings.json behaviour.
+- `accounts.codex.<id>.login_required` works like Claude's.
+- Remote mode: `GET /api/v1/widget` accounts gain `"provider": "claude" | "codex"` (missing =
+  claude); codex accounts map to the Codex provider.
+
+### Web app
+
+- Add account: a provider choice (Claude / Codex). Codex login drives the official CLI:
+  `codex login` with `CODEX_HOME` set, BROWSER intercepted (as for Claude) to capture the
+  authorize URL. Its OAuth redirect goes to `http://localhost:1455/auth/callback` on the
+  machine running the CLI:
+  - **local mode**: open the URL in the isolated Edge profile; the callback completes by itself.
+    The page polls the session and shows success (no paste). A paste box still accepts the
+    final `http://localhost:1455/auth/callback?...` URL as a fallback.
+  - **server mode**: the page shows the sign-in link for the user's own browser; after signing
+    in, their browser lands on a `localhost:1455/...` page that fails to load — the user copies
+    that address and pastes it; the server replays it (HTTP GET) against its own
+    `127.0.0.1:1455` so the waiting CLI completes. Accept only URLs whose host is
+    localhost/127.0.0.1, port 1455, path `/auth/callback`.
+- Status: `codex login status` (logged in / not) + the poller's errors, mapped to the same
+  `ok | expired | logged_out | error` states. Email: from the id_token in `auth.json` if present
+  (decode the JWT payload `email`; never log the token), else "ChatGPT account".
+- Usage: local mode from the widget's `usage-cache.json` (`provider: "codex"` entries);
+  server mode polls `https://chatgpt.com/backend-api/wham/usage` like `src/poller/codex.rs`
+  (same headers, account-id header, window mapping to 5-hour/weekly, token refresh by invoking
+  the CLI, 429/Retry-After). Never call OpenAI OAuth endpoints directly.
+- Card theme: Codex rows labelled with a small "Codex" tag; bindings `accounts.codex.<id>.*`.
+- Docker image: installs the Codex CLI (`@openai/codex`, pinned by `CODEX_VERSION` build arg).
