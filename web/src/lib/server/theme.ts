@@ -3,7 +3,7 @@
 // Card theme modes (meta.card_theme):
 //   dark  -> exactly the kit's layout (dark card)
 //   light -> same layout, light palette
-//   auto  -> surface background "none" + paired layers: the dark variant renders on
+//   auto  -> transparent surface background (never "none", see below) + paired layers: the dark variant renders on
 //            `system.dark`, the light variant on `1 - system.dark` (as classic-usage-widget.json does).
 
 export interface ThemeAccount {
@@ -224,7 +224,13 @@ export function buildTheme(accounts: ThemeAccount[], mode: CardTheme = 'dark', o
 				},
 				width: `${W}`,
 				height: `${H}`,
-				background: paired ? { type: 'none' } : { type: 'colour', colour: { color: vs[0].p.bg, opacity: `${opacity}` } },
+				// Auto: a fully transparent colour, NOT "none" -- a floating surface with
+				// background "none" gets 10 px padding plus the widget's own grey card drawn
+				// behind it (src/theme_engine/theme_rendering.rs), which shows as a second,
+				// larger box around ours. The bg-dark / bg-light layers are the real card.
+				background: paired
+					? { type: 'colour', colour: { color: '#00000000', opacity: '0' } }
+					: { type: 'colour', colour: { color: vs[0].p.bg, opacity: `${opacity}` } },
 				border: null,
 				mouse_events: { double_click: 'show_dashboard()', right_click: 'show_context_menu("dashboard-v2")' },
 				corner_radius: '10',
