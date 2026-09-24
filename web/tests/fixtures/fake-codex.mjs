@@ -11,6 +11,8 @@
 //       GET /auth/callback?code=<other>&...       -> 500, notify failure ("token exchange failed")
 //     CODEX_HOME basename containing "autologin": completes by itself after 0.8 s (the isolated Edge
 //     window reaching the callback on its own, as it does locally).
+//     CODEX_HOME basename containing "silent": signs in (auth.json written) but never sends
+//     account/login/completed -- as a real CLI did in server mode.
 //     account/read {refreshToken:true}: logs "refresh" to refresh.log; if fake-refresh.json exists
 //     ({"accessToken": "..."}) rewrites auth.json's access token with it.
 //   Stdin closed -> exit 0 (as the real app-server does).
@@ -93,6 +95,7 @@ function finish(success, error) {
 	login = null;
 	server.close();
 	server.closeAllConnections?.();
+	if (success && /silent/i.test(path.basename(home))) return;
 	send({ method: 'account/login/completed', params: { loginId: id, success, error } });
 }
 

@@ -62,6 +62,9 @@ const portOpen = () =>
 	});
 const stateOf = (url: string) => new URL(url).searchParams.get('state')!;
 const cb = (state: string, code: string) => `http://localhost:1455/auth/callback?code=${encodeURIComponent(code)}&scope=openid&state=${state}`;
+const loginDirs = () => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('claude-acctmgr-login-codex-'));
+const loginDirsBefore = new Set(loginDirs());
+
 async function until(fn: () => boolean, ms = 15_000) {
 	const end = Date.now() + ms;
 	while (!fn() && Date.now() < end) await new Promise((r) => setTimeout(r, 100));
@@ -297,6 +300,27 @@ describe('login through the CLI (fake app-server with a real 127.0.0.1:1455 call
 		expect(await codex.submitCodexCallback(r.sessionId, cb(stateOf(r.url), 'good'))).toMatchObject({ ok: true });
 	});
 
+	it('a CLI that signs in without the login/completed notification still completes (auth.json fallback)', async () => {
+		const a = db.createAccount('silent', 'codex');
+		const r = await codex.startCodexLogin(a.id, a.config_dir);
+		const t0 = Date.now();
+		const out = await codex.submitCodexCallback(r.sessionId, cb(stateOf(r.url), 'good'));
+		expect(out).toMatchObject({ ok: true, email: 'silent@example.com', plan: 'plus' });
+		expect(Date.now() - t0).toBeLessThan(10_000);
+		expect(db.getAccount(a.id)!.email).toBe('silent@example.com');
+		expect(await portOpen()).toBe(false);
+	});
+
+	it('re-login: the OLD auth.json does not count as a finished sign-in; the new one does', async () => {
+		const a = db.createAccount('silent_re', 'codex');
+		const r1 = await codex.startCodexLogin(a.id, a.config_dir);
+		expect(await codex.submitCodexCallback(r1.sessionId, cb(stateOf(r1.url), 'good'))).toMatchObject({ ok: true });
+		const r2 = await codex.startCodexLogin(a.id, a.config_dir);
+		await new Promise((res) => setTimeout(res, 2500)); // several watch ticks with the previous login's file
+		expect(codex.codexSessionStatus(r2.sessionId)!.state).toBe('waiting');
+		expect(await codex.submitCodexCallback(r2.sessionId, cb(stateOf(r2.url), 'good:new@example.com'))).toMatchObject({ ok: true, email: 'new@example.com' });
+	});
+
 	it('no email in the id_token -> "ChatGPT account", never flagged as a duplicate', async () => {
 		const a = db.createAccount('anon', 'codex');
 		const r = await codex.startCodexLogin(a.id, a.config_dir);
@@ -350,8 +374,8 @@ describe('login through the CLI (fake app-server with a real 127.0.0.1:1455 call
 	});
 
 	it('the temp work folders are removed', async () => {
-		const tmp = os.tmpdir();
-		const left = () => fs.readdirSync(tmp).filter((n) => n.startsWith('claude-acctmgr-login-codex-'));
+		// only this run's folders: one left by an earlier crashed run must not fail every later run
+		const left = () => loginDirs().filter((n) => !loginDirsBefore.has(n));
 		await until(() => left().length === 0);
 		expect(left()).toEqual([]);
 	});

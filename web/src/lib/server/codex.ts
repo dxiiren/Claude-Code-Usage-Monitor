@@ -25,6 +25,8 @@ const SESSION_TTL_MS = 15 * 60_000;
 /** A finished session stays readable this long, so a polling page sees the outcome. */
 const FINISHED_TTL_MS = 5 * 60_000;
 const CALLBACK_WAIT_MS = 30_000;
+/** How often a waiting login checks whether the CLI has written new credentials to auth.json. */
+const AUTH_WATCH_MS = 1000;
 
 /** The CLI's fixed callback address (contract: host localhost/127.0.0.1, port 1455, path /auth/callback). */
 export const CALLBACK_PORT = 1455;
@@ -260,6 +262,10 @@ interface Session {
 	plan: string | null;
 	timer: NodeJS.Timeout;
 	cleaned: boolean;
+	/** sha256 of auth.json when the login started (null = none): a different file means the CLI signed in. */
+	authBefore: string | null;
+	watch: NodeJS.Timeout | null;
+	watching: boolean;
 }
 
 const sessions = new Map<string, Session>();
@@ -290,6 +296,7 @@ async function cleanup(s: Session): Promise<void> {
 	if (s.cleaned) return;
 	s.cleaned = true;
 	clearTimeout(s.timer);
+	if (s.watch) clearInterval(s.watch);
 	await s.client.close();
 	if (!SERVER) {
 		await killEdgeMatching(s.profileDir);
@@ -323,6 +330,35 @@ async function completed(s: Session, success: boolean, error: string | null): Pr
 	await cleanup(s);
 }
 
+function authFileHash(configDir: string): string | null {
+	try {
+		return crypto.createHash('sha256').update(fs.readFileSync(path.join(configDir, 'auth.json'))).digest('hex');
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Fallback for a CLI that signs in without sending `account/login/completed` (seen live: the
+ * server-mode replay wrote auth.json, yet no notification arrived and the page timed out). New
+ * credentials in auth.json that `codex login status` accepts mean the sign-in finished.
+ */
+async function checkAuthWritten(s: Session): Promise<void> {
+	if (s.state !== 'waiting' || s.watching) return;
+	const now = authFileHash(s.configDir);
+	if (!now || now === s.authBefore) return;
+	s.watching = true;
+	try {
+		const st = await codexAuthStatusOrNull(s.configDir);
+		if (st?.loggedIn) {
+			console.log(`[codex] ${s.accountId}: auth.json written without a login/completed notification; treating the sign-in as done`);
+			await completed(s, true, null);
+		}
+	} finally {
+		s.watching = false;
+	}
+}
+
 export interface CodexStartResult {
 	sessionId: string;
 	url: string;
@@ -336,11 +372,14 @@ export async function startCodexLogin(accountId: string, configDir: string): Pro
 	for (const s of [...sessions.values()]) if (s.state === 'waiting') await cancelCodexLogin(s.id);
 
 	fs.mkdirSync(configDir, { recursive: true });
+	const authBefore = authFileHash(configDir);
 	const id = crypto.randomUUID();
 	const work = fs.mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}codex-`));
 	let sessionRef: Session | null = null;
 	const early: [boolean, string | null][] = [];
 	const client = new AppServer(configDir, (method, params) => {
+		// Method names only (params can carry account details): shows what this CLI version sends.
+		console.log(`[codex] ${accountId}: app-server notification ${method}`);
 		if (method !== 'account/login/completed') return;
 		const ok = params.success === true;
 		const err = typeof params.error === 'string' ? params.error : null;
@@ -376,8 +415,13 @@ export async function startCodexLogin(accountId: string, configDir: string): Pro
 		email: null,
 		plan: null,
 		timer: setTimeout(() => void cancelCodexLogin(id), SESSION_TTL_MS),
-		cleaned: false
+		cleaned: false,
+		authBefore,
+		watch: null,
+		watching: false
 	};
+	s.watch = setInterval(() => void checkAuthWritten(s), AUTH_WATCH_MS);
+	s.watch.unref?.();
 	sessions.set(id, s);
 	sessionRef = s;
 	for (const [ok, err] of early) void completed(s, ok, err);
