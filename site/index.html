@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Usage Setup</title>
+<meta name="description" content="Set up one Windows widget that shows the 5-hour and weekly usage of every Claude account you own.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230D1117'/%3E%3Crect x='6' y='9' width='20' height='4' rx='2' fill='%233FB950'/%3E%3Crect x='6' y='19' width='13' height='4' rx='2' fill='%23F85149'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f7f7f5; --surface: #ffffff; --text: #1c1d1f; --muted: #5c6068; --line: #e3e3de;
+    --accent: #c15f3c; --accent-soft: #f6e7e0; --code-bg: #16181d; --code-text: #e8e8e3;
+    --ok: #2f8f46; --warn: #b7791f; --bad: #c9403a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111214; --surface: #1a1c20; --text: #ececea; --muted: #9ea3ab; --line: #2b2e34;
+      --accent: #e0825f; --accent-soft: #2e211c; --code-bg: #0b0c0e; --code-text: #e8e8e3;
+      --ok: #4cbb67; --warn: #d9a441; --bad: #ef6b63;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #111214; --surface: #1a1c20; --text: #ececea; --muted: #9ea3ab; --line: #2b2e34;
+    --accent: #e0825f; --accent-soft: #2e211c; --code-bg: #0b0c0e; --code-text: #e8e8e3;
+    --ok: #4cbb67; --warn: #d9a441; --bad: #ef6b63;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 Inter, system-ui, sans-serif; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 16px; }
+  header.hero { padding: 56px 0 32px; display: grid; grid-template-columns: 1fr auto; gap: 32px; align-items: center; }
+  .hero h1 { font-size: clamp(28px, 5vw, 40px); line-height: 1.15; margin: 0 0 12px; letter-spacing: -0.02em; }
+  .hero p { color: var(--muted); margin: 0 0 20px; font-size: 18px; }
+  .hero img { width: 240px; height: auto; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+  .pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pill { font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 14px; }
+  nav.toc a { color: var(--muted); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+  section { padding: 40px 0 8px; }
+  h2 { font-size: 24px; margin: 0 0 6px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 12px; }
+  .num { flex: none; width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 15px; display: grid; place-items: center; font-weight: 600; }
+  .lead { color: var(--muted); margin: 0 0 18px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  .names { display: grid; gap: 8px; margin-bottom: 12px; }
+  .name-row { display: grid; grid-template-columns: 88px 1fr auto; gap: 8px; align-items: center; }
+  .name-row .tag { font-size: 12px; color: var(--muted); }
+  .name-row input { width: 100%; font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .name-row input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); padding: 8px 12px; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .icon-btn { padding: 6px 10px; color: var(--muted); }
+  .code { position: relative; background: var(--code-bg); color: var(--code-text); border-radius: 10px; padding: 16px 16px 16px 16px; font: 13.5px/1.6 "JetBrains Mono", Consolas, monospace; overflow-x: auto; white-space: pre; margin: 12px 0 0; }
+  .code .copy { position: absolute; top: 8px; right: 8px; background: #2a2d33; color: #e8e8e3; border: 0; font-size: 12px; padding: 5px 10px; }
+  .code .copy.done { background: var(--ok); }
+  .code-wrap { padding-right: 70px; display: block; white-space: pre-wrap; word-break: break-all; }
+  ol.steps { margin: 0; padding-left: 20px; }
+  ol.steps li { margin: 6px 0; }
+  .callout { border-left: 4px solid var(--warn); background: var(--surface); border-radius: 0 10px 10px 0; padding: 12px 16px; margin: 14px 0; }
+  .callout.bad { border-color: var(--bad); }
+  .callout b { display: block; margin-bottom: 2px; }
+  .recipes { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+  .recipe { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .recipe code { font: 500 14px "JetBrains Mono", Consolas, monospace; color: var(--accent); }
+  .recipe div { color: var(--muted); font-size: 14px; margin-top: 2px; }
+  details { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; margin: 8px 0; }
+  details summary { cursor: pointer; font-weight: 600; }
+  details p { margin: 8px 0 0; color: var(--muted); }
+  code.inline { font: 13.5px "JetBrains Mono", Consolas, monospace; background: var(--accent-soft); padding: 1px 6px; border-radius: 5px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 14px; color: var(--muted); margin-top: 10px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  footer { padding: 48px 0 40px; color: var(--muted); font-size: 14px; }
+  footer a { color: var(--muted); }
+  @media (max-width: 640px) {
+    header.hero { grid-template-columns: 1fr; padding-top: 36px; }
+    .hero img { width: 200px; }
+    .name-row { grid-template-columns: 1fr auto; }
+    .name-row .tag { grid-column: 1 / -1; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div>
+    <h1>Every Claude account's usage, in one widget</h1>
+    <p>One small card on your Windows desktop showing the 5-hour and weekly limits of all your Claude accounts, with reset countdowns. No more logging in and out to check.</p>
+    <div class="pill-row">
+      <span class="pill">About 2 min per account</span>
+      <span class="pill">Tokens stay on your PC</span>
+      <span class="pill">Starts with Windows</span>
+    </div>
+  </div>
+  <img src="card.png" alt="The widget: four accounts, each with a 5-hour and a weekly bar and a reset countdown">
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <a href="#accounts">1. Name your accounts</a>
+  <a href="#run">2. Run the installer</a>
+  <a href="#login">3. Log each account in</a>
+  <a href="#daily">Everyday use</a>
+  <a href="#help">Troubleshooting</a>
+</nav>
+
+<section id="accounts">
+  <h2><span class="num">1</span>Name your accounts</h2>
+  <p class="lead">Short labels, the way you'd say them. The first one is the account you're already logged in with in Claude Code.</p>
+  <div class="card">
+    <div class="names" id="names"></div>
+    <button id="add" type="button">+ Add account</button>
+  </div>
+</section>
+
+<section id="run">
+  <h2><span class="num">2</span>Run the installer</h2>
+  <p class="lead">Open <b>Windows PowerShell</b> (Start menu, type "PowerShell"), paste this and press Enter. You don't need Git or anything else first.</p>
+  <div class="code"><button class="copy" type="button" data-target="cmd">Copy</button><span class="code-wrap" id="cmd"></span></div>
+  <p class="lead" style="margin-top:16px">What it does, in order. It's safe to run again: it skips anything already done.</p>
+  <ol class="steps">
+    <li>Installs Claude Code and the Usage Monitor widget if they're missing.</li>
+    <li>Logs in each account that isn't logged in yet (step 3 below).</li>
+    <li>Builds the card with your names, sets it to start with Windows, and adds a <b>Claude Usage</b> shortcut.</li>
+    <li>Restarts the widget and checks that every account reports live usage. Look for one <b>[OK]</b> line per account at the end.</li>
+  </ol>
+</section>
+
+<section id="login">
+  <h2><span class="num">3</span>Log each account in</h2>
+  <p class="lead">For each account that isn't logged in yet, the installer pauses and does this:</p>
+  <ol class="steps">
+    <li>A <b>fresh Edge window</b> opens with the Claude sign-in page. It shares no cookies with anything else on your PC.</li>
+    <li>Sign in with <b>that account's</b> email and click <b>Authorize</b>.</li>
+    <li>Copy the code the page shows, paste it into PowerShell and press Enter.</li>
+    <li>The installer prints which email got logged in. Check it's the right one before moving on.</li>
+  </ol>
+  <div class="callout bad">
+    <b>Why not just use your normal browser?</b>
+    Your normal browser is already signed in to your main account. It would silently log every folder in as that same account. InPrivate windows have the same problem: all open InPrivate windows share one session. That's why the installer opens its own throwaway window each time.
+  </div>
+</section>
+
+<section id="daily">
+  <h2>Everyday use</h2>
+  <p class="lead">Reading the card: each row shows <b>% used · time until reset</b>.</p>
+  <div class="legend">
+    <span><span class="dot" style="background:#3FB950"></span>under 70%</span>
+    <span><span class="dot" style="background:#D29922"></span>70 to 89%</span>
+    <span><span class="dot" style="background:#F85149"></span>90% and up (full at 100%)</span>
+  </div>
+  <p class="lead" style="margin-top:16px">On the card: <b>drag</b> to move it, <b>double-click</b> for the full dashboard, <b>✕</b> then "Close usage widget" to close it. Reopen it with the <b>Claude Usage</b> shortcut.</p>
+  <p class="lead">From the install folder (<code class="inline">%USERPROFILE%\claude-usage-monitor</code>), with <a href="https://just.systems" style="color:var(--accent)">just</a> installed:</p>
+  <div class="recipes">
+    <div class="recipe"><code>just status</code><div>Every account's email, 5-hour and weekly usage in the terminal.</div></div>
+    <div class="recipe"><code>just claude kv</code><div>Open Claude Code as that account.</div></div>
+    <div class="recipe"><code>just login kv</code><div>Log one account in again (expired, or the wrong email).</div></div>
+    <div class="recipe"><code>just accounts a,b,c</code><div>Change the account list and rebuild the card.</div></div>
+    <div class="recipe"><code>just verify</code><div>Prove every account still returns live numbers.</div></div>
+    <div class="recipe"><code>just start / stop</code><div>Show or close the widget.</div></div>
+    <div class="recipe"><code>just startup-off</code><div>Stop it starting with Windows (<code class="inline">startup-on</code> to undo).</div></div>
+    <div class="recipe"><code>just setup</code><div>Re-run the whole installer.</div></div>
+  </div>
+  <p class="lead" style="margin-top:14px">No <code class="inline">just</code>? Run <code class="inline">powershell -ExecutionPolicy Bypass -File .\setup.ps1</code> in that folder instead.</p>
+</section>
+
+<section id="help">
+  <h2>Troubleshooting</h2>
+  <details><summary>An account logged in as the wrong email</summary>
+    <p>Run <code class="inline">just login &lt;name&gt;</code> and sign in with the right email in the fresh window. The new login replaces the wrong one.</p></details>
+  <details><summary>A row shows 100% on the weekly bar</summary>
+    <p>That account has used its whole weekly allowance. The countdown next to it is when it resets. Switch to an account with a green bar: <code class="inline">just claude &lt;name&gt;</code>.</p></details>
+  <details><summary>The widget shows "expired" or a row stays empty</summary>
+    <p>Logins renew themselves. If one hasn't, run <code class="inline">just login &lt;name&gt;</code>, then <code class="inline">just verify</code>.</p></details>
+  <details><summary>"running scripts is disabled on this system"</summary>
+    <p>Use the command from step 2 exactly as shown. It runs through <code class="inline">irm … | iex</code>, which isn't blocked. For local files, use <code class="inline">powershell -ExecutionPolicy Bypass -File .\setup.ps1</code>.</p></details>
+  <details><summary>I want the original taskbar look back</summary>
+    <p>Right-click the card, open Settings, pick the <b>Classic</b> theme. <code class="inline">just theme</code> brings the multi-account card back.</p></details>
+  <details><summary>Where are my tokens stored?</summary>
+    <p>Only in each account's own folder on your PC (<code class="inline">~\.claude</code>, <code class="inline">~\.claude-&lt;name&gt;</code>), the same place Claude Code keeps them. This kit never reads, copies or uploads them. The widget reads them locally to ask Anthropic for usage, and sends them nowhere else.</p></details>
+</section>
+
+<footer>
+  Built on <a href="https://github.com/CodeZeno/Claude-Code-Usage-Monitor">Claude Code Usage Monitor</a> by CodeZeno (MIT). Multi-account kit and this guide: <a href="https://github.com/dxiiren/Claude-Code-Usage-Monitor">dxiiren/Claude-Code-Usage-Monitor</a>. Not affiliated with Anthropic.
+</footer>
+
+</div>
+<script>
+  const RAW = "https://raw.githubusercontent.com/dxiiren/Claude-Code-Usage-Monitor/main/install.ps1";
+  const DEFAULTS = ["ba", "kv", "newgen", "etl"];
+  const namesEl = document.getElementById("names");
+  const cmdEl = document.getElementById("cmd");
+
+  function load() {
+    try { const s = JSON.parse(localStorage.getItem("claude-usage-names")); if (Array.isArray(s) && s.length) return s; } catch (e) {}
+    return DEFAULTS.slice();
+  }
+  function save(list) { try { localStorage.setItem("claude-usage-names", JSON.stringify(list)); } catch (e) {} }
+  function clean(v) { return v.trim().replace(/[^A-Za-z0-9_-]/g, ""); }
+
+  let names = load();
+
+  function renderCmd() {
+    const list = names.map(clean).filter(Boolean);
+    const args = list.length ? " -Accounts " + list.join(",") : "";
+    cmdEl.textContent = "& ([scriptblock]::Create((irm " + RAW + ")))" + args;
+  }
+
+  function render() {
+    namesEl.innerHTML = "";
+    names.forEach((n, i) => {
+      const row = document.createElement("div");
+      row.className = "name-row";
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = i === 0 ? "Main login" : "Account " + (i + 1);
+      const input = document.createElement("input");
+      input.value = n;
+      input.placeholder = "e.g. work";
+      input.setAttribute("aria-label", tag.textContent + " name");
+      input.addEventListener("input", () => { names[i] = input.value; save(names); renderCmd(); });
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "icon-btn";
+      del.textContent = "✕";
+      del.title = "Remove";
+      del.disabled = names.length === 1;
+      del.addEventListener("click", () => { names.splice(i, 1); save(names); render(); });
+      row.append(tag, input, del);
+      namesEl.append(row);
+    });
+    renderCmd();
+  }
+
+  document.getElementById("add").addEventListener("click", () => {
+    names.push(""); save(names); render();
+    const inputs = namesEl.querySelectorAll("input"); inputs[inputs.length - 1].focus();
+  });
+
+  document.querySelectorAll(".copy").forEach(btn => btn.addEventListener("click", async () => {
+    const text = document.getElementById(btn.dataset.target).textContent;
+    try { await navigator.clipboard.writeText(text); } catch (e) {
+      const r = document.createRange(); r.selectNodeContents(document.getElementById(btn.dataset.target));
+      const s = getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand("copy");
+    }
+    btn.textContent = "Copied"; btn.classList.add("done");
+    setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("done"); }, 1600);
+  }));
+
+  render();
+</script>
+</body>
+</html>

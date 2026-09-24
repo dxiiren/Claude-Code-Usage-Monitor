@@ -35,3 +35,6 @@ test_bin/
 # Local dev builds and scratch
 /builds/
 /scratch/
+
+# Multi-account kit: personal account list (names + login folders, no tokens)
+/kit/accounts.json
