@@ -319,11 +319,11 @@ test('card theme setting: stored in meta.card_theme, bumps revision, regenerates
 	await expect(sel).toHaveValue('auto');
 	const themeFile = path.join(appDir, 'themes', 'multi-claude-accounts.json');
 	const surfaceBg = () => JSON.parse(fs.readFileSync(themeFile, 'utf8')).surfaces[0].background;
-	expect(surfaceBg()).toEqual({ type: 'none' });
+	expect(surfaceBg()).toEqual({ type: 'colour', colour: { color: '#00000000', opacity: '0' } });
 	for (const [mode, expected] of [
 		['light', { type: 'colour', colour: { color: '#FFFFFFFF', opacity: '0.85' } }],
 		['dark', { type: 'colour', colour: { color: '#0D1117FF', opacity: '0.85' } }],
-		['auto', { type: 'none' }]
+		['auto', { type: 'colour', colour: { color: '#00000000', opacity: '0' } }]
 	] as const) {
 		const rev = Number(meta().revision);
 		await sel.selectOption(mode);
