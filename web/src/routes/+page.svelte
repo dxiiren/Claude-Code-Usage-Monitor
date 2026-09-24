@@ -291,15 +291,19 @@
 		</button>
 		{#if widgetMsg}<span class="hint" role="status">{widgetMsg}</span>{/if}
 	{/if}
-	<label class="cardtheme">
-		<span>Card theme</span>
-		<select value={snap.cardTheme} onchange={(e) => setCardTheme(e.currentTarget.value)}>
-			<option value="auto">{server ? 'Auto (follow each PC)' : 'Auto (follow Windows)'}</option>
-			<option value="light">Light</option>
-			<option value="dark">Dark</option>
-		</select>
-	</label>
-	{#if themeMsg}<span class="hint" role="status">{themeMsg}</span>{/if}
+	<!-- Local only: the card theme is a file this app writes for the widget on THIS PC. A server
+	     has no widget; remote widgets draw with their own PC's card theme. -->
+	{#if !server}
+		<label class="cardtheme">
+			<span>Card theme</span>
+			<select value={snap.cardTheme} onchange={(e) => setCardTheme(e.currentTarget.value)}>
+				<option value="auto">Auto (follow Windows)</option>
+				<option value="light">Light</option>
+				<option value="dark">Dark</option>
+			</select>
+		</label>
+		{#if themeMsg}<span class="hint" role="status">{themeMsg}</span>{/if}
+	{/if}
 </section>
 
 <dialog bind:this={removeDialog} aria-labelledby="rm-title">
