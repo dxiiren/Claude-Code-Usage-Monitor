@@ -43,6 +43,8 @@ jobs:
 
   winget:
     needs: build
+    # Only upstream owns the WinGet package; forks never submit manifests for it.
+    if: github.repository == 'CodeZeno/Claude-Code-Usage-Monitor'
     runs-on: windows-latest
     env:
       WINGETCREATE_GITHUB_TOKEN: ${{ secrets.WINGETCREATE_GITHUB_TOKEN }}

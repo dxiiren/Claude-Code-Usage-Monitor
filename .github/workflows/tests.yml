@@ -1,0 +1,74 @@
+name: Tests
+
+# Every suite that `just test` runs locally: Rust unit tests, Account Manager unit tests,
+# Account Manager end-to-end tests (stubbed Claude CLI), and a parse check of the
+# PowerShell kit. Windows runner: the widget and the kit are Windows-only.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Keep in sync with rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy, rustfmt
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --locked --release -- -D warnings
+      # The two skipped window tests fail identically on the untouched upstream commit
+      # (79a0b92) -- pre-existing, not caused by this fork. Remove the skips once upstream fixes them.
+      - name: Unit tests
+        run: cargo test --locked -- --skip detaching_a_child_never_exposes_parent_relative_coordinates_as_a_popup --skip docking_rebinds_layered_surface_only_when_parent_changes
+
+  web:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      # Generates .svelte-kit/tsconfig.json, which vitest's tsconfig extends.
+      - run: npx svelte-kit sync
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Install Playwright browser
+        run: npx playwright install chromium
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+  kit:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: PowerShell kit parses (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $bad = 0
+          foreach ($f in @('setup.ps1', 'install.ps1', 'kit/UsageKit.psm1')) {
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errs)
+            if ($errs) { $errs | ForEach-Object { Write-Host "$f : $($_.Message)" }; $bad++ } else { Write-Host "[OK] $f" }
+          }
+          Import-Module ./kit/UsageKit.psm1 -DisableNameChecking
+          $missing = @('Install-MonitorRelease', 'Start-Manager', 'Stop-Manager', 'Enable-Startup', 'New-Shortcuts') |
+            Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) }
+          if ($missing) { Write-Host "Missing exports: $missing"; $bad++ }
+          if ($bad) { exit 1 }

@@ -198,3 +198,21 @@ fn winget_upgrade_command_quotes_each_path_as_a_powershell_literal() {
         );
     }
 }
+
+#[test]
+fn fork_installs_outside_winget_use_the_fork_github_releases() {
+    // The fork's installer places the exe under %LOCALAPPDATA%\Programs, which
+    // must take the portable GitHub-release path, not `winget upgrade` of the
+    // upstream package.
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        let exe = PathBuf::from(local_app_data)
+            .join("Programs")
+            .join("ClaudeUsageMonitor")
+            .join("claude-code-usage-monitor.exe");
+        assert!(!is_winget_install_path(&exe), "{}", exe.display());
+    }
+    assert_eq!(
+        github_repo().unwrap(),
+        ("dxiiren", "Claude-Code-Usage-Monitor")
+    );
+}

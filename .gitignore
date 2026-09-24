@@ -36,5 +36,10 @@ test_bin/
 /builds/
 /scratch/
 
-# Multi-account kit: personal account list (names + login folders, no tokens)
-/kit/accounts.json
+# Account Manager web app (web/): dependencies and build output
+/web/node_modules/
+/web/build/
+/web/build-e2e/
+/web/.svelte-kit/
+/web/test-results/
+/web/playwright-report/

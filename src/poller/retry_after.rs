@@ -237,10 +237,16 @@ mod tests {
                 ));
 
                 // Advance the cooldown's age without sleeping or restarting.
+                // A freshly booted machine (CI runners) cannot back-date an Instant by a
+                // day -- `Instant - Duration` panics on underflow -- so expire it by
+                // zeroing the delay instead; the resume path under test is the same.
                 {
                     let mut cooldowns = state.cooldowns.lock().unwrap();
-                    cooldowns.get_mut(&key).unwrap().received =
-                        Instant::now() - Duration::from_secs(86_400);
+                    let entry = cooldowns.get_mut(&key).unwrap();
+                    match Instant::now().checked_sub(entry.delay) {
+                        Some(past) => entry.received = past,
+                        None => entry.delay = Duration::ZERO,
+                    }
                 }
                 let mut sent = false;
                 state

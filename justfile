@@ -10,36 +10,47 @@ default:
 
 # ─── Guards ───────────────────────────────────────────────
 
-# Claude Code -- installed by setup.ps1; every login/status call goes through it.
+# Node -- installed by setup.ps1; runs the Account Manager.
 [private]
-_require-claude:
-    @if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { Write-Error "claude not found on PATH.`n  -> Run setup.ps1 first:  powershell -ExecutionPolicy Bypass -File ./setup.ps1"; exit 1 }
+_require-node:
+    @if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Write-Error "node not found on PATH.`n  -> Run setup.ps1 first:  powershell -ExecutionPolicy Bypass -File ./setup.ps1"; exit 1 }
+
+# Cargo -- only for building the widget from source.
+[private]
+_require-cargo:
+    @if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { Write-Error "cargo not found on PATH.`n  -> Install Rust: https://rustup.rs (plus MSVC build tools)"; exit 1 }
 
 # ─── Setup ───────────────────────────────────────────────
 
-# Full idempotent setup: install, log in missing accounts, theme, startup, verify.
+# Full idempotent setup: Claude Code, Node, widget, Account Manager, startup, shortcuts.
 setup:
     & '{{justfile_directory()}}\setup.ps1'
 
-# Set the account list, e.g. `just accounts ba,kv,newgen,etl` (first = main ~/.claude login).
-accounts names:
-    {{kit}}; Set-UsageAccounts ('{{names}}' -split ','); Write-UsageTheme (Get-UsageAccounts); Stop-Monitor; Write-MonitorSettings (Get-UsageAccounts); Start-Monitor
+# ─── Account Manager (web app) ───────────────────────────
 
-# Log one account in (fresh isolated browser window, paste the code back).
-login name: _require-claude
-    {{kit}}; $a = Get-UsageAccounts | Where-Object Name -eq '{{name}}'; if (-not $a) { Write-Error "No account '{{name}}' in kit/accounts.json"; exit 1 }; if (-not (Invoke-AccountLogin $a)) { exit 1 }
+# Open the Account Manager (add accounts, paste the code) -- starts it if needed.
+web: _require-node
+    {{kit}}; if (-not (Start-Manager)) { Write-Error "Account Manager did not start"; exit 1 }; Start-Process "http://127.0.0.1:47291/"
 
-# Show every account: login email, 5-hour and weekly usage with reset times.
-status: _require-claude
-    {{kit}}; Show-UsageStatus
+# Open the usage page in the browser.
+usage: _require-node
+    {{kit}}; if (-not (Start-Manager)) { Write-Error "Account Manager did not start"; exit 1 }; Start-Process "http://127.0.0.1:47291/usage"
 
-# Restart the widget in diagnostic mode and prove every account returns live usage.
-verify: _require-claude
-    {{kit}}; if (-not (Test-UsageMonitor)) { exit 1 }
+# Start the Account Manager in the background (no window).
+manager-start: _require-node
+    {{kit}}; if (Start-Manager) { Write-Host "Running: http://127.0.0.1:47291" } else { Write-Error "did not start"; exit 1 }
 
-# Regenerate the widget card from kit/accounts.json (after renaming/adding accounts).
-theme:
-    {{kit}}; $a = Get-UsageAccounts; Stop-Monitor; Write-UsageTheme $a; Write-MonitorSettings $a; Start-Monitor
+# Stop the Account Manager.
+manager-stop:
+    {{kit}}; Stop-Manager; Write-Host "Stopped"
+
+# Rebuild the Account Manager after changing web/ (npm ci + build), then restart it.
+manager-build: _require-node
+    {{kit}}; Stop-Manager; Install-ManagerApp; [void](Start-Manager)
+
+# Run the Account Manager in dev mode (hot reload) on its dev port.
+web-dev: _require-node
+    Set-Location '{{justfile_directory()}}\web'; npm run dev
 
 # ─── Widget lifecycle ────────────────────────────────────
 
@@ -55,19 +66,30 @@ stop:
 restart:
     {{kit}}; Stop-Monitor; Start-Monitor
 
-# Start the widget when Windows starts.
-startup-on:
-    {{kit}}; Enable-MonitorStartup
+# Build the widget from source (cargo --release) and install it.
+widget-build: _require-cargo
+    {{kit}}; Install-MonitorFromSource; Start-Monitor
 
-# Stop starting the widget with Windows.
+# Download the latest widget release from this fork and install it.
+widget-update:
+    {{kit}}; Install-MonitorRelease; Start-Monitor
+
+# Widget + Account Manager start with Windows.
+startup-on:
+    {{kit}}; Enable-Startup
+
+# Stop both starting with Windows.
 startup-off:
-    {{kit}}; Disable-MonitorStartup
+    {{kit}}; Disable-Startup
+
+# ─── Tests ───────────────────────────────────────────────
+
+# Every suite: Rust unit tests, web unit tests, web end-to-end tests.
+# (Skips 2 window tests that fail identically on untouched upstream -- see .github/workflows/tests.yml.)
+test: _require-cargo _require-node
+    Set-Location '{{justfile_directory()}}'; cargo test --locked -- --skip detaching_a_child_never_exposes_parent_relative_coordinates_as_a_popup --skip docking_rebinds_layered_surface_only_when_parent_changes; if ($LASTEXITCODE -ne 0) { exit 1 }; Set-Location web; npm run test:all; if ($LASTEXITCODE -ne 0) { exit 1 }
 
 # ─── Tools ───────────────────────────────────────────────
-
-# Open Claude Code as one of your accounts, e.g. `just claude kv`.
-claude name: _require-claude
-    {{kit}}; $a = Get-UsageAccounts | Where-Object Name -eq '{{name}}'; if (-not $a) { Write-Error "No account '{{name}}'"; exit 1 }; if ($a.IsDefault) { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue } else { $env:CLAUDE_CONFIG_DIR = $a.FullDir }; claude
 
 # Open the setup guide website.
 guide:

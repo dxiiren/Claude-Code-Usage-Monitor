@@ -1,19 +1,21 @@
 # Claude Code Usage Monitor
 
-> **This fork adds a multi-account kit:** one card showing the 5-hour and weekly usage of
-> every Claude account you own, set up by one command.
+> **This fork adds multi-account support:** an Account Manager web app (SvelteKit + SQLite,
+> `http://127.0.0.1:47291`) where you add an account by typing a name, signing in, and pasting
+> the code; a Usage page; and a widget build that reads its accounts from the manager's
+> database and reloads live. Light and dark mode throughout.
 > **Setup guide: https://dxiiren.github.io/Claude-Code-Usage-Monitor/**
 >
 > ```powershell
-> & ([scriptblock]::Create((irm https://raw.githubusercontent.com/dxiiren/Claude-Code-Usage-Monitor/main/install.ps1))) -Accounts main,work
+> irm https://raw.githubusercontent.com/dxiiren/Claude-Code-Usage-Monitor/main/install.ps1 | iex
 > ```
 >
-> Or from a clone: `powershell -ExecutionPolicy Bypass -File ./setup.ps1 -Accounts main,work`, then
-> `just status`, `just login <name>`, `just claude <name>`, `just verify` (`just --list` for all).
-> Kit files: [`setup.ps1`](setup.ps1), [`justfile`](justfile), [`install.ps1`](install.ps1),
-> [`kit/`](kit) (`accounts.json` is git-ignored and holds names + folders only, never tokens),
-> [`site/`](site) (the guide, published to GitHub Pages from the `gh-pages` branch).
-> The widget itself is the upstream release, installed via winget; everything below is upstream's README.
+> From a clone: `powershell -ExecutionPolicy Bypass -File ./setup.ps1` (add `-WidgetFromSource` to
+> build the widget with cargo), then `just --list`. `just test` runs every suite (Rust, web unit,
+> web end-to-end). Design and DB contract: [`docs/account-manager-contract.md`](docs/account-manager-contract.md).
+> Fork additions: [`web/`](web), [`src/accounts_db.rs`](src/accounts_db.rs), [`kit/`](kit),
+> [`setup.ps1`](setup.ps1), [`justfile`](justfile), [`install.ps1`](install.ps1), [`site/`](site).
+> Everything below is upstream's README.
 
 ![Windows](https://img.shields.io/badge/platform-Windows-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)

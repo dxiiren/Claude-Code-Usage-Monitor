@@ -29,6 +29,7 @@ pub const TIMER_MOUSE_CLICK: usize = 6;
 pub const TIMER_TRAY_HOVER: usize = 7;
 pub const TIMER_CLOCK: usize = 8;
 pub const TIMER_TRAY_REPOSITION: usize = 9;
+pub const TIMER_ACCOUNTS_DB: usize = 10;
 
 // Custom messages
 pub const WM_APP: u32 = 0x8000;
@@ -45,6 +46,8 @@ pub const WM_APP_DISABLE_DIAGNOSTICS: u32 = WM_APP + 12;
 pub const WM_APP_UPDATE_ACTION: u32 = WM_APP + 13;
 pub const WM_APP_CHECK_FOR_UPDATES: u32 = WM_APP + 14;
 pub const WM_APP_TRAY_REPOSITION: u32 = WM_APP + 15;
+/// The Account Manager database changed revision (posted by a worker thread).
+pub const WM_APP_ACCOUNTS_DB_CHANGED: u32 = WM_APP + 16;
 
 pub fn is_taskbar_horizontal(rect: RECT) -> bool {
     (rect.right - rect.left) >= (rect.bottom - rect.top)

@@ -29,11 +29,11 @@ use crate::diagnose;
 use crate::localization::{self, LanguageId, Strings};
 use crate::models::AppUsageData;
 use crate::native_interop::{
-    self, TIMER_CLOCK, TIMER_COUNTDOWN, TIMER_MOUSE_CLICK, TIMER_POLL, TIMER_RESET_POLL,
-    TIMER_TRAY_HOVER, TIMER_TRAY_REPOSITION, TIMER_UPDATE_CHECK, TIMER_WINDOW_STATE,
-    WM_APP_DISABLE_DIAGNOSTICS, WM_APP_ENABLE_DIAGNOSTICS, WM_APP_OPEN_DASHBOARD, WM_APP_QUIT,
-    WM_APP_REFRESH_NOW, WM_APP_SETTINGS_UPDATED, WM_APP_TASKBAR_COLLISION, WM_APP_TRAY,
-    WM_APP_USAGE_UPDATED,
+    self, TIMER_ACCOUNTS_DB, TIMER_CLOCK, TIMER_COUNTDOWN, TIMER_MOUSE_CLICK, TIMER_POLL,
+    TIMER_RESET_POLL, TIMER_TRAY_HOVER, TIMER_TRAY_REPOSITION, TIMER_UPDATE_CHECK,
+    TIMER_WINDOW_STATE, WM_APP_ACCOUNTS_DB_CHANGED, WM_APP_DISABLE_DIAGNOSTICS,
+    WM_APP_ENABLE_DIAGNOSTICS, WM_APP_OPEN_DASHBOARD, WM_APP_QUIT, WM_APP_REFRESH_NOW,
+    WM_APP_SETTINGS_UPDATED, WM_APP_TASKBAR_COLLISION, WM_APP_TRAY, WM_APP_USAGE_UPDATED,
 };
 use crate::poller;
 use crate::providers::{ProviderId, ProviderSet};
@@ -2088,7 +2088,7 @@ pub fn run() {
                 language,
                 install_channel,
                 providers: settings.enabled_providers(),
-                accounts: settings.accounts.clone(),
+                accounts: crate::accounts_db::effective(&settings.accounts),
                 data: None,
                 poll_interval_ms: settings.poll_interval_ms,
                 retry_count: 0,
@@ -2169,6 +2169,12 @@ pub fn run() {
                 .unwrap_or(POLL_15_MIN)
         };
         SetTimer(Some(hwnd), TIMER_POLL, initial_poll_ms, None);
+        SetTimer(
+            Some(hwnd),
+            TIMER_ACCOUNTS_DB,
+            crate::accounts_db::REVISION_CHECK_INTERVAL_MS,
+            None,
+        );
         sync_window_state_timer(hwnd);
 
         // Watch for explorer.exe restarts so we can re-embed and re-add the tray
@@ -2798,10 +2804,59 @@ fn check_language_change() {
     }
 }
 
+/// Check the Account Manager database off the UI thread. A changed revision
+/// is posted back as `WM_APP_ACCOUNTS_DB_CHANGED`; overlapping ticks are skipped.
+fn request_accounts_db_check(hwnd: HWND) {
+    static CHECK_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+    if CHECK_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let send_hwnd = SendHwnd::from_hwnd(hwnd);
+    std::thread::spawn(move || {
+        let changed = crate::accounts_db::check_for_changes();
+        CHECK_IN_FLIGHT.store(false, Ordering::Release);
+        if changed {
+            unsafe {
+                let _ = PostMessageW(
+                    Some(send_hwnd.to_hwnd()),
+                    WM_APP_ACCOUNTS_DB_CHANGED,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
+            }
+        }
+    });
+}
+
+/// The Account Manager changed the accounts: reload them and the theme it
+/// regenerated, then poll now instead of waiting for the next interval.
+fn reload_accounts_db(hwnd: HWND) {
+    diagnose::log("accounts db: reloading accounts and theme, forcing a usage poll");
+    reload_settings_and_theme(hwnd, true);
+}
+
 fn reload_external_settings(hwnd: HWND) {
+    reload_settings_and_theme(hwnd, false);
+}
+
+fn reload_settings_and_theme(hwnd: HWND, force_poll: bool) {
     let settings = load_settings();
+    let accounts = crate::accounts_db::effective(&settings.accounts);
     let language_override = settings.language.as_deref().and_then(LanguageId::from_code);
-    let theme_path = settings.active_theme_path.as_ref().map(PathBuf::from);
+    let theme_path = settings
+        .active_theme_path
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(|| {
+            // An account change must re-read the theme file even when it is
+            // only known to the running widget, not to settings.json.
+            force_poll
+                .then(|| lock_state().as_ref()?.active_theme_path.clone())
+                .flatten()
+        });
     let providers_changed;
     {
         let mut state = lock_state();
@@ -2809,10 +2864,10 @@ fn reload_external_settings(hwnd: HWND) {
             return;
         };
         providers_changed =
-            state.providers != settings.enabled_providers() || state.accounts != settings.accounts;
-        state.accounts = settings.accounts.clone();
+            state.providers != settings.enabled_providers() || state.accounts != accounts;
+        state.accounts = accounts;
         if let Some(data) = state.data.as_mut() {
-            data.select_accounts(&settings.accounts);
+            data.select_accounts(&state.accounts);
         }
         state.poll_interval_ms = settings.poll_interval_ms;
         state.providers = settings.enabled_providers();
@@ -2827,7 +2882,7 @@ fn reload_external_settings(hwnd: HWND) {
         SetTimer(Some(hwnd), TIMER_POLL, settings.poll_interval_ms, None);
     }
     let _ = apply_custom_theme(hwnd, settings.custom_theme_enabled, theme_path, None);
-    if providers_changed {
+    if providers_changed || force_poll {
         request_poll(hwnd);
     }
     sync_tray_icon(hwnd);

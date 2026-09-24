@@ -88,168 +88,101 @@
 <header class="hero">
   <div>
     <h1>Every Claude account's usage, in one widget</h1>
-    <p>One small card on your Windows desktop showing the 5-hour and weekly limits of all your Claude accounts, with reset countdowns. No more logging in and out to check.</p>
+    <p>A small card on your Windows desktop and a web page that show the 5-hour and weekly limits of all your Claude accounts, with reset countdowns. Adding an account is: type a name, sign in, paste the code.</p>
     <div class="pill-row">
-      <span class="pill">About 2 min per account</span>
+      <span class="pill">About 1 min per account</span>
       <span class="pill">Tokens stay on your PC</span>
+      <span class="pill">Light &amp; dark mode</span>
       <span class="pill">Starts with Windows</span>
     </div>
   </div>
-  <img src="card.png" alt="The widget: four accounts, each with a 5-hour and a weekly bar and a reset countdown">
+  <img src="card.png" alt="The desktop widget: accounts, each with a 5-hour and a weekly bar and a reset countdown">
 </header>
 
 <nav class="toc" aria-label="Contents">
-  <a href="#accounts">1. Name your accounts</a>
-  <a href="#run">2. Run the installer</a>
-  <a href="#login">3. Log each account in</a>
+  <a href="#install">1. Install</a>
+  <a href="#add">2. Add your accounts</a>
+  <a href="#usage">3. Watch usage</a>
   <a href="#daily">Everyday use</a>
   <a href="#help">Troubleshooting</a>
 </nav>
 
-<section id="accounts">
-  <h2><span class="num">1</span>Name your accounts</h2>
-  <p class="lead">Short labels, the way you'd say them. The first one is the account you're already logged in with in Claude Code.</p>
-  <div class="card">
-    <div class="names" id="names"></div>
-    <button id="add" type="button">+ Add account</button>
-  </div>
-</section>
-
-<section id="run">
-  <h2><span class="num">2</span>Run the installer</h2>
+<section id="install">
+  <h2><span class="num">1</span>Install (once per PC)</h2>
   <p class="lead">Open <b>Windows PowerShell</b> (Start menu, type "PowerShell"), paste this and press Enter. You don't need Git or anything else first.</p>
-  <div class="code"><button class="copy" type="button" data-target="cmd">Copy</button><span class="code-wrap" id="cmd"></span></div>
-  <p class="lead" style="margin-top:16px">What it does, in order. It's safe to run again: it skips anything already done.</p>
-  <ol class="steps">
-    <li>Installs Claude Code and the Usage Monitor widget if they're missing.</li>
-    <li>Logs in each account that isn't logged in yet (step 3 below).</li>
-    <li>Builds the card with your names, sets it to start with Windows, and adds a <b>Claude Usage</b> shortcut.</li>
-    <li>Restarts the widget and checks that every account reports live usage. Look for one <b>[OK]</b> line per account at the end.</li>
-  </ol>
+  <div class="code"><button class="copy" type="button" data-target="cmd">Copy</button><span class="code-wrap" id="cmd">irm https://raw.githubusercontent.com/dxiiren/Claude-Code-Usage-Monitor/main/install.ps1 | iex</span></div>
+  <p class="lead" style="margin-top:16px">It installs what's missing (Claude Code, Node.js, the widget, the Account Manager), sets both to start with Windows, and adds two shortcuts: <b>Claude Usage</b> (the widget) and <b>Claude Accounts</b> (the web page). It's safe to run again; it skips anything already done and never touches your accounts.</p>
 </section>
 
-<section id="login">
-  <h2><span class="num">3</span>Log each account in</h2>
-  <p class="lead">For each account that isn't logged in yet, the installer pauses and does this:</p>
+<section id="add">
+  <h2><span class="num">2</span>Add your accounts</h2>
+  <p class="lead">Open <b>Claude Accounts</b> (shortcut, the widget's right-click menu → <b>Manage accounts</b>, or <a href="http://127.0.0.1:47291" style="color:var(--accent)">http://127.0.0.1:47291</a>). For each account:</p>
   <ol class="steps">
-    <li>A <b>fresh Edge window</b> opens with the Claude sign-in page. It shares no cookies with anything else on your PC.</li>
+    <li>Type a short name (e.g. <code class="inline">work</code>) and click <b>Start</b>. A <b>fresh Edge window</b> opens with the Claude sign-in page. It shares no cookies with anything on your PC.</li>
     <li>Sign in with <b>that account's</b> email and click <b>Authorize</b>.</li>
-    <li>Copy the code the page shows, paste it into PowerShell and press Enter.</li>
-    <li>The installer prints which email got logged in. Check it's the right one before moving on.</li>
+    <li>Copy the code the page shows, paste it into the Account Manager and click <b>Connect</b>. It shows which email got connected.</li>
   </ol>
+  <img src="manager.png" alt="The Account Manager page: add-account box and one card per account with usage bars and Rename, Re-login and Remove buttons" style="width:100%;height:auto;border:1px solid var(--line);border-radius:12px;margin-top:14px">
   <div class="callout bad">
-    <b>Why not just use your normal browser?</b>
-    Your normal browser is already signed in to your main account. It would silently log every folder in as that same account. InPrivate windows have the same problem: all open InPrivate windows share one session. That's why the installer opens its own throwaway window each time.
+    <b>Why a fresh window each time?</b>
+    Your normal browser is already signed in to one account, and would silently connect every new account as that same one. InPrivate windows share one session too. If two accounts ever show the same email, the page warns you; click <b>Re-login</b> on the wrong one.
   </div>
+</section>
+
+<section id="usage">
+  <h2><span class="num">3</span>Watch usage</h2>
+  <p class="lead">The desktop card updates by itself within seconds of any change. In the browser, the <b>Usage</b> tab shows the same numbers bigger, with live countdowns and the best account to use right now.</p>
+  <img src="usage.png" alt="The Usage page: best account to use now, and each account's 5-hour and weekly bars" style="width:100%;height:auto;border-radius:12px">
+  <div class="legend">
+    <span><span class="dot" style="background:#3FB950"></span>under 70%</span>
+    <span><span class="dot" style="background:#D29922"></span>70 to 89%</span>
+    <span><span class="dot" style="background:#F85149"></span>90% and up (100% = blocked until reset)</span>
+  </div>
+  <p class="lead" style="margin-top:14px">Light or dark: switch the page at the top right (Auto / Light / Dark). The desktop card has its own <b>Card theme</b> setting on the Accounts page; Auto follows Windows.</p>
 </section>
 
 <section id="daily">
   <h2>Everyday use</h2>
-  <p class="lead">Reading the card: each row shows <b>% used · time until reset</b>.</p>
-  <div class="legend">
-    <span><span class="dot" style="background:#3FB950"></span>under 70%</span>
-    <span><span class="dot" style="background:#D29922"></span>70 to 89%</span>
-    <span><span class="dot" style="background:#F85149"></span>90% and up (full at 100%)</span>
-  </div>
-  <p class="lead" style="margin-top:16px">On the card: <b>drag</b> to move it, <b>double-click</b> for the full dashboard, <b>✕</b> then "Close usage widget" to close it. Reopen it with the <b>Claude Usage</b> shortcut.</p>
-  <p class="lead">From the install folder (<code class="inline">%USERPROFILE%\claude-usage-monitor</code>), with <a href="https://just.systems" style="color:var(--accent)">just</a> installed:</p>
+  <p class="lead">On the card: <b>drag</b> to move, <b>double-click</b> for the dashboard, <b>right-click → Manage accounts</b>, <b>✕</b> to close. Reopen with the <b>Claude Usage</b> shortcut. From the install folder (<code class="inline">%USERPROFILE%\claude-usage-monitor</code>):</p>
   <div class="recipes">
-    <div class="recipe"><code>just status</code><div>Every account's email, 5-hour and weekly usage in the terminal.</div></div>
-    <div class="recipe"><code>just claude kv</code><div>Open Claude Code as that account.</div></div>
-    <div class="recipe"><code>just login kv</code><div>Log one account in again (expired, or the wrong email).</div></div>
-    <div class="recipe"><code>just accounts a,b,c</code><div>Change the account list and rebuild the card.</div></div>
-    <div class="recipe"><code>just verify</code><div>Prove every account still returns live numbers.</div></div>
+    <div class="recipe"><code>just web</code><div>Open the Account Manager.</div></div>
+    <div class="recipe"><code>just usage</code><div>Open the Usage page.</div></div>
     <div class="recipe"><code>just start / stop</code><div>Show or close the widget.</div></div>
-    <div class="recipe"><code>just startup-off</code><div>Stop it starting with Windows (<code class="inline">startup-on</code> to undo).</div></div>
-    <div class="recipe"><code>just setup</code><div>Re-run the whole installer.</div></div>
+    <div class="recipe"><code>just widget-update</code><div>Install the latest widget release.</div></div>
+    <div class="recipe"><code>just startup-off</code><div>Stop both starting with Windows (<code class="inline">startup-on</code> to undo).</div></div>
+    <div class="recipe"><code>just setup</code><div>Re-run the installer (updates, keeps your accounts).</div></div>
   </div>
-  <p class="lead" style="margin-top:14px">No <code class="inline">just</code>? Run <code class="inline">powershell -ExecutionPolicy Bypass -File .\setup.ps1</code> in that folder instead.</p>
 </section>
 
 <section id="help">
   <h2>Troubleshooting</h2>
-  <details><summary>An account logged in as the wrong email</summary>
-    <p>Run <code class="inline">just login &lt;name&gt;</code> and sign in with the right email in the fresh window. The new login replaces the wrong one.</p></details>
-  <details><summary>A row shows 100% on the weekly bar</summary>
-    <p>That account has used its whole weekly allowance. The countdown next to it is when it resets. Switch to an account with a green bar: <code class="inline">just claude &lt;name&gt;</code>.</p></details>
-  <details><summary>The widget shows "expired" or a row stays empty</summary>
-    <p>Logins renew themselves. If one hasn't, run <code class="inline">just login &lt;name&gt;</code>, then <code class="inline">just verify</code>.</p></details>
-  <details><summary>"running scripts is disabled on this system"</summary>
-    <p>Use the command from step 2 exactly as shown. It runs through <code class="inline">irm … | iex</code>, which isn't blocked. For local files, use <code class="inline">powershell -ExecutionPolicy Bypass -File .\setup.ps1</code>.</p></details>
-  <details><summary>I want the original taskbar look back</summary>
-    <p>Right-click the card, open Settings, pick the <b>Classic</b> theme. <code class="inline">just theme</code> brings the multi-account card back.</p></details>
+  <details><summary>The page says an account uses the same email as another</summary>
+    <p>That folder got connected as the wrong account. Click <b>Re-login</b> on it and sign in with the right email in the fresh window.</p></details>
+  <details><summary>"Login failed: Request failed with status code 400"</summary>
+    <p>The code was mistyped or expired (they're single-use and short-lived). Click <b>Re-login</b> and paste the new code straight away.</p></details>
+  <details><summary>A row shows 100% weekly / BLOCKED</summary>
+    <p>That account has used its whole weekly allowance until the countdown ends. The Usage page's "Best to use now" points at the account with the most room.</p></details>
+  <details><summary>http://127.0.0.1:47291 doesn't open</summary>
+    <p>The Account Manager isn't running. Run <code class="inline">just manager-start</code> (or re-run the installer). It starts with Windows by default.</p></details>
   <details><summary>Where are my tokens stored?</summary>
-    <p>Only in each account's own folder on your PC (<code class="inline">~\.claude</code>, <code class="inline">~\.claude-&lt;name&gt;</code>), the same place Claude Code keeps them. This kit never reads, copies or uploads them. The widget reads them locally to ask Anthropic for usage, and sends them nowhere else.</p></details>
+    <p>Only in each account's own folder on your PC (<code class="inline">%USERPROFILE%\.claude-&lt;name&gt;</code>), where Claude Code itself keeps them. Your main <code class="inline">.claude</code> folder is never touched. The Account Manager keeps names, folders and emails in <code class="inline">%APPDATA%\ClaudeCodeUsageMonitor\accounts.db</code>; it never stores, shows or uploads tokens. Removing an account deletes its folder.</p></details>
 </section>
 
 <footer>
-  Built on <a href="https://github.com/CodeZeno/Claude-Code-Usage-Monitor">Claude Code Usage Monitor</a> by CodeZeno (MIT). Multi-account kit and this guide: <a href="https://github.com/dxiiren/Claude-Code-Usage-Monitor">dxiiren/Claude-Code-Usage-Monitor</a>. Not affiliated with Anthropic.
+  Built on <a href="https://github.com/CodeZeno/Claude-Code-Usage-Monitor">Claude Code Usage Monitor</a> by CodeZeno (MIT). Account Manager, multi-account widget changes and this guide: <a href="https://github.com/dxiiren/Claude-Code-Usage-Monitor">dxiiren/Claude-Code-Usage-Monitor</a>. Not affiliated with Anthropic.
 </footer>
 
 </div>
 <script>
-  const RAW = "https://raw.githubusercontent.com/dxiiren/Claude-Code-Usage-Monitor/main/install.ps1";
-  const DEFAULTS = ["ba", "kv", "newgen", "etl"];
-  const namesEl = document.getElementById("names");
-  const cmdEl = document.getElementById("cmd");
-
-  function load() {
-    try { const s = JSON.parse(localStorage.getItem("claude-usage-names")); if (Array.isArray(s) && s.length) return s; } catch (e) {}
-    return DEFAULTS.slice();
-  }
-  function save(list) { try { localStorage.setItem("claude-usage-names", JSON.stringify(list)); } catch (e) {} }
-  function clean(v) { return v.trim().replace(/[^A-Za-z0-9_-]/g, ""); }
-
-  let names = load();
-
-  function renderCmd() {
-    const list = names.map(clean).filter(Boolean);
-    const args = list.length ? " -Accounts " + list.join(",") : "";
-    cmdEl.textContent = "& ([scriptblock]::Create((irm " + RAW + ")))" + args;
-  }
-
-  function render() {
-    namesEl.innerHTML = "";
-    names.forEach((n, i) => {
-      const row = document.createElement("div");
-      row.className = "name-row";
-      const tag = document.createElement("span");
-      tag.className = "tag";
-      tag.textContent = i === 0 ? "Main login" : "Account " + (i + 1);
-      const input = document.createElement("input");
-      input.value = n;
-      input.placeholder = "e.g. work";
-      input.setAttribute("aria-label", tag.textContent + " name");
-      input.addEventListener("input", () => { names[i] = input.value; save(names); renderCmd(); });
-      const del = document.createElement("button");
-      del.type = "button";
-      del.className = "icon-btn";
-      del.textContent = "✕";
-      del.title = "Remove";
-      del.disabled = names.length === 1;
-      del.addEventListener("click", () => { names.splice(i, 1); save(names); render(); });
-      row.append(tag, input, del);
-      namesEl.append(row);
-    });
-    renderCmd();
-  }
-
-  document.getElementById("add").addEventListener("click", () => {
-    names.push(""); save(names); render();
-    const inputs = namesEl.querySelectorAll("input"); inputs[inputs.length - 1].focus();
-  });
-
   document.querySelectorAll(".copy").forEach(btn => btn.addEventListener("click", async () => {
-    const text = document.getElementById(btn.dataset.target).textContent;
-    try { await navigator.clipboard.writeText(text); } catch (e) {
-      const r = document.createRange(); r.selectNodeContents(document.getElementById(btn.dataset.target));
+    const el = document.getElementById(btn.dataset.target);
+    try { await navigator.clipboard.writeText(el.textContent); } catch (e) {
+      const r = document.createRange(); r.selectNodeContents(el);
       const s = getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand("copy");
     }
     btn.textContent = "Copied"; btn.classList.add("done");
     setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("done"); }, 1600);
   }));
-
-  render();
 </script>
 </body>
 </html>

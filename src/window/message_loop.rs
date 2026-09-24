@@ -101,6 +101,9 @@ pub(super) unsafe extern "system" fn wnd_proc(
                 TIMER_WINDOW_STATE => {
                     sync_theme_window_visibility();
                 }
+                TIMER_ACCOUNTS_DB => {
+                    request_accounts_db_check(hwnd);
+                }
                 TIMER_MOUSE_CLICK => {
                     let _ = KillTimer(Some(hwnd), TIMER_MOUSE_CLICK);
                     let pending = lock_state()
@@ -142,6 +145,10 @@ pub(super) unsafe extern "system" fn wnd_proc(
                 TRAY_ICON_UPDATE_REPOSITION_SUPPRESS_MS,
             ));
             sync_tray_icon(hwnd);
+            LRESULT(0)
+        }
+        WM_APP_ACCOUNTS_DB_CHANGED => {
+            reload_accounts_db(hwnd);
             LRESULT(0)
         }
         WM_APP_SETTINGS_UPDATED => {
