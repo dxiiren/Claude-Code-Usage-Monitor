@@ -108,34 +108,42 @@ pub fn poll(
     force: bool,
     on_progress: impl FnMut(AppUsageData),
 ) -> Result<AppUsageData, PollFailure> {
-    if enabled_providers.contains(ProviderId::Claude) {
-        if let Some(config) = crate::remote::active_config() {
-            return poll_with_remote_claude(
+    if let Some(config) = crate::remote::active_config() {
+        // Remote mode owns Claude, and Codex once the server lists Codex accounts.
+        if !crate::remote::remote_providers(enabled_providers, crate::remote::codex_is_remote())
+            .is_empty()
+        {
+            return poll_with_remote(
                 enabled_providers,
                 settings,
                 previous,
                 force,
                 on_progress,
-                |claude| crate::remote::poll_accounts(&config, claude),
+                |accounts, enabled| crate::remote::poll_accounts(&config, accounts, enabled),
             );
         }
     }
     poll_local(enabled_providers, settings, previous, force, on_progress)
 }
 
-/// Remote mode: Claude comes from the Account Manager server (no local
-/// credential files, no CLI refresh); every other provider polls as usual.
-fn poll_with_remote_claude(
+/// Remote mode: Claude (and Codex when the server owns it) comes from the
+/// Account Manager server (no local credential files, no CLI refresh); every
+/// other provider polls as usual.
+fn poll_with_remote(
     enabled_providers: ProviderSet,
     settings: &crate::accounts::AccountSettings,
     previous: Option<&AppUsageData>,
     force: bool,
     mut on_progress: impl FnMut(AppUsageData),
-    poll_claude: impl FnOnce(
-        &crate::accounts::ProviderAccounts,
-    ) -> Result<Vec<crate::models::AccountUsage>, PollError>,
+    poll_remote: impl FnOnce(
+        &crate::accounts::AccountSettings,
+        ProviderSet,
+    ) -> crate::remote::RemotePoll,
 ) -> Result<AppUsageData, PollFailure> {
-    let claude = poll_claude(&settings.claude);
+    let crate::remote::RemotePoll {
+        result: claude,
+        providers: remote_providers,
+    } = poll_remote(settings, enabled_providers);
     if let Ok(accounts) = &claude {
         if !accounts.is_empty() {
             let mut update = AppUsageData::default();
@@ -146,7 +154,7 @@ fn poll_with_remote_claude(
     let others = ProviderSet::from_enabled(
         enabled_providers
             .iter()
-            .filter(|provider| *provider != ProviderId::Claude),
+            .filter(|provider| !remote_providers.contains(*provider)),
     );
     let others = if others.is_empty() {
         Ok(AppUsageData::default())

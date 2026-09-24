@@ -465,6 +465,129 @@ fn all_failed_providers_can_carry_their_previous_readings() {
 }
 
 #[test]
+fn a_database_codex_account_without_a_login_requires_login_through_the_theme() {
+    use crate::accounts::AccountProfile;
+    // A Codex account the Account Manager created but never logged in: its
+    // CODEX_HOME has no auth.json. The poll must fail as NoCredentials, not
+    // fall back to ~/.codex.
+    let home = std::env::temp_dir().join(format!("ccum-codex-no-login-{}", std::process::id()));
+    let profile = AccountProfile {
+        id: "cx".into(),
+        name: "cx".into(),
+        config_dir: home.to_string_lossy().into_owned(),
+        credentials_path: String::new(),
+        enabled: true,
+    };
+    let path = profile.credential_path(ProviderId::Codex).unwrap().unwrap();
+    assert_eq!(path, home.join("auth.json"));
+    let error = super::codex::poll_account(&path).unwrap_err();
+    assert_eq!(error, PollError::NoCredentials);
+
+    let mut data = AppUsageData::default();
+    for (id, error) in [
+        ("cx", Some(error)),
+        ("expired", Some(PollError::TokenExpired)),
+        ("rejected", Some(PollError::AuthRequired)),
+        ("offline", Some(PollError::NetworkError)),
+        ("ok", None),
+    ] {
+        data.accounts.push(crate::models::AccountUsage {
+            provider: ProviderId::Codex,
+            profile: AccountProfile {
+                id: id.into(),
+                name: id.into(),
+                config_dir: format!("C:\\{id}"),
+                ..Default::default()
+            },
+            source_signature: "fixture".into(),
+            source_path: None,
+            selected: id == "cx",
+            usage: None,
+            error,
+        });
+    }
+    let context = crate::theme_engine::DataContext::from_usage(
+        Some(&data),
+        &crate::theme_engine::Canvas::default(),
+    );
+    let value = |expression: &str| crate::theme_engine::evaluate(expression, &context).unwrap();
+    assert_eq!(value("accounts.codex.cx.login_required"), 1.0);
+    assert_eq!(value("accounts.codex.expired.login_required"), 1.0);
+    assert_eq!(value("accounts.codex.rejected.login_required"), 1.0);
+    assert_eq!(value("accounts.codex.offline.login_required"), 0.0);
+    assert_eq!(value("accounts.codex.ok.login_required"), 0.0);
+    assert_eq!(value("codex.login_required"), 1.0);
+}
+
+#[test]
+fn remote_codex_accounts_are_not_polled_locally() {
+    use crate::accounts::{AccountProfile, AccountSettings, ProviderAccounts};
+    let remote_profile = |id: &str| AccountProfile {
+        id: id.into(),
+        name: id.into(),
+        config_dir: String::new(),
+        credentials_path: String::new(),
+        enabled: true,
+    };
+    let settings = AccountSettings {
+        claude: ProviderAccounts::from_profiles(vec![remote_profile("ba")]),
+        codex: ProviderAccounts::from_profiles(vec![remote_profile("cx")]),
+    };
+    let enabled = ProviderSet::from_enabled([ProviderId::Claude, ProviderId::Codex]);
+    let usage = |percentage| UsageData {
+        session: UsageSection {
+            available: true,
+            percentage,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let data = poll_with_remote(
+        enabled,
+        &settings,
+        None,
+        false,
+        |_| {},
+        |accounts, enabled| crate::remote::RemotePoll {
+            result: Ok(vec![
+                crate::models::AccountUsage {
+                    provider: ProviderId::Claude,
+                    profile: accounts.claude.profiles[0].clone(),
+                    source_signature: "remote:a".into(),
+                    source_path: None,
+                    usage: Some(usage(10.0)),
+                    error: None,
+                    selected: false,
+                },
+                crate::models::AccountUsage {
+                    provider: ProviderId::Codex,
+                    profile: accounts.codex.profiles[0].clone(),
+                    source_signature: "remote:b".into(),
+                    source_path: None,
+                    usage: Some(usage(20.0)),
+                    error: None,
+                    selected: false,
+                },
+            ]),
+            providers: crate::remote::remote_providers(enabled, true),
+        },
+    )
+    .unwrap();
+    // A local poll of the remote Codex profile (no config dir) would have
+    // added an error account; only the server's two readings are present.
+    assert_eq!(data.accounts.len(), 2);
+    assert!(data.accounts.iter().all(|a| a.error.is_none()));
+    assert_eq!(
+        data.get(ProviderId::Codex).unwrap().session.percentage,
+        20.0
+    );
+    assert_eq!(
+        data.get(ProviderId::Claude).unwrap().session.percentage,
+        10.0
+    );
+}
+
+#[test]
 fn remote_claude_accounts_replace_local_polling_and_failures_surface() {
     use crate::accounts::{AccountProfile, AccountSettings, ProviderAccounts};
     let profile = AccountProfile {
@@ -492,23 +615,26 @@ fn remote_claude_accounts_replace_local_polling_and_failures_surface() {
         ..Default::default()
     };
     let mut progress = 0;
-    let data = poll_with_remote_claude(
+    let data = poll_with_remote(
         enabled,
         &settings,
         None,
         false,
         |_| progress += 1,
-        |claude| {
-            assert_eq!(claude.profiles, vec![profile.clone()]);
-            Ok(vec![crate::models::AccountUsage {
-                provider: ProviderId::Claude,
-                profile: profile.clone(),
-                source_signature: "remote:x".into(),
-                source_path: None,
-                usage: Some(usage.clone()),
-                error: None,
-                selected: false,
-            }])
+        |accounts, enabled| {
+            assert_eq!(accounts.claude.profiles, vec![profile.clone()]);
+            crate::remote::RemotePoll {
+                result: Ok(vec![crate::models::AccountUsage {
+                    provider: ProviderId::Claude,
+                    profile: profile.clone(),
+                    source_signature: "remote:x".into(),
+                    source_path: None,
+                    usage: Some(usage.clone()),
+                    error: None,
+                    selected: false,
+                }]),
+                providers: crate::remote::remote_providers(enabled, false),
+            }
         },
     )
     .unwrap();
@@ -517,13 +643,16 @@ fn remote_claude_accounts_replace_local_polling_and_failures_surface() {
     assert_eq!(data.get(ProviderId::Claude), Some(&usage));
 
     // Server down before any account is known: a Claude failure, no local fallback.
-    let failure = poll_with_remote_claude(
+    let failure = poll_with_remote(
         enabled,
         &AccountSettings::default(),
         None,
         false,
         |_| {},
-        |_| Err(PollError::NetworkError),
+        |_, enabled| crate::remote::RemotePoll {
+            result: Err(PollError::NetworkError),
+            providers: crate::remote::remote_providers(enabled, false),
+        },
     )
     .unwrap_err();
     assert_eq!(
