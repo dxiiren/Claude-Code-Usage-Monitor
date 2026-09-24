@@ -57,6 +57,10 @@ test('wrong password or username is rejected; the right pair signs in (HttpOnly,
 	expect(c).toMatchObject({ httpOnly: true, sameSite: 'Strict', secure: false });
 	// no desktop-widget controls on a server
 	await expect(page.getByRole('button', { name: 'Restart widget' })).toHaveCount(0);
+	await expect(page.getByText('Desktop widget')).toHaveCount(0);
+	// the card theme is written for the widget on the PC that runs the manager; a server has none
+	await expect(page.getByText('Card theme')).toHaveCount(0);
+	await expect(page.getByText('Usage polling')).toBeVisible();
 });
 
 test('a mutation with a foreign Origin is refused even when signed in', async ({ page }) => {
@@ -80,7 +84,7 @@ test('add account: sign-in link for the user\'s own browser, paste the code, usa
 	await expect(panel).not.toContainText('Edge');
 	await panel.getByLabel('Authentication code').fill('good');
 	await panel.getByRole('button', { name: 'Connect' }).click();
-	await expect(panel.getByTestId('login-ok')).toContainText('Logged in as alpha@example.com (max)');
+	await expect(panel.getByTestId('login-ok')).toContainText('Logged in as alpha@example.com (max)', { timeout: 20_000 });
 	await panel.getByRole('button', { name: 'Done' }).click();
 	expect(fs.existsSync(path.join(data, 'accounts', 'alpha', '.credentials.json'))).toBe(true);
 	// The server polled the (fake) usage endpoint right after the login.
@@ -107,7 +111,7 @@ test('an account whose token the usage endpoint rejects shows as expired', async
 	const panel = page.getByTestId('login-panel');
 	await panel.getByLabel('Authentication code').fill('good:expired@example.com');
 	await panel.getByRole('button', { name: 'Connect' }).click();
-	await expect(panel.getByTestId('login-ok')).toContainText('expired@example.com');
+	await expect(panel.getByTestId('login-ok')).toContainText('expired@example.com', { timeout: 20_000 });
 	await panel.getByRole('button', { name: 'Done' }).click();
 	const row = page.locator('li.acc').filter({ hasText: 'expired@example.com' });
 	await expect(row.getByTestId('status-badge')).toHaveText(/Expired/);

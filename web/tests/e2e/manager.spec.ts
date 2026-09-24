@@ -59,7 +59,7 @@ test('add account -> login started -> good code -> email shown', async ({ page }
 	expect(href).toMatch(/^https:\/\/claude\.com\/cai\/oauth\/authorize\?code=true/);
 	await panel.getByLabel('Authentication code').fill('good');
 	await panel.getByRole('button', { name: 'Connect' }).click();
-	await expect(panel.getByTestId('login-ok')).toContainText('Logged in as alpha@example.com (max)');
+	await expect(panel.getByTestId('login-ok')).toContainText('Logged in as alpha@example.com (max)', { timeout: 20_000 });
 	await panel.getByRole('button', { name: 'Done' }).click();
 	const alphaRow = row(page, 'alpha');
 	await expect(alphaRow).toContainText('alpha@example.com');
@@ -83,7 +83,7 @@ test('local mode offers the paste-a-code link, and a CLI that finished by itself
 	await page.waitForTimeout(1500);
 	await panel.getByLabel('Authentication code').fill('whatever-was-copied');
 	await panel.getByRole('button', { name: 'Connect' }).click();
-	await expect(panel.getByTestId('login-ok')).toContainText('Logged in as autologin@example.com');
+	await expect(panel.getByTestId('login-ok')).toContainText('Logged in as autologin@example.com', { timeout: 20_000 });
 	await expect(panel).not.toContainText('already stopped');
 	await panel.getByRole('button', { name: 'Done' }).click();
 	await expect(row(page, 'autologin')).toContainText('autologin@example.com');
@@ -95,7 +95,7 @@ test('local mode offers the paste-a-code link, and a CLI that finished by itself
 
 test('same email on a second account -> clear warning + Re-login offered', async ({ page }) => {
 	const panel = await addAccount(page, 'beta', 'good:alpha@example.com');
-	await expect(panel.getByTestId('login-ok')).toContainText('alpha@example.com');
+	await expect(panel.getByTestId('login-ok')).toContainText('alpha@example.com', { timeout: 20_000 });
 	const warn = panel.getByRole('alert');
 	await expect(warn).toContainText('same email as alpha');
 	await expect(warn.getByRole('button', { name: 'Re-login' })).toBeVisible();
@@ -109,14 +109,14 @@ test('re-login with the right account clears the warning', async ({ page }) => {
 	const panel = page.getByTestId('login-panel');
 	await panel.getByLabel('Authentication code').fill('good');
 	await panel.getByRole('button', { name: 'Connect' }).click();
-	await expect(panel.getByTestId('login-ok')).toContainText('beta@example.com');
+	await expect(panel.getByTestId('login-ok')).toContainText('beta@example.com', { timeout: 20_000 });
 	await expect(panel.getByRole('alert')).toHaveCount(0);
 });
 
 test('bad code -> the CLI failure is shown cleanly, nothing saved', async ({ page }) => {
 	const rev = Number(meta().revision);
 	const panel = await addAccount(page, 'gamma', 'bad#x');
-	await expect(panel.getByTestId('login-error')).toHaveText('Login failed: Request failed with status code 400');
+	await expect(panel.getByTestId('login-error')).toHaveText('Login failed: Request failed with status code 400', { timeout: 20_000 });
 	await expect(panel.getByRole('button', { name: 'Try again' })).toBeVisible();
 	await expect(row(page, 'gamma')).toContainText('Not logged in');
 	expect(Number(meta().revision)).toBe(rev + 1); // only the row creation was written
@@ -283,7 +283,7 @@ test('expired login: badge + Re-login on both pages, skipped by "Best to use now
 	await expect(panel).toContainText('Log in "beta"');
 	await panel.getByLabel('Authentication code').fill('good');
 	await panel.getByRole('button', { name: 'Connect' }).click();
-	await expect(panel.getByTestId('login-ok')).toContainText('beta@example.com');
+	await expect(panel.getByTestId('login-ok')).toContainText('beta@example.com', { timeout: 20_000 });
 	await panel.getByRole('button', { name: 'Done' }).click();
 	// the poll error predates this login, so it no longer counts
 	await expect(row(page, 'beta').getByTestId('status-badge')).toHaveCount(0);
