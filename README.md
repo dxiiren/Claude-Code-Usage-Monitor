@@ -2,6 +2,11 @@
 
 **Setup guide: <https://dxiiren.github.io/Claude-Code-Usage-Monitor/>**
 
+> **Built on [Claude Code Usage Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor)
+> by [Code Zeno](https://github.com/CodeZeno) (Craig Constable and contributors).** The desktop
+> widget — its renderer, themes, providers, updater and Theme Studio — is their work; this fork
+> adds multi-account management on top. See [Credits](#credits).
+
 See the 5-hour and weekly usage of every Claude account you own in one place: a Windows desktop
 widget, a web **Account Manager** where adding an account is "type a name, sign in, paste the
 code", and an optional Docker server that holds the logins so any PC's widget — or a phone's
@@ -11,9 +16,8 @@ and everything is stored in SQLite (`accounts.db`) on the PC and on the server a
 ![The Usage page in dark mode: a red "1 account needs login: side" notice, a "Best to use now: personal" tag, 5-hour and weekly bars with reset countdowns for three accounts, and an expired account with its Re-login button](docs/images/usage-dark.png)
 
 > **New developer? Start with [`.docs/tldr.md`](.docs/tldr.md)** — every doc summarised on one
-> page. The full guide lives in [`.docs/`](.docs/README.md). A fork of
-> [CodeZeno/Claude-Code-Usage-Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor);
-> the upstream widget guide is kept in [`docs/upstream-README.md`](docs/upstream-README.md).
+> page. The full guide lives in [`.docs/`](.docs/README.md). The upstream widget guide is kept
+> in [`docs/upstream-README.md`](docs/upstream-README.md).
 
 ## Screenshots
 
@@ -245,7 +249,25 @@ The database schema, the server API and remote mode are specified in
 [`docs/account-manager-contract.md`](docs/account-manager-contract.md) — change the contract first,
 then both sides.
 
+## Credits
+
+This project is a fork of **[CodeZeno/Claude-Code-Usage-Monitor](https://github.com/CodeZeno/Claude-Code-Usage-Monitor)**
+— a free, open-source Windows taskbar widget for Claude Code, Codex, Cursor and more — created by
+[Craig Constable / Code Zeno Pty Ltd](https://github.com/CodeZeno) with contributions from
+fix2it, krylo, usamaiqb, u_naro, Trent Hord, Rtas and others. If this is useful to you, star and
+support the original.
+
+| From the upstream project | Added in this fork |
+| --- | --- |
+| The widget: taskbar/floating card, theme engine and Theme Studio, localisation (14 languages) | Account Manager web app (SvelteKit + SQLite): add accounts by pasting the login code, Usage page, light/dark |
+| Usage polling for Claude Code, Codex, Cursor, Grok, Antigravity, OpenCode | Widget reads its Claude accounts from `accounts.db` and reloads live; "Expired · re-login" state |
+| Multi-account profiles, credential handling, the self-updater, WinGet packaging | Docker server mode (password login, server-side polling, widget tokens) + widget remote mode |
+| The original README, kept as [`docs/upstream-README.md`](docs/upstream-README.md) | `setup.ps1` / `justfile` kit, deploy overlays (Cloudflare tunnel, own-cert HTTPS), CI suites |
+
+Bugs in the widget itself are best reported upstream; bugs in the Account Manager, server or kit
+belong here.
+
 ## License
 
-MIT — see [LICENSE](LICENSE). The widget is © Code Zeno Pty Ltd (upstream); the multi-account
-additions follow the same license.
+MIT — see [LICENSE](LICENSE). The original widget is © Code Zeno Pty Ltd; the multi-account
+additions are released under the same license.
