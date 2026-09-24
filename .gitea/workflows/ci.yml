@@ -1,0 +1,114 @@
+# Gitea CI for the Linux-runnable part of this repo: web unit tests + build, the server-mode
+# e2e suite, and the server Docker image (build + smoke run).
+#
+# GitHub stays the home of everything else (.github/workflows/): the Rust widget (fmt, clippy,
+# cargo test), the local-mode web e2e suite and the PowerShell kit check all need Windows, and
+# releases (tag-triggered, GitHub release + WinGet) and cargo-audit/deny stay there too.
+# Gitea reads ONLY this directory once .gitea/workflows exists (setting.Actions.WorkflowDirs,
+# default [.gitea/workflows, .github/workflows], first one present wins), so the GitHub files
+# are never scheduled here and never queue for a windows-latest runner that does not exist.
+#
+# Runners: the shared Kollect fleet only serves `ubuntu-latest` (1.5g/1cpu default job cap,
+# host Docker socket in the job container). Images come from the public LAN Harbor mirror
+# (kcr.kollect.biz/base-image), never Docker Hub. No tag triggers: tags belong to GitHub releases.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ gitea.event.pull_request.number || gitea.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: kcr.kollect.biz/base-image/node.js:24
+      # the runner default (1.5g/1cpu) is too small for vite build
+      options: --memory=4g --memory-swap=4g --cpus=2
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore npm cache
+        id: npm-cache
+        uses: actions/cache/restore@v5
+        # a cache miss or cache-service error means a cold install, never a failed job
+        continue-on-error: true
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('web/package-lock.json') }}
+      - run: npm ci --no-audit --no-fund
+      # generates .svelte-kit/tsconfig.json, which vitest's tsconfig extends
+      - run: npx svelte-kit sync
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Save npm cache
+        if: steps.npm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('web/package-lock.json') }}
+
+  web-e2e-server:
+    needs: web-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: kcr.kollect.biz/base-image/playwright:custom-1.60.0-node24-dockercli-pnpm10
+      options: --memory=4g --memory-swap=4g --cpus=2
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore npm cache
+        uses: actions/cache/restore@v5
+        continue-on-error: true
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('web/package-lock.json') }}
+      - run: npm ci --no-audit --no-fund
+      # The image bakes Chromium for Playwright 1.60 plus its OS packages; the lockfile pins a
+      # newer Playwright, so fetch only the matching browser (no --with-deps, no apt).
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+      - name: End-to-end tests (server mode)
+        run: npm run test:e2e:server
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: e2e-server-${{ gitea.run_id }}
+          path: web/test-results
+          retention-days: 7
+
+  docker:
+    needs: web-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: kcr.kollect.biz/base-image/ci-tools:custom-node24-dockercli-pnpm10
+    env:
+      # run-unique names: the image and container live on the runner host's shared daemon
+      TAG: claude-usage-ci:${{ gitea.run_id }}
+      NAME: claude-usage-ci-${{ gitea.run_id }}
+      # the Dockerfile default is node:24-bookworm-slim from Docker Hub; use the LAN mirror
+      NODE_IMAGE: kcr.kollect.biz/base-image/node.js:24
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image + smoke run
+        run: bash .gitea/ci/scripts/docker_smoke.sh
+      - name: Clean up
+        if: always()
+        run: |
+          docker rm -f "$NAME" >/dev/null 2>&1 || true
+          docker image rm "$TAG" >/dev/null 2>&1 || true

@@ -18,6 +18,27 @@
 4. Open a PR. CI (`.github/workflows/tests.yml`) runs fmt, clippy, cargo test, web unit + both e2e
    suites, a PowerShell 5.1 kit check, and a Docker image build/run. Merge only when green.
 
+## CI: GitHub and Gitea
+
+The repo is mirrored to Gitea (`gitea.kollect.biz/akmal/Claude-Code-Usage-Monitor`), whose shared
+runners are Linux-only (`ubuntu-latest`). The two CI systems split the work:
+
+| Runs on | Workflow | Jobs |
+| --- | --- | --- |
+| GitHub | `.github/workflows/tests.yml` | Rust fmt/clippy/test, web unit, both e2e suites, kit check, Docker image (Windows + Ubuntu) |
+| GitHub | `.github/workflows/release.yml` | tag `v*` → release exe (+ WinGet upstream only) |
+| GitHub | `.github/workflows/dependency-security.yml` | cargo-audit, cargo-deny |
+| Gitea | `.gitea/workflows/ci.yml` | web unit + build, web e2e (server mode), Docker image build + smoke run |
+
+- Gitea reads only `.gitea/workflows/` once that directory exists (its `[actions] WORKFLOW_DIRS`
+  default is `.gitea/workflows, .github/workflows`, and the first one present wins). So the GitHub
+  workflows never run on Gitea.
+- Gitea runs on push to `main` and on PRs, never on tags, because releases stay on GitHub.
+- The Docker job's smoke script is `.gitea/ci/scripts/docker_smoke.sh`. It checks `/healthz` 200,
+  `/` 303, `/api/v1/widget` 401, that the image refuses to start without `ACCTMGR_ADMIN_PASSWORD`,
+  and that `claude --version` works.
+- Images come from the LAN Harbor mirror (`kcr.kollect.biz/base-image`), not Docker Hub.
+
 ## Try changes live
 
 - Web: `just web-dev` (hot reload), or `just manager-build` to rebuild the running local manager.
