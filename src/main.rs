@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod accounts;
+mod accounts_db;
 mod app_settings;
 mod context_menu;
 mod dashboard;

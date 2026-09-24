@@ -1,0 +1,132 @@
+/* Colour tokens. Light is the base; dark applies when the OS is dark (unless the user picked
+   Light) or when the user picked Dark. Text pairs are WCAG AA (>= 4.5:1), checked by tests/unit/contrast.test.ts. */
+:root {
+	color-scheme: light;
+	--bg: #f6f8fa;
+	--surface: #ffffff;
+	--text: #1f2328;
+	--muted: #59636e;
+	--border: #d1d9e0;
+	--track: #d0d7de;
+	--accent: #0969da;
+	--accent-text: #ffffff;
+	--green: #1a7f37;
+	--amber: #9a6700;
+	--red: #cf222e;
+	--danger-solid: #cf222e;
+	--tag-text: #ffffff;
+	--warn-bg: #fff8c5;
+	--warn-border: #d4a72c;
+	--err-bg: #ffebe9;
+	--err-border: #ff8182;
+	--ok-bg: #dafbe1;
+	--ok-border: #4ac26b;
+	/* the widget-style usage card */
+	--card-bg: #ffffff;
+	--card-border: #d1d9e0;
+	--card-text: #1f2328;
+	--card-muted: #59636e;
+	--card-track: #d0d7de;
+	--card-divider: #d8dee4;
+	--card-green: #1a7f37;
+	--card-amber: #9a6700;
+	--card-red: #cf222e;
+	--card-link: #0969da;
+	--card-pill-text: #ffffff;
+	--card-shadow: 0 4px 16px rgb(31 35 40 / 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme='light']) {
+		color-scheme: dark;
+		--bg: #010409;
+		--surface: #0d1117;
+		--text: #e6edf3;
+		--muted: #9198a1;
+		--border: #30363d;
+		--track: #4a515b;
+		--accent: #1f6feb;
+		--accent-text: #ffffff;
+		--green: #3fb950;
+		--amber: #d29922;
+		--red: #f85149;
+		--danger-solid: #b62324;
+		--tag-text: #0d1117;
+		--warn-bg: #2e2410;
+		--warn-border: #9e6a03;
+		--err-bg: #2d1316;
+		--err-border: #da3633;
+		--ok-bg: #12261a;
+		--ok-border: #238636;
+		--card-bg: #0d1117;
+		--card-border: #30363d;
+		--card-text: #ffffff;
+		--card-muted: #c9d1d9;
+		--card-track: #4a515b;
+		--card-divider: #2d333b;
+		--card-green: #3fb950;
+		--card-amber: #d29922;
+		--card-red: #f85149;
+		--card-link: #58a6ff;
+		--card-pill-text: #0d1117;
+		--card-shadow: 0 6px 24px rgb(0 0 0 / 0.35);
+	}
+}
+
+:root[data-theme='dark'] {
+	color-scheme: dark;
+	--bg: #010409;
+	--surface: #0d1117;
+	--text: #e6edf3;
+	--muted: #9198a1;
+	--border: #30363d;
+	--track: #4a515b;
+	--accent: #1f6feb;
+	--accent-text: #ffffff;
+	--green: #3fb950;
+	--amber: #d29922;
+	--red: #f85149;
+	--danger-solid: #b62324;
+	--tag-text: #0d1117;
+	--warn-bg: #2e2410;
+	--warn-border: #9e6a03;
+	--err-bg: #2d1316;
+	--err-border: #da3633;
+	--ok-bg: #12261a;
+	--ok-border: #238636;
+	--card-bg: #0d1117;
+	--card-border: #30363d;
+	--card-text: #ffffff;
+	--card-muted: #c9d1d9;
+	--card-track: #4a515b;
+	--card-divider: #2d333b;
+	--card-green: #3fb950;
+	--card-amber: #d29922;
+	--card-red: #f85149;
+	--card-link: #58a6ff;
+	--card-pill-text: #0d1117;
+	--card-shadow: 0 6px 24px rgb(0 0 0 / 0.35);
+}
+
+* {
+	box-sizing: border-box;
+}
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--text);
+	font:
+		15px/1.45 'Segoe UI Variable Text',
+		'Segoe UI',
+		system-ui,
+		sans-serif;
+}
+button,
+input,
+select {
+	font: inherit;
+}
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}

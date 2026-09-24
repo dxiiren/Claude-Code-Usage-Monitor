@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "close-menu",
+  "name": "Close menu",
+  "items": [
+    {
+      "id": "exit",
+      "label": "Close usage widget",
+      "render": "1",
+      "type": "action",
+      "action": { "type": "exit" }
+    }
+  ]
+}

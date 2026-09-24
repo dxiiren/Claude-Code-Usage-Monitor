@@ -1,6 +1,0 @@
-[
-  { "name": "ba",     "dir": "~/.claude" },
-  { "name": "kv",     "dir": "~/.claude-kv" },
-  { "name": "newgen", "dir": "~/.claude-newgen" },
-  { "name": "etl",    "dir": "~/.claude-etl" }
-]

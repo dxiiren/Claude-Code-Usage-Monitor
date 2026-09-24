@@ -82,7 +82,9 @@ impl StudioApp {
             .and_then(|path| context_menu::load_context_menu(path).ok())
             .unwrap_or_else(context_menu::classic_context_menu);
         let usage_cache = app_settings::load_usage_cache().map(|mut cache| {
-            cache.data.select_accounts(&settings.accounts);
+            cache
+                .data
+                .select_accounts(&crate::accounts_db::effective(&settings.accounts));
             cache
         });
         let usage_poll_ok = usage_cache
@@ -772,7 +774,11 @@ impl StudioApp {
     }
 
     pub(super) fn update_usage_cache(&mut self, mut cache: UsageCache) -> bool {
-        cache.data.select_accounts(&self.settings.accounts);
+        // Match the widget: accounts.db owns the Claude accounts when present.
+        crate::accounts_db::check_for_changes();
+        cache
+            .data
+            .select_accounts(&crate::accounts_db::effective(&self.settings.accounts));
         let poll_ok = cache.poll_ok && !cache.data.is_empty();
         let has_error = !cache.poll_ok
             || (cache.data.is_empty()

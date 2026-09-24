@@ -320,9 +320,21 @@ pub fn rendered_label(
         "Providers" => language.text("Providers"),
         "Check for updates" => language.text("Check for updates"),
         "Show widget" => language.text("Show widget"),
+        "Manage accounts" => language.text("Manage accounts"),
         _ => label,
     };
     crate::theme_engine::format_template(translated, context)
+}
+
+/// Opens the Account Manager web app (`meta.manager_url` in accounts.db).
+fn manage_accounts_item() -> ContextMenuItem {
+    ContextMenuItem::action(
+        "manage-accounts",
+        "Manage accounts",
+        ContextMenuAction::OpenUrl {
+            url: crate::accounts_db::manager_url(),
+        },
+    )
 }
 
 pub fn classic_context_menu() -> ContextMenuDocument {
@@ -462,6 +474,7 @@ pub fn classic_context_menu() -> ContextMenuDocument {
             settings,
             ContextMenuItem::action("toggle-widget", "Show widget", Action::ToggleWidget),
             ContextMenuItem::action("open-dashboard", "Open Dashboard", Action::OpenDashboard),
+            manage_accounts_item(),
             ContextMenuItem::separator("root-separator"),
             ContextMenuItem::action("exit", "Exit", Action::Exit),
         ],
@@ -479,6 +492,7 @@ pub fn dashboard_v2_context_menu() -> ContextMenuDocument {
                 "Open Dashboard",
                 ContextMenuAction::OpenDashboard,
             ),
+            manage_accounts_item(),
             ContextMenuItem::separator("dashboard-separator"),
             ContextMenuItem::action("exit", "Exit", ContextMenuAction::Exit),
         ],
@@ -723,6 +737,16 @@ mod tests {
         assert!(!serde_json::to_string(&menu)
             .unwrap()
             .contains("reset_position"));
+        assert!(menu.items.iter().any(|item| {
+            item.id == "manage-accounts"
+                && item.label == "Manage accounts"
+                && matches!(
+                    &item.kind,
+                    ContextMenuItemKind::Action {
+                        action: ContextMenuAction::OpenUrl { url }
+                    } if url == crate::accounts_db::DEFAULT_MANAGER_URL
+                )
+        }));
         let mut legacy = menu.clone();
         legacy.id = LEGACY_CLASSIC_CONTEXT_MENU_ID.into();
         assert!(legacy.is_builtin());
@@ -750,10 +774,50 @@ mod tests {
                     "Open Dashboard",
                     ContextMenuAction::OpenDashboard,
                 ),
+                ContextMenuItem::action(
+                    "manage-accounts",
+                    "Manage accounts",
+                    ContextMenuAction::OpenUrl {
+                        url: crate::accounts_db::DEFAULT_MANAGER_URL.into(),
+                    },
+                ),
                 ContextMenuItem::separator("dashboard-separator"),
                 ContextMenuItem::action("exit", "Exit", ContextMenuAction::Exit),
             ]
         );
+    }
+
+    #[test]
+    fn builtin_menus_rewrite_existing_files_with_the_manage_accounts_item() {
+        let directory = context_menus_directory();
+        std::fs::create_dir_all(&directory).unwrap();
+        // A menu file written by an older version, without the new item.
+        let mut old = dashboard_v2_context_menu();
+        old.items.retain(|item| item.id != "manage-accounts");
+        let path = directory.join(format!("{DASHBOARD_V2_CONTEXT_MENU_ID}.json"));
+        crate::app_settings::write_json_atomic(&path, &old).unwrap();
+        let classic_path = directory.join(format!("{CLASSIC_CONTEXT_MENU_ID}.json"));
+        let mut old_classic = classic_context_menu();
+        old_classic
+            .items
+            .retain(|item| item.id != "manage-accounts");
+        crate::app_settings::write_json_atomic(&classic_path, &old_classic).unwrap();
+
+        ensure_builtin_context_menus().unwrap();
+        for path in [path, classic_path] {
+            let menu = load_context_menu(&path).unwrap();
+            assert!(
+                menu.items.iter().any(|item| item.id == "manage-accounts"
+                    && item.kind
+                        == ContextMenuItemKind::Action {
+                            action: ContextMenuAction::OpenUrl {
+                                url: crate::accounts_db::DEFAULT_MANAGER_URL.into()
+                            }
+                        }),
+                "{}",
+                path.display()
+            );
+        }
     }
 
     #[test]
