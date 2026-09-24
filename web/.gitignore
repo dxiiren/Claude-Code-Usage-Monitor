@@ -4,3 +4,4 @@ build/
 server.log
 test-results/
 playwright-report/
+build-e2e/

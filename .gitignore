@@ -39,6 +39,7 @@ test_bin/
 # Account Manager web app (web/): dependencies and build output
 /web/node_modules/
 /web/build/
+/web/build-e2e/
 /web/.svelte-kit/
 /web/test-results/
 /web/playwright-report/

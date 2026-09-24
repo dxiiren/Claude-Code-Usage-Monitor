@@ -26,7 +26,7 @@ export default defineConfig({
 	use: { baseURL: `http://127.0.0.1:${PORT}`, trace: 'retain-on-failure' },
 	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 	webServer: {
-		command: 'node build/index.js',
+		command: 'node build-e2e/index.js',
 		url: `http://127.0.0.1:${PORT}/api/accounts`,
 		reuseExistingServer: false,
 		timeout: 30_000,

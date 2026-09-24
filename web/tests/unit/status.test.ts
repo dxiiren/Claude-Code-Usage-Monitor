@@ -73,7 +73,8 @@ describe('AuthStatusCache', () => {
 				return answer;
 			},
 			ttl,
-			() => t
+			() => t,
+			() => true
 		);
 		return {
 			cache,
@@ -121,9 +122,25 @@ describe('AuthStatusCache', () => {
 	});
 
 	it('a failing CLI yields null (unknown), not "logged out"', async () => {
-		const cache = new AuthStatusCache(async () => {
-			throw new Error('spawn failed');
-		});
+		const cache = new AuthStatusCache(
+			async () => {
+				throw new Error('spawn failed');
+			},
+			60_000,
+			Date.now,
+			() => true
+		);
 		expect(await cache.get('A')).toBeNull();
+	});
+
+	it('a missing folder is "logged out" without running the CLI (the CLI would create the folder)', async () => {
+		const calls: string[] = [];
+		const cache = new AuthStatusCache(async (dir) => {
+			calls.push(dir);
+			return IN;
+		});
+		const missing = 'C:\\definitely-not-here\\.claude-ghost';
+		expect(await cache.get(missing)).toEqual({ loggedIn: false, email: null, plan: null });
+		expect(calls).toEqual([]);
 	});
 });

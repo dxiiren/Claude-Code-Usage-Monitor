@@ -78,7 +78,7 @@
 		<div class="attention" role="alert" data-testid="needs-login">
 			<strong>{needing.length} {needing.length === 1 ? 'account needs' : 'accounts need'} login:</strong>
 			{#each needing as a, i (a.id)}
-				{#if i > 0}, {/if}<a href="/?relogin={encodeURIComponent(a.id)}">{a.name}</a>
+				{#if i > 0}{', '}{/if}<a href="/?relogin={encodeURIComponent(a.id)}">{a.name}</a>
 			{/each}
 		</div>
 	{/if}

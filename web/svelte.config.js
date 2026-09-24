@@ -6,7 +6,8 @@ export default {
 	preprocess: vitePreprocess(),
 	compilerOptions: { runes: true },
 	kit: {
-		adapter: adapter({ out: 'build' })
+		// e2e builds go to build-e2e/ (scripts/build-e2e.mjs) so tests never rewrite the live build/.
+		adapter: adapter({ out: process.env.ACCTMGR_BUILD_OUT || 'build' })
 		// Origin/Host are enforced for every request in src/hooks.server.ts.
 	}
 };

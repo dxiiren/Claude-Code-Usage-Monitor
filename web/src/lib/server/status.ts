@@ -1,6 +1,7 @@
 // Per-account login status, from two sources:
 //  1. the widget's usage-cache.json `error` for that account (serde snake_case of src/poller.rs PollError)
 //  2. `claude auth status` for that account's folder (cached, so page polling does not spawn the CLI each time)
+import fs from 'node:fs';
 
 export type LoginState = 'ok' | 'expired' | 'logged_out' | 'error';
 
@@ -80,7 +81,8 @@ export class AuthStatusCache {
 	constructor(
 		private fetcher: (configDir: string) => Promise<AuthSnapshot | null>,
 		private ttlMs = 60_000,
-		private now: () => number = Date.now
+		private now: () => number = Date.now,
+		private folderExists: (dir: string) => boolean = fs.existsSync
 	) {}
 
 	private refresh(key: string, e: Entry): Promise<AuthSnapshot | null> {
@@ -102,6 +104,12 @@ export class AuthStatusCache {
 	 * once it is older than the TTL, one background refresh starts (concurrent calls share it).
 	 */
 	async get(configDir: string): Promise<AuthSnapshot | null> {
+		// `claude auth status` CREATES the config folder (.claude.json, backups\) when it is
+		// missing, so a page load would write to disk. No folder = no login; don't ask the CLI.
+		if (!this.folderExists(configDir)) {
+			this.entries.delete(configDir);
+			return { loggedIn: false, email: null, plan: null };
+		}
 		let e = this.entries.get(configDir);
 		if (!e) {
 			e = { value: null, at: 0, pending: null };

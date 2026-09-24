@@ -12,7 +12,7 @@
     "start": "node start.js",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
-    "test:e2e": "npm run build && playwright test",
+    "test:e2e": "node scripts/build-e2e.mjs && playwright test",
     "test:all": "npm run test && npm run test:e2e",
     "prepare": "svelte-kit sync || echo \"\""
   },
