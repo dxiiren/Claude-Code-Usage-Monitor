@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
+import { sweepStale } from './tests/tmp-cleanup';
 
 // E2E runs the BUILT server on its own port against a throwaway APPDATA / USERPROFILE / TEMP,
 // with fake Claude + Codex CLIs and no Edge, so it never touches the real accounts.db, settings.json,
@@ -9,6 +10,7 @@ import { defineConfig, devices } from '@playwright/test';
 // inherit it through the environment.
 const PORT = 47391;
 if (!process.env.ACCTMGR_E2E_ROOT) {
+	sweepStale('acctmgr-e2e-'); // leftovers of runs that died before their teardown
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acctmgr-e2e-'));
 	for (const d of ['home', 'appdata', 'localappdata', 'tmp']) fs.mkdirSync(path.join(root, d), { recursive: true });
 	process.env.ACCTMGR_E2E_ROOT = root;
@@ -17,6 +19,8 @@ const root = process.env.ACCTMGR_E2E_ROOT;
 process.env.ACCTMGR_E2E_PORT = String(PORT);
 
 export default defineConfig({
+	// removes this run's temp folder after the web server has stopped
+	globalTeardown: './tests/e2e-teardown.ts',
 	testDir: 'tests/e2e',
 	fullyParallel: false,
 	workers: 1,
