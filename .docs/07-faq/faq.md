@@ -1,0 +1,28 @@
+# FAQ
+
+**Does this use SQLite everywhere?**
+Yes. PC: `%APPDATA%\ClaudeCodeUsageMonitor\accounts.db`. Server: `/data/accounts.db` in the Docker
+volume. The Claude logins themselves are files in each account's config folder.
+
+**Why does the local version not run in Docker?**
+It opens the Edge sign-in window and drives the Windows widget; a Linux container cannot. Docker is
+for servers.
+
+**How fresh are the numbers?**
+Server: every `ACCTMGR_POLL_SECONDS` (120 recommended). PC widget: `just widget-poll` minutes (5
+recommended). Pages refresh every 15 s; countdowns tick every second.
+
+**Can it poll every 10 seconds?**
+Not sensibly: the usage endpoint rate-limits, and a throttled account shows no numbers at all.
+
+**Is a login on one server valid on another?**
+No. Each server (and each PC) keeps its own logins; sign in once per place, or let PCs follow one
+server with `just remote`.
+
+**Where are tokens stored, and who can see them?**
+Only in the account's config folder (PC or server volume). No page, API or log returns them; widget
+API tokens are stored as SHA-256 hashes and shown once at creation.
+
+**Is this allowed by Anthropic's terms?**
+Logins go through the official Claude Code CLI and usage is only read, as the upstream widget does.
+Using subscription tokens to run other tools against Claude is a different matter and not done here.
