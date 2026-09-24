@@ -11,6 +11,7 @@ export interface ProfileAccount {
 	id: string;
 	name: string;
 	config_dir: string;
+	provider?: 'claude' | 'codex';
 }
 
 /** Atomic write, UTF-8 WITHOUT BOM (the app's JSON parser rejects a BOM). */
@@ -51,7 +52,12 @@ export function usedClaudeIds(): string[] {
 	return Array.isArray(used) ? used.filter((x): x is string => typeof x === 'string') : [];
 }
 
-export function writeSettings(accounts: ProfileAccount[]): void {
+/**
+ * `enableCodex`: an enabled Codex account exists in accounts.db. The widget polls DB Codex accounts
+ * only while `show_codex` is true, so it is switched on then; it is never switched off here (the
+ * user may show their own Codex install).
+ */
+export function writeSettings(accounts: ProfileAccount[], opts: { enableCodex?: boolean } = {}): void {
 	const hadFile = fs.existsSync(SETTINGS_FILE);
 	const existing = hadFile ? readJson(SETTINGS_FILE) : {};
 	if (hadFile && existing === null) {
@@ -83,5 +89,6 @@ export function writeSettings(accounts: ProfileAccount[]): void {
 	s.active_theme_path = THEME_FILE;
 	s.custom_theme_enabled = true;
 	s.show_claude_code = true;
+	if (opts.enableCodex) s.show_codex = true;
 	writeJson(SETTINGS_FILE, s);
 }

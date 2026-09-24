@@ -11,7 +11,7 @@ import { IS_WINDOWS, SERVER } from './paths';
 
 const env = process.env;
 /** Our own temp prefix (the PowerShell kit uses a different one), so the startup sweep only touches ours. */
-const TMP_PREFIX = 'claude-acctmgr-login-';
+export const TMP_PREFIX = 'claude-acctmgr-login-';
 const URL_WAIT_MS = 30_000;
 const CODE_WAIT_MS = 60_000;
 const SESSION_TTL_MS = 15 * 60_000;
@@ -127,7 +127,7 @@ function authStatusRaw(configDir: string): Promise<AuthStatus | null> {
 
 // ---------- process cleanup ----------
 
-function killTree(pid: number | undefined): void {
+export function killTree(pid: number | undefined): void {
 	if (!pid) return;
 	if (!IS_WINDOWS) {
 		try {
@@ -145,7 +145,7 @@ function killTree(pid: number | undefined): void {
 }
 
 /** Kill every msedge.exe whose command line contains `match` (the throwaway profile dir). */
-function killEdgeMatching(match: string): Promise<void> {
+export function killEdgeMatching(match: string): Promise<void> {
 	if (SERVER || !IS_WINDOWS) return Promise.resolve(); // no Edge is ever opened there
 	return new Promise((resolve) => {
 		execFile(
@@ -164,7 +164,7 @@ function killEdgeMatching(match: string): Promise<void> {
 	});
 }
 
-async function removeDir(dir: string): Promise<void> {
+export async function removeDir(dir: string): Promise<void> {
 	for (let i = 0; i < 5; i++) {
 		try {
 			fs.rmSync(dir, { recursive: true, force: true });

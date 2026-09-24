@@ -14,7 +14,13 @@ curl -s http://127.0.0.1:47291/healthz   # -> ok
 ```
 
 The container refuses to start without `ACCTMGR_ADMIN_PASSWORD`. Data (accounts.db, per-account
-Claude logins, session secret) lives in the `claude-usage-data` volume.
+Claude and Codex logins, session secret) lives in the `claude-usage-data` volume. The image carries
+both CLIs, pinned by `CLAUDE_CODE_VERSION` and `CODEX_VERSION`.
+
+**Codex accounts on a server:** after signing in, the browser ends on a
+`http://localhost:1455/auth/callback?...` page that does not load. Copy that address into the page;
+the server replays it to the Codex CLI waiting inside the container (only that host, port and path
+are accepted).
 
 ## 2. Pick how people reach it
 

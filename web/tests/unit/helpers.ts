@@ -18,12 +18,15 @@ export function isolateHome(): { root: string; home: string; appData: string; ap
 	process.env.WIDGET_EXE = path.join(root, 'no-widget.exe');
 	// Never spawn the real Claude CLI or Edge from unit tests.
 	process.env.CLAUDE_BIN = path.resolve(__dirname, '../fixtures/fake-claude.cmd');
+	// ...nor the real Codex CLI (it would open the default browser).
+	process.env.CODEX_BIN = FAKE_CODEX;
 	process.env.EDGE_EXE = 'none';
 	return { root, home, appData, appDir: path.join(appData, 'ClaudeCodeUsageMonitor') };
 }
 
 /** Fake CLI for this platform: the .cmd shim on Windows, the POSIX shim elsewhere. */
 export const FAKE_CLAUDE = path.resolve(__dirname, '../fixtures', process.platform === 'win32' ? 'fake-claude.cmd' : 'fake-claude.sh');
+export const FAKE_CODEX = path.resolve(__dirname, '../fixtures', process.platform === 'win32' ? 'fake-codex.cmd' : 'fake-codex.sh');
 
 /**
  * Server mode (ACCTMGR_MODE=server) against a fresh temp data dir, set BEFORE the server modules
@@ -39,6 +42,7 @@ export function isolateServer(extra: Record<string, string> = {}): { root: strin
 		ACCTMGR_ADMIN_PASSWORD: 'correct horse battery',
 		ACCTMGR_PUBLIC_ORIGIN: 'https://claude.example.com',
 		CLAUDE_BIN: FAKE_CLAUDE,
+		CODEX_BIN: FAKE_CODEX,
 		EDGE_EXE: 'none',
 		...extra
 	});

@@ -1,6 +1,7 @@
 // Server mode: account_usage rows (the server's own poll results) + the one Poller instance.
 import { database, listAccounts, type Account } from './db';
 import { refreshTokenViaCli } from './claude';
+import { refreshCodexTokenViaCli } from './codex';
 import { Poller, defaultUrls, type PollResult, type Usage } from './poller';
 import type { AccountUsage, UsageSnapshot } from './usage';
 
@@ -87,16 +88,22 @@ export function getPoller(): Poller {
 			targets: () =>
 				listAccounts()
 					.filter((a) => a.enabled)
-					.map((a) => ({ id: a.id, configDir: a.config_dir })),
+					.map((a) => ({ id: a.id, configDir: a.config_dir, provider: a.provider })),
 			save: saveResult
 		},
-		{ fetch: globalThis.fetch, refresh: (dir) => refreshTokenViaCli(dir), nowMs: Date.now, ...defaultUrls() },
+		{
+			fetch: globalThis.fetch,
+			refresh: (dir) => refreshTokenViaCli(dir),
+			refreshCodex: (dir) => refreshCodexTokenViaCli(dir),
+			nowMs: Date.now,
+			...defaultUrls()
+		},
 		interval
 	);
 	return poller;
 }
 
 /** Fire-and-forget poll of one account (after login); errors land in the row, never thrown. */
-export function pollAccountSoon(a: Pick<Account, 'id' | 'config_dir'>): Promise<void> {
-	return getPoller().pollOne({ id: a.id, configDir: a.config_dir }, true);
+export function pollAccountSoon(a: Pick<Account, 'id' | 'config_dir'> & { provider?: Account['provider'] }): Promise<void> {
+	return getPoller().pollOne({ id: a.id, configDir: a.config_dir, provider: a.provider ?? 'claude' }, true);
 }

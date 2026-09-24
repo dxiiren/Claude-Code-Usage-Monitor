@@ -53,6 +53,7 @@ export default defineConfig({
 				ACCTMGR_PUBLIC_ORIGIN: ORIGIN,
 				ACCTMGR_USAGE_URL: `http://127.0.0.1:${USAGE_PORT}/api/oauth/usage`,
 				ACCTMGR_MESSAGES_URL: `http://127.0.0.1:${USAGE_PORT}/v1/messages`,
+				ACCTMGR_CODEX_USAGE_URL: `http://127.0.0.1:${USAGE_PORT}/backend-api/wham/usage`,
 				ACCTMGR_POLL_SECONDS: '300',
 				HOST: '127.0.0.1',
 				PORT: String(PORT),
@@ -60,6 +61,7 @@ export default defineConfig({
 				TMP: path.join(root, 'tmp'),
 				TMPDIR: path.join(root, 'tmp'),
 				CLAUDE_BIN: path.resolve('tests/fixtures', process.platform === 'win32' ? 'fake-claude.cmd' : 'fake-claude.sh'),
+				CODEX_BIN: path.resolve('tests/fixtures', process.platform === 'win32' ? 'fake-codex.cmd' : 'fake-codex.sh'),
 				EDGE_EXE: 'none'
 			}
 		}

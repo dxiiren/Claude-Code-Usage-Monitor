@@ -9,7 +9,8 @@ services:
       context: ../web
       args:
         CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-2.1.273}
-    image: claude-usage:${CLAUDE_CODE_VERSION:-2.1.273}
+        CODEX_VERSION: ${CODEX_VERSION:-0.142.5}
+    image: claude-usage:${CLAUDE_CODE_VERSION:-2.1.273}-codex${CODEX_VERSION:-0.142.5}
     container_name: claude-usage
     restart: unless-stopped
     environment:

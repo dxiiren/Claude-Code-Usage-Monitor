@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
-import { APP_DIR, DB_FILE, MANAGER_URL, SERVER, configDirFor, isDeletableConfigDir, pathKey } from './paths';
+import { APP_DIR, DB_FILE, MANAGER_URL, PROVIDERS, SERVER, configDirFor, isDeletableConfigDir, pathKey, type Provider } from './paths';
 import { usedClaudeIds, writeSettings, writeTheme } from './widgetFiles';
 import { CARD_THEMES, type CardTheme } from './theme';
 
@@ -16,7 +16,14 @@ export interface Account {
 	sort_order: number;
 	created_at: string;
 	updated_at: string;
+	/** schema 2: which CLI owns the login ('claude' | 'codex'). */
+	provider: Provider;
 }
+
+/** meta.schema this app writes: 2 = accounts.provider exists (contract, "Codex accounts"). */
+export const SCHEMA_VERSION = '2';
+/** Stored as `email` when a Codex login carries no id_token email (contract: "ChatGPT account"). */
+export const CODEX_NO_EMAIL = 'ChatGPT account';
 
 export class UserError extends Error {
 	constructor(
@@ -76,26 +83,37 @@ CREATE TABLE IF NOT EXISTS accounts (
   enabled     INTEGER NOT NULL DEFAULT 1,
   sort_order  INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL,
-  updated_at  TEXT NOT NULL
+  updated_at  TEXT NOT NULL,
+  provider    TEXT NOT NULL DEFAULT 'claude'
 );
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );`);
 	if (SERVER) d.exec(SERVER_SCHEMA);
+	// Schema 1 DB (no provider column): add it; every existing row is Claude (the DEFAULT).
+	const cols = (d.prepare('PRAGMA table_info(accounts)').all() as unknown as { name: string }[]).map((c) => c.name);
+	const migrated = !cols.includes('provider');
+	if (migrated) d.exec("ALTER TABLE accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'");
 	const ins = d.prepare('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)');
 	ins.run('revision', '0');
-	ins.run('schema', '1');
+	// schema 2 tells the widget that zero codex rows means zero Codex accounts.
+	d.prepare("INSERT INTO meta (key, value) VALUES ('schema', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(SCHEMA_VERSION);
 	const themeRowAdded = ins.run('card_theme', 'auto').changes === 1;
 	d.prepare("INSERT INTO meta (key, value) VALUES ('manager_url', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
 		MANAGER_URL
 	);
 	db = d;
-	if (SERVER) return d; // no widget files on a server
+	if (SERVER) {
+		// The schema change counts as a write for remote widgets too.
+		if (migrated) d.prepare("UPDATE meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'revision'").run();
+		return d; // no widget files on a server
+	}
 	// Deliberately NO import from kit/accounts.json or settings.json: a new DB starts empty.
 	if (fresh) syncWidgetFiles();
-	// Existing DB from before card_theme existed: apply the default once, as a normal write.
-	else if (themeRowAdded) write(() => undefined);
+	// Existing DB from before card_theme existed, or just migrated to schema 2: one normal write, so
+	// the widget sees a new revision and reloads (its Codex profiles now come from this DB).
+	else if (themeRowAdded || migrated) write(() => undefined);
 	return d;
 }
 
@@ -118,9 +136,14 @@ export function getMeta(): Record<string, string> {
 function syncWidgetFiles(): void {
 	if (SERVER) return; // no settings.json / theme on a server: remote widgets read /api/v1/widget
 	const rows = listAccounts().filter((a) => a.enabled);
-	const list = rows.map((a) => ({ id: a.id, name: a.name, config_dir: a.config_dir }));
+	const list = rows.map((a) => ({ id: a.id, name: a.name, config_dir: a.config_dir, provider: a.provider }));
 	writeTheme(list, getCardTheme());
-	writeSettings(list);
+	// settings.json keeps the Claude profiles only (the compat layer for the official widget). Codex
+	// rows reach the widget through accounts.db itself; the user's own Codex profile is left alone.
+	writeSettings(
+		list.filter((a) => a.provider === 'claude'),
+		{ enableCodex: list.some((a) => a.provider === 'codex') }
+	);
 }
 
 /** Every write: one transaction + meta.revision += 1, then regenerate theme + settings.json. */
@@ -169,16 +192,19 @@ function newId(d: DatabaseSync, name: string): string {
 	if (base === 'default') base = 'account';
 	const taken = new Set([
 		...(d.prepare('SELECT id FROM accounts').all() as unknown as { id: string }[]).map((r) => r.id),
-		...(SERVER ? serverUsedIds(d) : usedClaudeIds()),
+		...usedIds(d),
+		...(SERVER ? [] : usedClaudeIds()),
 		'default'
 	]);
+	// Ids are unique across providers: free only if no provider's folder for it exists.
+	const onDisk = (id: string) => PROVIDERS.some((p) => fs.existsSync(configDirFor(id, p)));
 	let id = base;
-	for (let i = 2; taken.has(id) || fs.existsSync(configDirFor(id)); i++) id = `${base}_${i}`;
+	for (let i = 2; taken.has(id) || onDisk(id); i++) id = `${base}_${i}`;
 	return id;
 }
 
-/** Server mode: ids ever handed out (meta.used_ids, JSON array), so an id is never reused. */
-function serverUsedIds(d: DatabaseSync): string[] {
+/** Ids ever handed out (meta.used_ids, JSON array), so an id is never reused by either provider. */
+function usedIds(d: DatabaseSync): string[] {
 	const v = (d.prepare("SELECT value FROM meta WHERE key = 'used_ids'").get() as { value: string } | undefined)?.value;
 	try {
 		const a = JSON.parse(v ?? '[]');
@@ -188,20 +214,26 @@ function serverUsedIds(d: DatabaseSync): string[] {
 	}
 }
 
-export function createAccount(rawName: unknown): Account {
+export function validateProvider(raw: unknown): Provider {
+	if (raw === undefined || raw === null || raw === '') return 'claude';
+	if (raw === 'claude' || raw === 'codex') return raw;
+	throw new UserError('Provider must be claude or codex.');
+}
+
+export function createAccount(rawName: unknown, rawProvider: unknown = 'claude'): Account {
 	const name = validateName(rawName);
+	const provider = validateProvider(rawProvider);
 	return write((d) => {
 		assertNameFree(d, name);
 		const id = newId(d, name);
 		const t = now();
 		const max = (d.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM accounts').get() as { m: number }).m;
 		d.prepare(
-			'INSERT INTO accounts (id, name, config_dir, email, plan, enabled, sort_order, created_at, updated_at) VALUES (?, ?, ?, NULL, NULL, 1, ?, ?, ?)'
-		).run(id, name, configDirFor(id), max + 1, t, t);
-		if (SERVER)
-			d.prepare("INSERT INTO meta (key, value) VALUES ('used_ids', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
-				JSON.stringify([...new Set([...serverUsedIds(d), id])])
-			);
+			'INSERT INTO accounts (id, name, config_dir, email, plan, enabled, sort_order, created_at, updated_at, provider) VALUES (?, ?, ?, NULL, NULL, 1, ?, ?, ?, ?)'
+		).run(id, name, configDirFor(id, provider), max + 1, t, t, provider);
+		d.prepare("INSERT INTO meta (key, value) VALUES ('used_ids', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+			JSON.stringify([...new Set([...usedIds(d), id])])
+		);
 		return getAccount(id)!;
 	});
 }
@@ -252,7 +284,12 @@ export function setAuth(id: string, email: string | null, plan: string | null): 
 
 /** Other rows already logged in as this email (the "browser was already signed in" trap). */
 export function accountsWithEmail(email: string, exceptId: string): Account[] {
-	return listAccounts().filter((a) => a.id !== exceptId && a.email && a.email.toLowerCase() === email.toLowerCase());
+	if (email === CODEX_NO_EMAIL) return []; // a placeholder, not an identity
+	// Same provider only: one person with both a Claude and a Codex login is normal, not the trap.
+	const provider = getAccount(exceptId)?.provider;
+	return listAccounts().filter(
+		(a) => a.id !== exceptId && (!provider || a.provider === provider) && a.email && a.email.toLowerCase() === email.toLowerCase()
+	);
 }
 
 export interface RemoveResult {
@@ -271,7 +308,7 @@ export function removeAccount(id: string): RemoveResult {
 	const sharedWith = listAccounts().some((o) => pathKey(o.config_dir) === pathKey(folder));
 	if (sharedWith) return { folder, folderDeleted: false, folderNote: 'Another account still uses this folder, so it was kept.' };
 	// Server: only `<data>/accounts/<id>` of THIS row, never another folder the row might point at.
-	if (SERVER && path.resolve(folder) !== path.resolve(configDirFor(a.id)))
+	if (SERVER && path.resolve(folder) !== path.resolve(configDirFor(a.id, a.provider)))
 		return { folder, folderDeleted: false, folderNote: "The folder is not this account's own data folder, so it was left alone." };
 	if (!isDeletableConfigDir(folder))
 		return {
@@ -279,7 +316,7 @@ export function removeAccount(id: string): RemoveResult {
 			folderDeleted: false,
 			folderNote: SERVER
 				? 'The folder is not under the data volume accounts folder, so it was left alone.'
-				: 'The folder is not a %USERPROFILE%\\.claude-* folder, so it was left alone.'
+				: `The folder is not a %USERPROFILE%\\.${a.provider === 'codex' ? 'codex' : 'claude'}-* folder, so it was left alone.`
 		};
 	if (!fs.existsSync(folder)) return { folder, folderDeleted: true, folderNote: 'The folder did not exist.' };
 	try {

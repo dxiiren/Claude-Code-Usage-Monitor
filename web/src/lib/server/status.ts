@@ -17,7 +17,13 @@ export type PollErrorKind = 'expired' | 'logged_out' | 'transient';
  * "token_expired" | "auth_required" | "no_credentials" | "request_failed" | "network_error" |
  * "unexpected_response" | { "http_status": 401 }. Same split as PollError::is_auth / is_transient.
  */
-export function classifyPollError(raw: unknown): { kind: PollErrorKind; message: string } | null {
+export function classifyPollError(raw: unknown, provider: 'claude' | 'codex' = 'claude'): { kind: PollErrorKind; message: string } | null {
+	const r = classifyClaude(raw);
+	// Same classification for Codex; only the service named in the message differs.
+	return r && provider === 'codex' ? { ...r, message: r.message.replace(/\bClaude\b/g, 'ChatGPT') } : r;
+}
+
+function classifyClaude(raw: unknown): { kind: PollErrorKind; message: string } | null {
 	if (raw === null || raw === undefined) return null;
 	if (typeof raw === 'string') {
 		switch (raw) {
@@ -56,11 +62,18 @@ export interface AuthSnapshot {
  * even if the CLI still lists a login); then a missing login; then transient poll errors; else ok.
  * `auth === null` means auth status is unknown (not fetched yet / CLI unavailable) and is ignored.
  */
-export function loginStatus(opts: { pollError: unknown; auth: AuthSnapshot | null; everLoggedIn: boolean }): LoginStatus {
-	const p = classifyPollError(opts.pollError);
+export function loginStatus(opts: {
+	pollError: unknown;
+	auth: AuthSnapshot | null;
+	everLoggedIn: boolean;
+	provider?: 'claude' | 'codex';
+}): LoginStatus {
+	const codex = opts.provider === 'codex';
+	const p = classifyPollError(opts.pollError, codex ? 'codex' : 'claude');
 	if (p?.kind === 'expired') return { state: 'expired', message: p.message };
 	if (p?.kind === 'logged_out') return { state: 'logged_out', message: p.message };
-	if (opts.auth && !opts.auth.loggedIn) return { state: 'logged_out', message: 'Claude Code says this folder is not logged in.' };
+	if (opts.auth && !opts.auth.loggedIn)
+		return { state: 'logged_out', message: codex ? 'Codex says this folder is not logged in.' : 'Claude Code says this folder is not logged in.' };
 	if (!opts.auth && !opts.everLoggedIn) return { state: 'logged_out', message: 'Not logged in yet.' };
 	if (p?.kind === 'transient') return { state: 'error', message: p.message };
 	return { state: 'ok', message: '' };

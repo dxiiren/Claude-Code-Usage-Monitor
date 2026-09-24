@@ -11,6 +11,7 @@
 	let snap = $state<Snapshot>(data.snap);
 	let now = $state(Date.now());
 	let newName = $state('');
+	let newProvider = $state<'claude' | 'codex'>('claude');
 	let starting = $state(false);
 	let addError = $state('');
 	let login = $state<LoginInfo | null>(null);
@@ -53,7 +54,7 @@
 		try {
 			const r = await post<{ account: { id: string; name: string }; login: Omit<LoginInfo, 'accountId' | 'accountName'> }>(
 				'/api/accounts',
-				{ name: newName }
+				{ name: newName, provider: newProvider }
 			);
 			login = { accountId: r.account.id, accountName: r.account.name, ...r.login };
 			newName = '';
@@ -165,6 +166,11 @@
 	<h1>Accounts</h1>
 	<form onsubmit={addAccount} class="addform">
 		<label for="new-name">Add an account</label>
+		<fieldset class="provider">
+			<legend class="sr">Provider</legend>
+			<label><input type="radio" name="provider" value="claude" bind:group={newProvider} disabled={starting} /> Claude</label>
+			<label><input type="radio" name="provider" value="codex" bind:group={newProvider} disabled={starting} /> Codex</label>
+		</fieldset>
 		<div class="line">
 			<input
 				id="new-name"
@@ -178,7 +184,13 @@
 				{starting ? 'Starting...' : 'Start'}
 			</button>
 		</div>
-		{#if server}
+		{#if newProvider === 'codex'}
+			{#if server}
+				<p class="hint">Start gives you a ChatGPT sign-in link for your own browser. Then you paste the address it ends on.</p>
+			{:else}
+				<p class="hint">Start opens a private Edge window for the ChatGPT sign-in. It finishes by itself.</p>
+			{/if}
+		{:else if server}
 			<p class="hint">Start gives you a sign-in link to open in your own browser. Then you paste the code here.</p>
 		{:else}
 			<p class="hint">Start opens a private Edge window for the login. Then you only paste the code.</p>
@@ -211,6 +223,7 @@
 					{:else}
 						<div class="who">
 							<span class="name">{a.name}</span>
+							{#if a.provider === 'codex'}<span class="ptag" data-testid="codex-tag">Codex</span>{/if}
 							{#if a.plan}<span class="plan">{a.plan}</span>{/if}
 							{#if a.status.state === 'expired'}<span class="badge" data-testid="status-badge">Expired &mdash; log in again</span>
 							{:else if a.status.state === 'logged_out' && a.email}<span class="badge" data-testid="status-badge">Not logged in</span>{/if}
@@ -312,7 +325,9 @@
 		<p>It disappears from the widget, and its folder is deleted:</p>
 		<p><code>{removeTarget.configDir}</code></p>
 		{#if server}
-			<p class="hint">That folder on the server holds this account's Claude Code login. Nothing else is touched.</p>
+			<p class="hint">That folder on the server holds this account's {removeTarget.provider === 'codex' ? 'Codex' : 'Claude Code'} login. Nothing else is touched.</p>
+		{:else if removeTarget.provider === 'codex'}
+			<p class="hint">That folder holds this account's Codex login and history. Your main <code>.codex</code> folder is never touched.</p>
 		{:else}
 			<p class="hint">That folder holds this account's Claude Code login and history. Your main <code>.claude</code> folder is never touched.</p>
 		{/if}
@@ -427,6 +442,38 @@
 	.name {
 		font-weight: 600;
 		font-size: 1.05rem;
+	}
+	.provider {
+		display: flex;
+		gap: 1rem;
+		border: 0;
+		padding: 0;
+		margin: 0 0 0.4rem;
+	}
+	.provider label {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		font-weight: 400;
+		cursor: pointer;
+	}
+	.sr {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+	}
+	.ptag {
+		font-size: 0.7rem;
+		font-weight: 600;
+		letter-spacing: 0.03em;
+		border-radius: 4px;
+		padding: 0 0.4rem;
+		background: var(--codex-bg);
+		color: var(--codex-text);
+		border: 1px solid var(--codex-border);
 	}
 	.plan {
 		font-size: 0.75rem;

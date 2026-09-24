@@ -60,6 +60,10 @@
 		return soonest;
 	});
 
+	const hasCodex = $derived(snap.accounts.some((a) => a.provider === 'codex'));
+	const hasClaude = $derived(snap.accounts.some((a) => a.provider !== 'codex'));
+	const cardTitle = $derived(!hasCodex ? 'Claude usage' : hasClaude ? 'Claude & Codex usage' : 'Codex usage');
+
 	const updated = $derived(snap.usageUpdatedUnix ? new Date(snap.usageUpdatedUnix * 1000) : null);
 </script>
 
@@ -101,7 +105,7 @@
 
 	<div class="card">
 		<div class="cardhead">
-			<p class="title">Claude usage</p>
+			<p class="title">{cardTitle}</p>
 			<p class="updated" class:stale>
 				{#if updated}updated {updated.toLocaleTimeString()}{:else}{snap.mode === 'server' ? 'not polled yet' : 'no widget data yet'}{/if}
 				{#if stale}&middot; server unreachable{/if}
@@ -114,6 +118,7 @@
 				<li class:off={!a.enabled} class:blocked class:login class:best={best?.id === a.id} data-account={a.id}>
 					<div class="who">
 						<span class="name">{a.name}</span>
+						{#if a.provider === 'codex'}<span class="ptag" data-testid="codex-tag">Codex</span>{/if}
 						{#if login}<span class="pill" data-testid="status-badge">{badgeText(a.status.state)}</span>{/if}
 						{#if blocked}<span class="pill">blocked</span>{/if}
 						{#if !a.enabled}<span class="pill dim">hidden on widget</span>{/if}
@@ -263,6 +268,16 @@
 		border-radius: 999px;
 		background: var(--card-red);
 		color: var(--card-pill-text);
+	}
+	.ptag {
+		font-size: 0.65rem;
+		font-weight: 600;
+		letter-spacing: 0.03em;
+		padding: 0 0.4rem;
+		border-radius: 4px;
+		background: var(--codex-bg);
+		color: var(--codex-text);
+		border: 1px solid var(--codex-border);
 	}
 	.pill.dim {
 		background: var(--card-track);

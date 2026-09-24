@@ -21,6 +21,10 @@
 	--err-border: #ff8182;
 	--ok-bg: #dafbe1;
 	--ok-border: #4ac26b;
+	/* the small "Codex" provider tag */
+	--codex-bg: #e3f6ee;
+	--codex-text: #0a5c42;
+	--codex-border: #8fd3b8;
 	/* the widget-style usage card */
 	--card-bg: #ffffff;
 	--card-border: #d1d9e0;
@@ -58,6 +62,9 @@
 		--err-border: #da3633;
 		--ok-bg: #12261a;
 		--ok-border: #238636;
+		--codex-bg: #0f2a22;
+		--codex-text: #6fdcb0;
+		--codex-border: #1d6b4f;
 		--card-bg: #0d1117;
 		--card-border: #30363d;
 		--card-text: #ffffff;
@@ -94,6 +101,9 @@
 	--err-border: #da3633;
 	--ok-bg: #12261a;
 	--ok-border: #238636;
+	--codex-bg: #0f2a22;
+	--codex-text: #6fdcb0;
+	--codex-border: #1d6b4f;
 	--card-bg: #0d1117;
 	--card-border: #30363d;
 	--card-text: #ffffff;

@@ -8,6 +8,8 @@ import type { WindowUsage } from './poller';
 export interface WidgetAccount {
 	id: string;
 	name: string;
+	/** Contract "Codex accounts": missing = claude (older servers). */
+	provider: 'claude' | 'codex';
 	email: string | null;
 	plan: string | null;
 	status: 'ok' | 'expired' | 'logged_out' | 'error';
@@ -16,7 +18,8 @@ export interface WidgetAccount {
 }
 
 export interface WidgetPayload {
-	schema: 1;
+	/** 2 = accounts carry `provider`; the widget then treats zero codex accounts as authoritative. */
+	schema: 2;
 	revision: number;
 	updated_unix: number;
 	manager_url: string;
@@ -30,12 +33,15 @@ const win = (w: Partial<WindowUsage> | undefined): WindowUsage => ({
 	resets_at_unix: typeof w?.resets_at_unix === 'number' ? w.resets_at_unix : null
 });
 
-/** Enabled accounts only, in sort_order. `auth` = the cached `claude auth status` per config dir. */
-export async function widgetPayload(auth: (configDir: string) => Promise<AuthSnapshot | null>): Promise<WidgetPayload> {
+/** Status lookup per account folder: the cached `claude auth status` / `codex login status`. */
+export type AuthLookup = (configDir: string, provider: 'claude' | 'codex') => Promise<AuthSnapshot | null>;
+
+/** Enabled accounts only, in sort_order. */
+export async function widgetPayload(auth: AuthLookup): Promise<WidgetPayload> {
 	const meta = getMeta();
 	const rows = readRows();
 	const accounts = listAccounts().filter((a) => a.enabled);
-	const auths = await Promise.all(accounts.map((a) => auth(a.config_dir)));
+	const auths = await Promise.all(accounts.map((a) => auth(a.config_dir, a.provider)));
 	let updated = 0;
 	const out = accounts.map((a, i): WidgetAccount => {
 		const r = rows.get(a.id);
@@ -46,11 +52,12 @@ export async function widgetPayload(auth: (configDir: string) => Promise<AuthSna
 		} catch {
 			pollError = 'request_failed';
 		}
-		const st = loginStatus({ pollError, auth: auths[i], everLoggedIn: !!a.email });
+		const st = loginStatus({ pollError, auth: auths[i], everLoggedIn: !!a.email, provider: a.provider });
 		const u = storedUsage(r);
 		return {
 			id: a.id,
 			name: a.name,
+			provider: a.provider === 'codex' ? 'codex' : 'claude',
 			email: a.email,
 			plan: a.plan,
 			status: st.state,
@@ -59,7 +66,7 @@ export async function widgetPayload(auth: (configDir: string) => Promise<AuthSna
 		};
 	});
 	return {
-		schema: 1,
+		schema: 2,
 		revision: Number(meta.revision ?? 0),
 		updated_unix: updated,
 		manager_url: meta.manager_url ?? '',
@@ -71,7 +78,7 @@ export async function widgetPayload(auth: (configDir: string) => Promise<AuthSna
 /** Bearer check + payload. 401 for a missing, unknown or revoked token. */
 export async function handleWidgetRequest(
 	authorization: string | null,
-	auth: (configDir: string) => Promise<AuthSnapshot | null>
+	auth: AuthLookup
 ): Promise<{ status: number; body: unknown }> {
 	if (!verifyBearer(authorization)) return { status: 401, body: { error: 'Missing or invalid API token.' } };
 	return { status: 200, body: await widgetPayload(auth) };

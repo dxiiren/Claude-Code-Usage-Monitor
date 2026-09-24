@@ -5,10 +5,13 @@
 		sessionId: string;
 		url: string;
 		edgeOpened: boolean;
+		/** Missing = claude (the code-paste flow). */
+		provider?: 'claude' | 'codex';
 	}
 </script>
 
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { post } from './format';
 
 	interface Props {
@@ -29,6 +32,73 @@
 	let plan = $state('');
 	let sameEmailAs = $state<string[]>([]);
 	let copied = $state(false);
+	let callbackUrl = $state('');
+	const codex = $derived(login.provider === 'codex');
+
+	type Result = { ok: boolean; error?: string; email: string; plan: string | null; sameEmailAs: string[] };
+	function finish(r: Result) {
+		email = r.email;
+		plan = r.plan ?? '';
+		sameEmailAs = r.sameEmailAs ?? [];
+		phase = 'done';
+	}
+
+	// Codex: the CLI finishes the sign-in on its own localhost:1455 callback (locally the isolated Edge
+	// window gets there by itself), so poll the session instead of waiting for a pasted code.
+	onMount(() => {
+		if (login.provider !== 'codex') return;
+		let stopped = false;
+		// A function, not an inline test: TS would keep the narrowing across the await below.
+		const over = () => stopped || phase === 'done' || phase === 'failed';
+		const tick = async () => {
+			if (over()) return;
+			try {
+				const res = await fetch(`/api/login/status?sessionId=${encodeURIComponent(login.sessionId)}`);
+				const r = await res.json();
+				if (over()) return;
+				if (r.state === 'done') {
+					finish({ ok: true, email: r.email, plan: r.plan, sameEmailAs: r.sameEmailAs });
+					onchanged();
+				} else if (r.state === 'failed' || r.state === 'gone' || r.state === 'cancelled') {
+					error = r.error || 'The Codex sign-in did not finish.';
+					phase = 'failed';
+					onchanged();
+				}
+			} catch {
+				/* server briefly unreachable: try again */
+			}
+		};
+		const t = setInterval(tick, 1500);
+		return () => {
+			stopped = true;
+			clearInterval(t);
+		};
+	});
+
+	async function sendCallback(e: SubmitEvent) {
+		e.preventDefault();
+		if (!callbackUrl.trim()) {
+			error = 'Paste the address from the browser first.';
+			return;
+		}
+		phase = 'connecting';
+		error = '';
+		try {
+			const r = await post<Result>('/api/login/callback', { sessionId: login.sessionId, url: callbackUrl.trim() });
+			if (!r.ok) {
+				// A wrong or old address: the CLI is still waiting, so let the user paste again.
+				error = r.error || 'Login failed.';
+				phase = 'waiting';
+				return;
+			}
+			finish(r);
+		} catch (err) {
+			error = (err as Error).message;
+			// 400 = the address was refused before anything reached the CLI, which is still waiting.
+			phase = (err as { status?: number }).status === 400 ? 'waiting' : 'failed';
+		}
+		onchanged();
+	}
 
 	async function connect(e: SubmitEvent) {
 		e.preventDefault();
@@ -79,7 +149,77 @@
 <section class="panel" aria-live="polite" data-testid="login-panel">
 	<h2>Log in "{login.accountName}"</h2>
 
-	{#if phase === 'waiting' || phase === 'connecting'}
+	{#if (phase === 'waiting' || phase === 'connecting') && codex}
+		{#if server}
+			<ol class="steps">
+				<li>
+					Open the ChatGPT sign-in page in your browser. Use a <strong>private window</strong> (or one signed in to
+					nothing), otherwise it may sign this account in as whoever is already signed in.
+					<div class="line link">
+						<a class="btn primary" href={login.url} target="_blank" rel="noopener noreferrer" data-testid="signin-link">Open sign-in page</a>
+						<button type="button" onclick={copyLink}>{copied ? 'Copied' : 'Copy link'}</button>
+					</div>
+				</li>
+				<li>Sign in as <strong>{login.accountName}</strong>. Your browser then lands on a <code>localhost:1455</code> page that does not load. That is expected.</li>
+				<li>Copy that page's full address from the address bar and paste it here.</li>
+			</ol>
+		{:else}
+			<ol class="steps">
+				<li>
+					{#if login.edgeOpened}
+						A private Edge window opened. It shares no sign-in with anything else.
+					{:else}
+						Edge was not found. Open the link below in a <strong>private window signed in to nothing</strong>.
+					{/if}
+				</li>
+				<li>Sign in to ChatGPT as <strong>{login.accountName}</strong>.</li>
+				<li>This page updates by itself when the sign-in finishes. Nothing to paste.</li>
+			</ol>
+			<p class="hint waiting" data-testid="codex-waiting">Waiting for the sign-in to finish...</p>
+		{/if}
+
+		{#snippet pasteForm()}
+			<form class="code" onsubmit={sendCallback}>
+				<label for="callback">Address from the browser</label>
+				<div class="line">
+					<input
+						id="callback"
+						bind:value={callbackUrl}
+						autocomplete="off"
+						spellcheck="false"
+						placeholder="http://localhost:1455/auth/callback?code=..."
+						disabled={phase === 'connecting'}
+					/>
+					<button class="primary" type="submit" disabled={phase === 'connecting'}>
+						{phase === 'connecting' ? 'Connecting...' : 'Connect'}
+					</button>
+				</div>
+				{#if phase === 'connecting'}<p class="hint">Codex is finishing the sign-in (up to 30 seconds).</p>{/if}
+				{#if error}<p class="err" role="alert">{error}</p>{/if}
+			</form>
+		{/snippet}
+
+		{#if server}
+			{@render pasteForm()}
+		{:else}
+			<details class="fallback">
+				<summary>Edge window didn't open, or the sign-in is stuck?</summary>
+				<p class="hint">
+					Open this link in a private window that is signed in to nothing. If the browser ends on a
+					<code>localhost:1455</code> page that does not load, paste that page's address below.
+				</p>
+				<div class="line">
+					<a class="btn" href={login.url} target="_blank" rel="noopener noreferrer">Open link</a>
+					<button type="button" onclick={copyLink}>{copied ? 'Copied' : 'Copy link'}</button>
+				</div>
+				{@render pasteForm()}
+			</details>
+		{/if}
+
+		<div class="actions">
+			<button type="button" onclick={cancel} disabled={phase === 'connecting'}>Cancel</button>
+		</div>
+	{:else if phase === 'waiting' || phase === 'connecting'}
 		{#if server}
 			<ol class="steps">
 				<li>
@@ -235,6 +375,15 @@
 	}
 	.fallback {
 		margin-top: 0.75rem;
+	}
+	.fallback .code {
+		margin-top: 0.6rem;
+	}
+	.waiting {
+		font-style: italic;
+	}
+	code {
+		overflow-wrap: anywhere;
 	}
 	.fallback summary {
 		cursor: pointer;

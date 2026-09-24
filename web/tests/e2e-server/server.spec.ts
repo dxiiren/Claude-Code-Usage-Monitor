@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
@@ -136,7 +137,7 @@ test('widget tokens: create shows it once, the API accepts it, revoke makes it 4
 	const ok = await widget.get('/api/v1/widget', { headers: { authorization: `Bearer ${widgetToken}` } });
 	expect(ok.status()).toBe(200);
 	const body = await ok.json();
-	expect(body).toMatchObject({ schema: 1, manager_url: ORIGIN, card_theme: 'auto' });
+	expect(body).toMatchObject({ schema: 2, manager_url: ORIGIN, card_theme: 'auto' });
 	expect(Object.keys(body).sort()).toEqual(['accounts', 'card_theme', 'manager_url', 'revision', 'schema', 'updated_unix']);
 	expect(body.updated_unix).toBeGreaterThan(0);
 	expect(body.accounts.map((a: { id: string }) => a.id)).toEqual(['alpha', 'beta']);
@@ -159,6 +160,83 @@ test('widget tokens: create shows it once, the API accepts it, revoke makes it 4
 	await expect(page.getByText('No tokens yet.')).toBeVisible();
 	expect((await widget.get('/api/v1/widget', { headers: { authorization: `Bearer ${widgetToken}` } })).status()).toBe(401);
 	await widget.dispose();
+});
+
+test('codex: sign-in link for the user\'s own browser, paste the localhost:1455 address, the server replays it', async ({ page }) => {
+	await signIn(page);
+	await page.getByLabel('Codex').check();
+	await expect(page.getByText('Then you paste the address it ends on.')).toBeVisible();
+	await page.getByLabel('Add an account').fill('gamma');
+	await page.getByRole('button', { name: 'Start', exact: true }).click();
+	const panel = page.getByTestId('login-panel');
+	const link = panel.getByTestId('signin-link');
+	await expect(link).toHaveText('Open sign-in page');
+	const href = (await link.getAttribute('href'))!;
+	expect(new URL(href).origin).toBe('https://auth.openai.com');
+	expect(new URL(href).searchParams.get('redirect_uri')).toBe('http://localhost:1455/auth/callback');
+	await expect(panel).toContainText('page that does not load. That is expected.');
+	await expect(panel).not.toContainText('Edge');
+	const state = new URL(href).searchParams.get('state');
+	const field = panel.getByLabel('Address from the browser');
+	// strict: wrong port, wrong path, foreign host are refused before anything is replayed
+	for (const bad of [
+		`http://localhost:1456/auth/callback?code=good&state=${state}`,
+		`http://localhost:1455/cancel?code=good&state=${state}`,
+		`http://attacker.example:1455/auth/callback?code=good&state=${state}`
+	]) {
+		await field.fill(bad);
+		await panel.getByRole('button', { name: 'Connect' }).click();
+		await expect(panel.getByRole('alert')).toContainText('starting with http://localhost:1455/auth/callback?');
+	}
+	// an address from another sign-in: the CLI says State mismatch and keeps waiting
+	await field.fill('http://localhost:1455/auth/callback?code=good&state=from-an-older-sign-in');
+	await panel.getByRole('button', { name: 'Connect' }).click();
+	await expect(panel.getByRole('alert')).toContainText('different or older sign-in');
+	await field.fill(`http://localhost:1455/auth/callback?code=good&scope=openid&state=${state}`);
+	await panel.getByRole('button', { name: 'Connect' }).click();
+	await expect(panel.getByTestId('login-ok')).toContainText('Logged in as gamma@example.com (plus)', { timeout: 20_000 });
+	await panel.getByRole('button', { name: 'Done' }).click();
+	expect(fs.existsSync(path.join(data, 'accounts', 'gamma', 'auth.json'))).toBe(true);
+	// the server polled the (fake) wham/usage endpoint right after the login
+	expect((await (await page.request.get(`${USAGE}/codex-calls`)).json()).calls).toBeGreaterThanOrEqual(1);
+	const row = page.locator('li.acc').filter({ hasText: 'gamma@example.com' });
+	await expect(row.getByTestId('codex-tag')).toHaveText('Codex');
+	await expect(row.getByText('7%')).toBeVisible();
+	await expect(row.getByText('33%')).toBeVisible();
+	await page.screenshot({ path: path.join(shots, 'accounts-server-codex.png'), fullPage: true });
+
+	// the widget API says which provider each account belongs to
+	const created = await page.request.post('/api/tokens', { headers: { origin: ORIGIN }, data: { name: 'codex-pc' } });
+	const { token } = await created.json();
+	const w = await page.request.get('/api/v1/widget', { headers: { authorization: `Bearer ${token}` } });
+	const body = await w.json();
+	expect(body.accounts.map((a: { id: string; provider: string }) => [a.id, a.provider])).toEqual([
+		['alpha', 'claude'],
+		['beta', 'claude'],
+		['gamma', 'codex']
+	]);
+	expect(body.accounts[2]).toMatchObject({ email: 'gamma@example.com', plan: 'plus', status: 'ok', usage: { session: { percentage: 7 }, weekly: { percentage: 33 } } });
+	expect(JSON.stringify(body)).not.toMatch(/fake-codex|id_token|refresh/i);
+
+	await page.goto('/usage');
+	await expect(page.locator('li[data-account="gamma"]').getByTestId('codex-tag')).toBeVisible();
+	await expect(page.locator('li[data-account="gamma"]')).toContainText('7%');
+});
+
+test('codex: cancelling a server login stops the CLI (port 1455 free again)', async ({ page }) => {
+	const portOpen = () =>
+		new Promise<boolean>((r) => {
+			const s = net.connect(1455, '127.0.0.1', () => (s.destroy(), r(true)));
+			s.on('error', () => r(false));
+		});
+	await signIn(page);
+	await page.locator('li.acc').filter({ hasText: 'gamma@example.com' }).getByRole('button', { name: 'Re-login' }).click();
+	const panel = page.getByTestId('login-panel');
+	await expect(panel.getByTestId('signin-link')).toBeVisible();
+	expect(await portOpen()).toBe(true);
+	await panel.getByRole('button', { name: 'Cancel' }).click();
+	await expect(panel).toHaveCount(0);
+	await expect.poll(portOpen).toBe(false);
 });
 
 test('sign out ends the session', async ({ page, context }) => {
