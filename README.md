@@ -1,5 +1,20 @@
 # Claude Code Usage Monitor
 
+> **This fork adds a multi-account kit:** one card showing the 5-hour and weekly usage of
+> every Claude account you own, set up by one command.
+> **Setup guide: https://dxiiren.github.io/Claude-Code-Usage-Monitor/**
+>
+> ```powershell
+> & ([scriptblock]::Create((irm https://raw.githubusercontent.com/dxiiren/Claude-Code-Usage-Monitor/main/install.ps1))) -Accounts main,work
+> ```
+>
+> Or from a clone: `powershell -ExecutionPolicy Bypass -File ./setup.ps1 -Accounts main,work`, then
+> `just status`, `just login <name>`, `just claude <name>`, `just verify` (`just --list` for all).
+> Kit files: [`setup.ps1`](setup.ps1), [`justfile`](justfile), [`install.ps1`](install.ps1),
+> [`kit/`](kit) (`accounts.json` is git-ignored and holds names + folders only, never tokens),
+> [`site/`](site) (the guide, published to GitHub Pages from the `gh-pages` branch).
+> The widget itself is the upstream release, installed via winget; everything below is upstream's README.
+
 ![Windows](https://img.shields.io/badge/platform-Windows-blue)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
