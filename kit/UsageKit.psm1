@@ -149,6 +149,20 @@ function Set-RemoteServer([string]$Url, [string]$Token) {
     else { Write-Ok "Widget back to local accounts" }
 }
 
+# How often the widget fetches usage (settings.json poll_interval_ms), then restart it.
+function Set-PollInterval([int]$Minutes) {
+    if ($Minutes -lt 1 -or $Minutes -gt 120) { throw "Use 1-120 minutes (the usage endpoint is rate limited; 5 is a good default)." }
+    $file = Join-Path $script:AppDataDir 'settings.json'
+    if (-not (Test-Path $file)) { throw "Widget settings not found; start the widget once first." }
+    Stop-Monitor
+    $s = Get-Content $file -Raw | ConvertFrom-Json
+    if ($s.PSObject.Properties['poll_interval_ms']) { $s.poll_interval_ms = $Minutes * 60000 }
+    else { $s | Add-Member -NotePropertyName poll_interval_ms -NotePropertyValue ($Minutes * 60000) }
+    [IO.File]::WriteAllText($file, (ConvertTo-Json $s -Depth 20), (New-Object System.Text.UTF8Encoding $false))
+    Start-Monitor
+    Write-Ok "Widget fetches usage every $Minutes minute(s)"
+}
+
 # ---------- Startup + shortcuts ----------
 
 function Enable-Startup {
@@ -188,4 +202,4 @@ function Install-CloseMenu {
 Export-ModuleMember -Function Write-Ok, Write-Info, Write-Warn, Write-Fail, Get-MonitorExe, Get-UpstreamMonitorExe,
     Stop-Monitor, Start-Monitor, Install-MonitorRelease, Install-MonitorFromSource, Install-ManagerApp,
     Get-ManagerProcess, Stop-Manager, Test-ManagerUp, Start-Manager, Enable-Startup, Disable-Startup, New-Shortcuts,
-    Install-CloseMenu, Set-RemoteServer
+    Install-CloseMenu, Set-RemoteServer, Set-PollInterval

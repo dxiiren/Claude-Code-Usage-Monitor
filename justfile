@@ -1,8 +1,12 @@
-# Claude Code Usage Monitor -- multi-account recipes
+# Claude Code Usage Monitor (multi-account) justfile -- development + operations recipes
 
 set shell := ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
 
 kit := "Import-Module '" + justfile_directory() + "\\kit\\UsageKit.psm1' -Force -DisableNameChecking"
+
+# The two upstream window tests fail identically on the untouched upstream commit (not this fork);
+# kept in one place so `just test` and CI (.github/workflows/tests.yml) skip the same ones.
+rust_skip := "--skip detaching_a_child_never_exposes_parent_relative_coordinates_as_a_popup --skip docking_rebinds_layered_surface_only_when_parent_changes"
 
 # List available recipes
 default:
@@ -15,10 +19,15 @@ default:
 _require-node:
     @if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Write-Error "node not found on PATH.`n  -> Run setup.ps1 first:  powershell -ExecutionPolicy Bypass -File ./setup.ps1"; exit 1 }
 
-# Cargo -- only for building the widget from source.
+# Cargo -- only for building/testing the widget from source.
 [private]
 _require-cargo:
     @if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { Write-Error "cargo not found on PATH.`n  -> Install Rust: https://rustup.rs (plus MSVC build tools)"; exit 1 }
+
+# Docker -- only for building/trying the server image locally.
+[private]
+_require-docker:
+    @if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Write-Error "docker not found on PATH.`n  -> Install Docker Desktop, or build on the server (deploy/README.md)"; exit 1 }
 
 # ─── Setup ───────────────────────────────────────────────
 
@@ -26,7 +35,7 @@ _require-cargo:
 setup:
     & '{{justfile_directory()}}\setup.ps1'
 
-# ─── Account Manager (web app) ───────────────────────────
+# ─── Account Manager (web app, this PC) ─────────────────
 
 # Open the Account Manager (add accounts, paste the code) -- starts it if needed.
 web: _require-node
@@ -52,7 +61,7 @@ manager-build: _require-node
 web-dev: _require-node
     Set-Location '{{justfile_directory()}}\web'; npm run dev
 
-# ─── Widget lifecycle ────────────────────────────────────
+# ─── Widget ──────────────────────────────────────────────
 
 # Show the widget.
 start:
@@ -66,22 +75,25 @@ stop:
 restart:
     {{kit}}; Stop-Monitor; Start-Monitor
 
-# Build the widget from source (cargo --release) and install it.
-widget-build: _require-cargo
-    {{kit}}; Install-MonitorFromSource; Start-Monitor
+# How often the widget fetches usage, in minutes (e.g. `just widget-poll 5`; default 15).
+widget-poll minutes:
+    {{kit}}; Set-PollInterval ([int]'{{minutes}}')
 
-# Download the latest widget release from this fork and install it.
-widget-update:
-    {{kit}}; Install-MonitorRelease; Start-Monitor
-
-# Point the widget at a server, e.g. `just remote https://claude.yanasharif.com <token>`
-# (token: server page -> Widget tokens). Accounts then come from that server.
+# Point the widget at a server, e.g. `just remote https://claude.example.com <token>`.
 remote url token:
     {{kit}}; Set-RemoteServer '{{url}}' '{{token}}'
 
 # Widget back to this PC's own accounts.
 remote-off:
     {{kit}}; Set-RemoteServer '' ''
+
+# Download the latest widget release from this fork and install it.
+widget-update:
+    {{kit}}; Install-MonitorRelease; Start-Monitor
+
+# Build the widget from source (cargo --release) and install it.
+widget-build: _require-cargo
+    {{kit}}; Install-MonitorFromSource; Start-Monitor
 
 # Widget + Account Manager start with Windows.
 startup-on:
@@ -91,12 +103,28 @@ startup-on:
 startup-off:
     {{kit}}; Disable-Startup
 
+# ─── Server (Docker) ─────────────────────────────────────
+
+# Build the server image locally (web/Dockerfile).
+docker-build: _require-docker
+    docker build -t claude-usage:dev '{{justfile_directory()}}\web'
+
+# Try server mode locally on http://127.0.0.1:47391 (throwaway data; Ctrl+C to stop).
+docker-run: _require-docker
+    docker run --rm -p 127.0.0.1:47391:47291 -e ACCTMGR_ADMIN_PASSWORD=local-try-only -e ACCTMGR_PUBLIC_ORIGIN=http://127.0.0.1:47391 claude-usage:dev
+
 # ─── Tests ───────────────────────────────────────────────
 
-# Every suite: Rust unit tests, web unit tests, web end-to-end tests.
-# (Skips 2 window tests that fail identically on untouched upstream -- see .github/workflows/tests.yml.)
-test: _require-cargo _require-node
-    Set-Location '{{justfile_directory()}}'; cargo test --locked -- --skip detaching_a_child_never_exposes_parent_relative_coordinates_as_a_popup --skip docking_rebinds_layered_surface_only_when_parent_changes; if ($LASTEXITCODE -ne 0) { exit 1 }; Set-Location web; npm run test:all; if ($LASTEXITCODE -ne 0) { exit 1 }
+# Every suite: Rust, web unit, web e2e (local mode + server mode).
+test: test-rust test-web
+
+# Rust unit tests (the widget).
+test-rust: _require-cargo
+    Set-Location '{{justfile_directory()}}'; cargo test --locked -- {{rust_skip}}; if ($LASTEXITCODE -ne 0) { exit 1 }
+
+# Web unit + e2e tests (Account Manager, local and server mode).
+test-web: _require-node
+    Set-Location '{{justfile_directory()}}\web'; npm run test:all; if ($LASTEXITCODE -ne 0) { exit 1 }
 
 # ─── Tools ───────────────────────────────────────────────
 
@@ -115,3 +143,7 @@ claudeo:
 # Launch Claude Code with all permissions — Haiku (latest)
 claudeh:
     claude --dangerously-skip-permissions --model haiku
+
+# Launch Claude Code with all permissions — the self-hosted model via claude-local (/setup-claude-local)
+claudel:
+    claude-local --dangerously-skip-permissions
