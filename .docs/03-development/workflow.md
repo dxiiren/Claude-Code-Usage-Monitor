@@ -18,6 +18,14 @@
 4. Open a PR. CI (`.github/workflows/tests.yml`) runs fmt, clippy, cargo test, web unit + both e2e
    suites, a PowerShell 5.1 kit check, and a Docker image build/run. Merge only when green.
 
+## CI
+
+| Workflow | Jobs |
+| --- | --- |
+| `.github/workflows/tests.yml` | Rust fmt/clippy/test, web unit, both e2e suites, kit check, Docker image (Windows + Ubuntu) |
+| `.github/workflows/release.yml` | tag `v*` -> release exe (+ WinGet, upstream only) |
+| `.github/workflows/dependency-security.yml` | cargo-audit, cargo-deny |
+
 ## Try changes live
 
 - Web: `just web-dev` (hot reload), or `just manager-build` to rebuild the running local manager.
