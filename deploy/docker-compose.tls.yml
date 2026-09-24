@@ -1,0 +1,28 @@
+# Optional overlay: HTTPS with your own certificate (e.g. an internal CA / self-signed cert the
+# PCs already trust), for LAN servers without a Cloudflare tunnel. Enable in .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml
+#   ACCTMGR_TLS_CERT=/path/to/server.crt   ACCTMGR_TLS_KEY=/path/to/server.key
+#   ACCTMGR_TLS_PUBLISH=0.0.0.0:1234       (the port people open)
+#   ACCTMGR_PUBLISH=127.0.0.1:47291        (app itself: loopback only)
+#   ACCTMGR_PUBLIC_ORIGIN=https://host.example:1234
+#   ACCTMGR_TRUST_PROXY=1                  (nginx passes the real client IP; see nginx-tls.conf)
+services:
+  claude-usage-tls:
+    image: nginx:1.27-alpine
+    container_name: claude-usage-tls
+    restart: unless-stopped
+    depends_on:
+      - claude-usage
+    ports:
+      - "${ACCTMGR_TLS_PUBLISH:?Set ACCTMGR_TLS_PUBLISH in deploy/.env, e.g. 0.0.0.0:1234}:8443"
+    volumes:
+      - ./nginx-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${ACCTMGR_TLS_CERT:?Set ACCTMGR_TLS_CERT in deploy/.env}:/etc/ssl/tls.crt:ro
+      - ${ACCTMGR_TLS_KEY:?Set ACCTMGR_TLS_KEY in deploy/.env}:/etc/ssl/tls.key:ro
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
