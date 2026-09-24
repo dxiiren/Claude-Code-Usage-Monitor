@@ -299,31 +299,26 @@ export async function startLogin(accountId: string, configDir: string): Promise<
 
 	const deadline = Date.now() + URL_WAIT_MS;
 	let url = '';
-	if (SERVER) {
-		// The URL the CLI hands to BROWSER redirects to http://localhost:<port>/callback: that only
-		// works in a browser on THIS machine. The one it prints ("If the browser didn't open, visit:")
-		// uses the hosted callback page that shows a code to paste, which works from any device.
-		let browserUrl = '';
-		let browserSeenAt = 0;
-		while (Date.now() < deadline && !url) {
-			await new Promise((r) => setTimeout(r, 250));
-			const printed = (s.stdout.match(/https:\/\/\S+/g) ?? []).find((u) => !isLocalCallback(u));
-			if (printed) url = printed;
-			else if (!browserUrl && fs.existsSync(urlFile)) {
-				browserUrl = fs.readFileSync(urlFile, 'latin1').replace(/"/g, '').trim();
-				browserSeenAt = Date.now();
-			}
-			// A CLI that never prints a link: use BROWSER's, unless it is a localhost callback.
-			if (!url && browserUrl && !isLocalCallback(browserUrl) && Date.now() - browserSeenAt > 3000) url = browserUrl;
-			if (!url && s.exited) break;
+	// Both modes use the link the CLI PRINTS ("If the browser didn't open, visit:"): its hosted
+	// callback page shows a code to paste, which is the flow the page is built around. The URL the
+	// CLI hands to BROWSER redirects to http://localhost:<port>/callback instead: on a server that
+	// only works in a browser on the server itself, and locally the browser hands the code straight
+	// back to the CLI, which then logs in and EXITS before anything is pasted -- the page then
+	// reported a successful login as "already stopped".
+	let browserUrl = '';
+	let browserSeenAt = 0;
+	while (Date.now() < deadline && !url) {
+		await new Promise((r) => setTimeout(r, 250));
+		const printed = (s.stdout.match(/https:\/\/\S+/g) ?? []).find((u) => !isLocalCallback(u));
+		if (printed) url = printed;
+		else if (!browserUrl && fs.existsSync(urlFile)) {
+			browserUrl = fs.readFileSync(urlFile, 'latin1').replace(/"/g, '').trim();
+			browserSeenAt = Date.now();
 		}
-	} else {
-		while (Date.now() < deadline && !url) {
-			await new Promise((r) => setTimeout(r, 250));
-			if (fs.existsSync(urlFile)) url = fs.readFileSync(urlFile, 'latin1').replace(/"/g, '').trim();
-			if (!url) url = s.stdout.match(/https:\/\/\S+/)?.[0] ?? '';
-			if (!url && s.exited) break;
-		}
+		// A CLI that never prints a link: fall back to BROWSER's. A localhost callback is useless on
+		// a server, but still completes locally (submitCode accepts a CLI that finished by itself).
+		if (!url && browserUrl && (!SERVER || !isLocalCallback(browserUrl)) && Date.now() - browserSeenAt > 3000) url = browserUrl;
+		if (!url && s.exited) break;
 	}
 	if (!/^https:\/\/[^\s"<>]+$/.test(url)) {
 		const why = failureReason(s) || 'Claude Code never produced a login link.';
@@ -389,6 +384,13 @@ export async function submitCode(sessionId: string, rawCode: unknown): Promise<S
 	const code = typeof rawCode === 'string' ? rawCode.trim() : '';
 	if (!code) throw new LoginError('Paste the code shown after you click Authorize.');
 	if (code.length > 4000 || /[\r\n]/.test(code)) throw new LoginError('That does not look like an authentication code.');
+	// The CLI can finish on its own (the browser completed its localhost callback): that is a
+	// successful login, not a failure -- whatever was pasted no longer matters.
+	if (s.exited && /Login successful/i.test(s.stdout)) {
+		s.state = 'done';
+		await cleanup(s);
+		return { ok: true, message: 'Login successful', accountId: s.accountId, configDir: s.configDir };
+	}
 	if (s.exited) {
 		const why = failureReason(s);
 		s.state = 'failed';

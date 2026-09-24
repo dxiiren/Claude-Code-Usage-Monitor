@@ -67,6 +67,32 @@ test('add account -> login started -> good code -> email shown', async ({ page }
 	expect(fs.existsSync(path.join(home, '.claude-alpha', '.credentials.json'))).toBe(true);
 });
 
+test('local mode offers the paste-a-code link, and a CLI that finished by itself counts as success', async ({ page }) => {
+	await page.goto('/');
+	await page.getByLabel('Add an account').fill('autologin');
+	await page.getByRole('button', { name: 'Start', exact: true }).click();
+	const panel = page.getByTestId('login-panel');
+	await expect(panel).toContainText('Log in "autologin"');
+	await panel.getByText("Edge window didn't open?").click();
+	const href = (await panel.getByRole('link', { name: 'Open link' }).getAttribute('href')) ?? '';
+	// Not the localhost callback the CLI hands to BROWSER: that completes the login behind the
+	// page's back (the real bug: "already stopped: Login successful").
+	expect(new URL(href).searchParams.get('redirect_uri')).toBe('https://platform.claude.com/oauth/code/callback');
+	// The fake CLI logs this account in on its own after ~0.8 s, as the real one does when the
+	// browser completes the localhost callback. Pasting afterwards must report success.
+	await page.waitForTimeout(1500);
+	await panel.getByLabel('Authentication code').fill('whatever-was-copied');
+	await panel.getByRole('button', { name: 'Connect' }).click();
+	await expect(panel.getByTestId('login-ok')).toContainText('Logged in as autologin@example.com');
+	await expect(panel).not.toContainText('already stopped');
+	await panel.getByRole('button', { name: 'Done' }).click();
+	await expect(row(page, 'autologin')).toContainText('autologin@example.com');
+	// Leave the shared account list as the later tests expect it.
+	await row(page, 'autologin').getByRole('button', { name: 'Remove' }).click();
+	await page.getByRole('dialog').getByRole('button', { name: 'Remove and delete folder' }).click();
+	await expect(page.getByRole('status').first()).toContainText('Removed "autologin"');
+});
+
 test('same email on a second account -> clear warning + Re-login offered', async ({ page }) => {
 	const panel = await addAccount(page, 'beta', 'good:alpha@example.com');
 	await expect(panel.getByTestId('login-ok')).toContainText('alpha@example.com');
