@@ -1,0 +1,15 @@
+node_modules
+build
+build-e2e
+.svelte-kit
+test-results
+playwright-report
+tests
+playwright*.config.ts
+vitest.config.ts
+scripts
+Dockerfile
+.dockerignore
+*.log
+.env
+.env.*

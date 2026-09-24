@@ -84,7 +84,7 @@ impl StudioApp {
         let usage_cache = app_settings::load_usage_cache().map(|mut cache| {
             cache
                 .data
-                .select_accounts(&crate::accounts_db::effective(&settings.accounts));
+                .select_accounts(&crate::remote::effective(&settings));
             cache
         });
         let usage_poll_ok = usage_cache
@@ -778,7 +778,7 @@ impl StudioApp {
         crate::accounts_db::check_for_changes();
         cache
             .data
-            .select_accounts(&crate::accounts_db::effective(&self.settings.accounts));
+            .select_accounts(&crate::remote::effective(&self.settings));
         let poll_ok = cache.poll_ok && !cache.data.is_empty();
         let has_error = !cache.poll_ok
             || (cache.data.is_empty()

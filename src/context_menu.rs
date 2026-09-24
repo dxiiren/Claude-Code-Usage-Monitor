@@ -326,13 +326,14 @@ pub fn rendered_label(
     crate::theme_engine::format_template(translated, context)
 }
 
-/// Opens the Account Manager web app (`meta.manager_url` in accounts.db).
+/// Opens the Account Manager web app: the server's `manager_url` in remote
+/// mode, otherwise `meta.manager_url` in accounts.db.
 fn manage_accounts_item() -> ContextMenuItem {
     ContextMenuItem::action(
         "manage-accounts",
         "Manage accounts",
         ContextMenuAction::OpenUrl {
-            url: crate::accounts_db::manager_url(),
+            url: crate::remote::manager_url(),
         },
     )
 }

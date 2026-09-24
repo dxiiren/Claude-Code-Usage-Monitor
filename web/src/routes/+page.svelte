@@ -22,6 +22,7 @@
 	let rowError = $state<Record<string, string>>({});
 	let removeTarget = $state<Snapshot['accounts'][number] | null>(null);
 	let removeDialog: HTMLDialogElement | undefined = $state();
+	const server = $derived(snap.mode === 'server');
 
 	async function refresh() {
 		try {
@@ -135,7 +136,9 @@
 		themeMsg = '';
 		try {
 			await post('/api/settings', { cardTheme: value });
-			themeMsg = 'Saved. The widget picks it up within 5 seconds (or after Restart widget).';
+			themeMsg = server
+				? 'Saved. Remote widgets pick it up on their next poll.'
+				: 'Saved. The widget picks it up within 5 seconds (or after Restart widget).';
 		} catch (err) {
 			themeMsg = (err as Error).message;
 		}
@@ -175,14 +178,18 @@
 				{starting ? 'Starting...' : 'Start'}
 			</button>
 		</div>
-		<p class="hint">Start opens a private Edge window for the login. Then you only paste the code.</p>
+		{#if server}
+			<p class="hint">Start gives you a sign-in link to open in your own browser. Then you paste the code here.</p>
+		{:else}
+			<p class="hint">Start opens a private Edge window for the login. Then you only paste the code.</p>
+		{/if}
 		{#if addError}<p class="err" role="alert">{addError}</p>{/if}
 	</form>
 </section>
 
 {#if login}
 	{#key login.sessionId}
-		<LoginPanel {login} onrelogin={relogin} onclose={() => (login = null)} onchanged={refresh} />
+		<LoginPanel {login} {server} onrelogin={relogin} onclose={() => (login = null)} onchanged={refresh} />
 	{/key}
 {/if}
 
@@ -263,21 +270,31 @@
 {/if}
 
 <section class="widget">
-	<div>
-		<strong>Desktop widget</strong>
-		<span class="hint">
-			{#if !snap.widget.installed}not installed{:else if snap.widget.running}running{:else}not running{/if}
-			&middot; usage updated {snap.usageUpdatedUnix ? new Date(snap.usageUpdatedUnix * 1000).toLocaleTimeString() : 'never'}
-		</span>
-	</div>
-	<button type="button" onclick={restartWidget} disabled={widgetBusy || !snap.widget.installed}>
-		{widgetBusy ? 'Restarting...' : 'Restart widget'}
-	</button>
-	{#if widgetMsg}<span class="hint" role="status">{widgetMsg}</span>{/if}
+	{#if server}
+		<div>
+			<strong>Usage polling</strong>
+			<span class="hint">
+				this server polls every account &middot; last poll
+				{snap.usageUpdatedUnix ? new Date(snap.usageUpdatedUnix * 1000).toLocaleTimeString() : 'not yet'}
+			</span>
+		</div>
+	{:else}
+		<div>
+			<strong>Desktop widget</strong>
+			<span class="hint">
+				{#if !snap.widget.installed}not installed{:else if snap.widget.running}running{:else}not running{/if}
+				&middot; usage updated {snap.usageUpdatedUnix ? new Date(snap.usageUpdatedUnix * 1000).toLocaleTimeString() : 'never'}
+			</span>
+		</div>
+		<button type="button" onclick={restartWidget} disabled={widgetBusy || !snap.widget.installed}>
+			{widgetBusy ? 'Restarting...' : 'Restart widget'}
+		</button>
+		{#if widgetMsg}<span class="hint" role="status">{widgetMsg}</span>{/if}
+	{/if}
 	<label class="cardtheme">
 		<span>Card theme</span>
 		<select value={snap.cardTheme} onchange={(e) => setCardTheme(e.currentTarget.value)}>
-			<option value="auto">Auto (follow Windows)</option>
+			<option value="auto">{server ? 'Auto (follow each PC)' : 'Auto (follow Windows)'}</option>
 			<option value="light">Light</option>
 			<option value="dark">Dark</option>
 		</select>
@@ -290,7 +307,11 @@
 		<h2 id="rm-title">Remove "{removeTarget.name}"?</h2>
 		<p>It disappears from the widget, and its folder is deleted:</p>
 		<p><code>{removeTarget.configDir}</code></p>
-		<p class="hint">That folder holds this account's Claude Code login and history. Your main <code>.claude</code> folder is never touched.</p>
+		{#if server}
+			<p class="hint">That folder on the server holds this account's Claude Code login. Nothing else is touched.</p>
+		{:else}
+			<p class="hint">That folder holds this account's Claude Code login and history. Your main <code>.claude</code> folder is never touched.</p>
+		{/if}
 		<div class="line end">
 			<button type="button" onclick={() => removeDialog?.close()}>Cancel</button>
 			<button type="button" class="danger solid" onclick={confirmRemove}>Remove and delete folder</button>

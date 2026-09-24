@@ -4,17 +4,29 @@
 	import ThemeSwitch from '$lib/ThemeSwitch.svelte';
 	import type { Snippet } from 'svelte';
 
-	let { children }: { children: Snippet } = $props();
+	let { children, data }: { children: Snippet; data: { server: boolean } } = $props();
+	/** Server mode's sign-in page shows no navigation (nothing behind it is reachable yet). */
+	const bare = $derived(data.server && page.url.pathname === '/login');
 </script>
 
 <header class="top">
 	<span class="brand">Claude Account Manager</span>
 	<div class="right">
-		<nav aria-label="Main">
-			<a href="/" aria-current={page.url.pathname === '/' ? 'page' : undefined}>Accounts</a>
-			<a href="/usage" aria-current={page.url.pathname === '/usage' ? 'page' : undefined}>Usage</a>
-		</nav>
+		{#if !bare}
+			<nav aria-label="Main">
+				<a href="/" aria-current={page.url.pathname === '/' ? 'page' : undefined}>Accounts</a>
+				<a href="/usage" aria-current={page.url.pathname === '/usage' ? 'page' : undefined}>Usage</a>
+				{#if data.server}
+					<a href="/tokens" aria-current={page.url.pathname === '/tokens' ? 'page' : undefined}>Widget tokens</a>
+				{/if}
+			</nav>
+		{/if}
 		<ThemeSwitch />
+		{#if data.server && !bare}
+			<form method="POST" action="/logout" data-sveltekit-reload>
+				<button type="submit" class="logout">Sign out</button>
+			</form>
+		{/if}
 	</div>
 </header>
 
@@ -58,6 +70,18 @@
 	nav a[aria-current='page'] {
 		background: var(--accent);
 		color: var(--accent-text);
+	}
+	.logout {
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		background: transparent;
+		color: var(--text);
+		padding: 0.25rem 0.6rem;
+		font-size: 0.8rem;
+		cursor: pointer;
+	}
+	form {
+		margin: 0;
 	}
 	main {
 		max-width: 860px;

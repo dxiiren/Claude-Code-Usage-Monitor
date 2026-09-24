@@ -104,6 +104,9 @@ pub(super) unsafe extern "system" fn wnd_proc(
                 TIMER_ACCOUNTS_DB => {
                     request_accounts_db_check(hwnd);
                 }
+                TIMER_REMOTE_SERVER => {
+                    request_remote_check(hwnd);
+                }
                 TIMER_MOUSE_CLICK => {
                     let _ = KillTimer(Some(hwnd), TIMER_MOUSE_CLICK);
                     let pending = lock_state()
@@ -149,6 +152,10 @@ pub(super) unsafe extern "system" fn wnd_proc(
         }
         WM_APP_ACCOUNTS_DB_CHANGED => {
             reload_accounts_db(hwnd);
+            LRESULT(0)
+        }
+        WM_APP_REMOTE_CHANGED => {
+            reload_remote(hwnd);
             LRESULT(0)
         }
         WM_APP_SETTINGS_UPDATED => {

@@ -51,8 +51,31 @@ jobs:
         run: npm run build
       - name: Install Playwright browser
         run: npx playwright install chromium
-      - name: End-to-end tests
+      - name: End-to-end tests (local mode)
         run: npm run test:e2e
+      - name: End-to-end tests (server mode)
+        run: npx playwright test -c playwright.server.config.ts
+
+  docker:
+    # The server image: builds, refuses to start without a password, serves /healthz and
+    # the login redirect, and ships a working Claude Code CLI.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build image
+        run: docker build -t claude-usage:ci web
+      - name: Refuses to start without a password
+        run: |
+          if docker run --rm claude-usage:ci; then echo "started without a password"; exit 1; fi
+      - name: Serves health + login redirect, CLI present
+        run: |
+          docker run -d --name cu -p 127.0.0.1:47291:47291 \
+            -e ACCTMGR_ADMIN_PASSWORD=ci-only-password -e ACCTMGR_PUBLIC_ORIGIN=http://127.0.0.1:47291 claude-usage:ci
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:47291/healthz && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:47291/)" = "303"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:47291/api/v1/widget)" = "401"
+          docker exec cu claude --version
+          docker rm -f cu
 
   kit:
     runs-on: windows-latest

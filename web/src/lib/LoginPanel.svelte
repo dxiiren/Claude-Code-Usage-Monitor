@@ -16,8 +16,10 @@
 		onrelogin: (accountId: string) => void;
 		onclose: () => void;
 		onchanged: () => void;
+		/** Server mode: nothing opens a browser; the user opens the link on their own device. */
+		server?: boolean;
 	}
-	let { login, onrelogin, onclose, onchanged }: Props = $props();
+	let { login, onrelogin, onclose, onchanged, server = false }: Props = $props();
 
 	type Phase = 'waiting' | 'connecting' | 'done' | 'failed';
 	let phase = $state<Phase>('waiting');
@@ -78,6 +80,20 @@
 	<h2>Log in "{login.accountName}"</h2>
 
 	{#if phase === 'waiting' || phase === 'connecting'}
+		{#if server}
+			<ol class="steps">
+				<li>
+					Open the sign-in page in your browser. Use a <strong>private window</strong> (or one signed in to nothing),
+					otherwise it may sign this account in as whoever is already signed in.
+					<div class="line link">
+						<a class="btn primary" href={login.url} target="_blank" rel="noopener noreferrer" data-testid="signin-link">Open sign-in page</a>
+						<button type="button" onclick={copyLink}>{copied ? 'Copied' : 'Copy link'}</button>
+					</div>
+				</li>
+				<li>Sign in as <strong>{login.accountName}</strong>, click <em>Authorize</em>, copy the code.</li>
+				<li>Paste it here.</li>
+			</ol>
+		{:else}
 		<ol class="steps">
 			<li>
 				{#if login.edgeOpened}
@@ -89,6 +105,7 @@
 			<li>Sign in as <strong>{login.accountName}</strong>, click <em>Authorize</em>, copy the code.</li>
 			<li>Paste it here.</li>
 		</ol>
+		{/if}
 
 		<form class="code" onsubmit={connect}>
 			<label for="code">Authentication code</label>
@@ -109,6 +126,7 @@
 			{#if error}<p class="err" role="alert">{error}</p>{/if}
 		</form>
 
+		{#if !server}
 		<details class="fallback">
 			<summary>Edge window didn't open?</summary>
 			<p class="hint">
@@ -120,6 +138,7 @@
 				<button type="button" onclick={copyLink}>{copied ? 'Copied' : 'Copy link'}</button>
 			</div>
 		</details>
+		{/if}
 
 		<div class="actions">
 			<button type="button" onclick={cancel} disabled={phase === 'connecting'}>Cancel</button>
@@ -196,6 +215,7 @@
 		text-decoration: none;
 		display: inline-block;
 	}
+	.btn.primary,
 	button.primary {
 		background: var(--accent);
 		border-color: var(--accent);
@@ -209,6 +229,9 @@
 		color: var(--muted);
 		font-size: 0.85rem;
 		margin: 0.4rem 0;
+	}
+	.link {
+		margin: 0.4rem 0 0.2rem;
 	}
 	.fallback {
 		margin-top: 0.75rem;

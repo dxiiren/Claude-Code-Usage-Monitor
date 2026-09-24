@@ -2,6 +2,8 @@ import { json } from '@sveltejs/kit';
 import { accountsWithEmail, getAccount, setAuth } from '$lib/server/db';
 import { authStatus, submitCode } from '$lib/server/claude';
 import { body, handle, markLoggedIn } from '$lib/server/api';
+import { SERVER } from '$lib/server/paths';
+import { clearError, pollAccountSoon } from '$lib/server/serverUsage';
 
 /** Feed the pasted code to the waiting CLI, then read `claude auth status` for email + plan. */
 export const POST = ({ request }) =>
@@ -19,6 +21,13 @@ export const POST = ({ request }) =>
 		}
 		if (getAccount(r.accountId)) setAuth(r.accountId, auth.email, auth.plan);
 		markLoggedIn(r.accountId, r.configDir);
+		if (SERVER) {
+			// Fresh login: the old poll error no longer applies; fetch usage now instead of at the next cycle.
+			clearError(r.accountId);
+			const a = getAccount(r.accountId);
+			// Usually well under a second; never hold the login response longer than 5 s for it.
+			if (a) await Promise.race([pollAccountSoon(a), new Promise((r) => setTimeout(r, 5000))]);
+		}
 		const same = accountsWithEmail(auth.email, r.accountId).map((a) => a.name);
 		return json({ ok: true, email: auth.email, plan: auth.plan, sameEmailAs: same });
 	});

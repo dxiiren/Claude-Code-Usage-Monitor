@@ -318,12 +318,14 @@ test('card theme setting: stored in meta.card_theme, bumps revision, regenerates
 	const sel = page.getByLabel('Card theme');
 	await expect(sel).toHaveValue('auto');
 	const themeFile = path.join(appDir, 'themes', 'multi-claude-accounts.json');
+	// Auto = fully transparent colour, never 'none' (fa96c0f: 'none' made the widget draw its own grey box).
+	const AUTO_BG = { type: 'colour', colour: { color: '#00000000', opacity: '0' } };
 	const surfaceBg = () => JSON.parse(fs.readFileSync(themeFile, 'utf8')).surfaces[0].background;
-	expect(surfaceBg()).toEqual({ type: 'colour', colour: { color: '#00000000', opacity: '0' } });
+	expect(surfaceBg()).toEqual(AUTO_BG);
 	for (const [mode, expected] of [
 		['light', { type: 'colour', colour: { color: '#FFFFFFFF', opacity: '0.85' } }],
 		['dark', { type: 'colour', colour: { color: '#0D1117FF', opacity: '0.85' } }],
-		['auto', { type: 'colour', colour: { color: '#00000000', opacity: '0' } }]
+		['auto', AUTO_BG]
 	] as const) {
 		const rev = Number(meta().revision);
 		await sel.selectOption(mode);

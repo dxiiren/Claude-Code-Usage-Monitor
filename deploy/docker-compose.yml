@@ -1,0 +1,37 @@
+# Claude Account Manager in server mode. See deploy/README.md.
+#   cp .env.example .env   # then set ACCTMGR_ADMIN_PASSWORD and ACCTMGR_PUBLIC_ORIGIN
+#   docker compose up -d --build
+name: claude-usage
+
+services:
+  claude-usage:
+    build:
+      context: ../web
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-2.1.273}
+    image: claude-usage:${CLAUDE_CODE_VERSION:-2.1.273}
+    container_name: claude-usage
+    restart: unless-stopped
+    environment:
+      ACCTMGR_ADMIN_USER: ${ACCTMGR_ADMIN_USER:-Admin}
+      ACCTMGR_ADMIN_PASSWORD: ${ACCTMGR_ADMIN_PASSWORD:?Set ACCTMGR_ADMIN_PASSWORD in deploy/.env}
+      ACCTMGR_PUBLIC_ORIGIN: ${ACCTMGR_PUBLIC_ORIGIN:-http://127.0.0.1:47291}
+      ACCTMGR_SESSION_SECRET: ${ACCTMGR_SESSION_SECRET:-}
+      ACCTMGR_POLL_SECONDS: ${ACCTMGR_POLL_SECONDS:-300}
+      ACCTMGR_TRUST_PROXY: ${ACCTMGR_TRUST_PROXY:-0}
+      TZ: ${TZ:-UTC}
+    ports:
+      # Loopback by default: reach it through a tunnel / reverse proxy, never straight from the internet.
+      - "${ACCTMGR_PUBLISH:-127.0.0.1:47291}:47291"
+    volumes:
+      - claude-usage-data:/data
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  claude-usage-data:

@@ -1,0 +1,13 @@
+# Optional overlay: also attach the container to an EXISTING Docker network (for example the one
+# your cloudflared container runs on), so the tunnel can reach http://claude-usage:47291.
+# Enable it in .env:  COMPOSE_FILE=docker-compose.yml:docker-compose.tunnel.yml  and  ACCTMGR_NETWORK=<name>
+services:
+  claude-usage:
+    networks:
+      - default
+      - tunnel
+
+networks:
+  tunnel:
+    name: ${ACCTMGR_NETWORK:?Set ACCTMGR_NETWORK in deploy/.env to the tunnel's Docker network name}
+    external: true
