@@ -121,4 +121,7 @@ try {
 	await browser.close();
 } finally {
 	server.kill();
+	// the demo's throwaway APPDATA/USERPROFILE; wait for the server to release its SQLite handle
+	await new Promise((r) => setTimeout(r, 1000));
+	fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }

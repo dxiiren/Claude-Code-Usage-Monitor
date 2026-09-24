@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
+import { sweepStale } from './tests/tmp-cleanup';
 
 // Server mode (ACCTMGR_MODE=server) e2e: the BUILT server against a throwaway data dir, the fake
 // Claude CLI, and a fake usage endpoint (ACCTMGR_USAGE_URL). Own ports, so it can run next to the
@@ -9,6 +10,7 @@ import { defineConfig, devices } from '@playwright/test';
 const PORT = 47392;
 const USAGE_PORT = 47393;
 if (!process.env.ACCTMGR_E2E_SERVER_ROOT) {
+	sweepStale('acctmgr-e2e-srv-'); // leftovers of runs that died before their teardown
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acctmgr-e2e-srv-'));
 	fs.mkdirSync(path.join(root, 'data'), { recursive: true });
 	fs.mkdirSync(path.join(root, 'tmp'), { recursive: true });
@@ -21,6 +23,8 @@ process.env.ACCTMGR_E2E_USAGE_PORT = String(USAGE_PORT);
 process.env.ACCTMGR_E2E_PASSWORD = 'e2e-admin-password';
 
 export default defineConfig({
+	// removes this run's temp folder after the web server has stopped
+	globalTeardown: './tests/e2e-teardown.ts',
 	testDir: 'tests/e2e-server',
 	fullyParallel: false,
 	workers: 1,

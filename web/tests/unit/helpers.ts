@@ -7,7 +7,7 @@ import path from 'node:path';
  * are imported (paths.ts reads them at import time), so tests never touch the real accounts.db.
  */
 export function isolateHome(): { root: string; home: string; appData: string; appDir: string } {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acctmgr-unit-'));
+	const root = fs.mkdtempSync(path.join(process.env.ACCTMGR_TEST_TMP || os.tmpdir(), 'acctmgr-unit-'));
 	const home = path.join(root, 'home');
 	const appData = path.join(root, 'appdata');
 	fs.mkdirSync(home, { recursive: true });
@@ -33,7 +33,7 @@ export const FAKE_CODEX = path.resolve(__dirname, '../fixtures', process.platfor
  * are imported (paths.ts reads the environment at import time).
  */
 export function isolateServer(extra: Record<string, string> = {}): { root: string; data: string } {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acctmgr-srv-'));
+	const root = fs.mkdtempSync(path.join(process.env.ACCTMGR_TEST_TMP || os.tmpdir(), 'acctmgr-srv-'));
 	const data = path.join(root, 'data');
 	fs.mkdirSync(data, { recursive: true });
 	Object.assign(process.env, {
