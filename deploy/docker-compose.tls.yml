@@ -7,6 +7,13 @@
 #   ACCTMGR_PUBLIC_ORIGIN=https://host.example:1234
 #   ACCTMGR_TRUST_PROXY=1                  (nginx passes the real client IP; see nginx-tls.conf)
 services:
+  claude-usage:
+    networks:
+      default:
+        # The name nginx-tls.conf proxies to; see the comment there for why it has a dot.
+        aliases:
+          - claude-usage.internal
+
   claude-usage-tls:
     image: nginx:1.27-alpine
     container_name: claude-usage-tls

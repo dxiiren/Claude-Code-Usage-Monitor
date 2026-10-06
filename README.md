@@ -143,7 +143,7 @@ Then pick how people reach it (full settings in [`deploy/README.md`](deploy/READ
 | Setup | Add to `.env` | Notes |
 | --- | --- | --- |
 | **Cloudflare tunnel** (public) | `COMPOSE_FILE=docker-compose.yml:docker-compose.tunnel.yml`, `ACCTMGR_NETWORK`, `ACCTMGR_TRUST_PROXY=1`, `ACCTMGR_PUBLIC_ORIGIN=https://claude.example.com` | Route the tunnel's hostname to `http://claude-usage:47291`. HTTPS by Cloudflare. |
-| **Own certificate** (LAN HTTPS) | `COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml`, `ACCTMGR_TLS_CERT`, `ACCTMGR_TLS_KEY`, `ACCTMGR_TLS_PUBLISH=0.0.0.0:<port>`, `ACCTMGR_TRUST_PROXY=1`, `ACCTMGR_PUBLIC_ORIGIN=https://<host>:<port>` | nginx sidecar; `http://` on that port redirects to `https://`. PCs must trust the certificate. |
+| **Own certificate** (LAN HTTPS) | `COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml`, `ACCTMGR_TLS_CERT`, `ACCTMGR_TLS_KEY`, `ACCTMGR_TLS_PUBLISH=0.0.0.0:<port>`, `ACCTMGR_TRUST_PROXY=1`, `ACCTMGR_PUBLIC_ORIGIN=https://<host>:<port>` | nginx sidecar; `http://` on that port redirects to `https://`. PCs must trust the certificate. Survives a host reboot in either start order ([details](deploy/README.md#with-your-own-certificate-lan-https)). |
 | **Plain HTTP** (LAN only) | `ACCTMGR_PUBLISH=0.0.0.0:<port>`, `ACCTMGR_PUBLIC_ORIGIN=http://<host>:<port>` | The password travels unencrypted — prefer one of the above. |
 
 Sign in, and add accounts the same way as on a PC: the server runs the Claude Code CLI (or, for
@@ -272,6 +272,16 @@ from PowerShell 7 and reported that as a mismatch.
 
 Open the exact address in `ACCTMGR_PUBLIC_ORIGIN` (scheme, host and port). IP addresses are
 refused by design, and `http://` vs `https://` must match how the server is deployed.
+
+### Server page shows another site or a firewall block page after the server restarted
+
+Only with the own-certificate overlay (`docker-compose.tls.yml`), on a deploy older than this fix.
+The nginx sidecar started before the app, looked the app's name up once, got an address outside
+Docker, and kept it; the app itself is healthy (`curl http://127.0.0.1:47291/healthz` on the host
+returns `ok`). To recover at once: `docker exec claude-usage-tls nginx -s reload`. To stop it
+happening again: `git pull`, then in `deploy/` run
+`docker compose up -d --force-recreate claude-usage-tls`. Details in
+[`deploy/README.md`](deploy/README.md#with-your-own-certificate-lan-https).
 
 More in [`.docs/06-troubleshooting/common-issues.md`](.docs/06-troubleshooting/common-issues.md).
 

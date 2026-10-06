@@ -9,10 +9,11 @@ Contract: `docs/account-manager-contract.md`, "Server mode (Docker) and the widg
 1. [Start](#start)
 2. [Configuration](#configuration)
 3. [Behind a Cloudflare tunnel](#behind-a-cloudflare-tunnel)
-4. [Adding an account](#adding-an-account)
-5. [Connecting a widget](#connecting-a-widget)
-6. [Data, backup and upgrades](#data-backup-and-upgrades)
-7. [Security notes](#security-notes)
+4. [With your own certificate (LAN HTTPS)](#with-your-own-certificate-lan-https)
+5. [Adding an account](#adding-an-account)
+6. [Connecting a widget](#connecting-a-widget)
+7. [Data, backup and upgrades](#data-backup-and-upgrades)
+8. [Security notes](#security-notes)
 
 ## Start
 
@@ -56,6 +57,30 @@ All settings live in `deploy/.env` (see `.env.example`):
 
 The app refuses any request whose `Host` is not the public hostname (`403 Forbidden host`). If you
 see that behind the tunnel, set the tunnel's `httpHostHeader` to the public hostname.
+
+## With your own certificate (LAN HTTPS)
+
+For a LAN server without a tunnel: an nginx sidecar (`claude-usage-tls`) serves HTTPS with a
+certificate the PCs already trust, and the app stays on loopback.
+
+1. In `.env`, set `COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml`, `ACCTMGR_TLS_CERT`,
+   `ACCTMGR_TLS_KEY` and `ACCTMGR_TLS_PUBLISH=0.0.0.0:<port>` (the port people open).
+2. Keep `ACCTMGR_PUBLISH=127.0.0.1:47291`, and set `ACCTMGR_PUBLIC_ORIGIN=https://<host>:<port>` and
+   `ACCTMGR_TRUST_PROXY=1`.
+3. `docker compose up -d`. `http://` typed at that port is redirected to `https://`.
+
+**After a host reboot** the two containers come back in any order: restart policies do not follow
+`depends_on`. That is handled:
+
+- nginx looks the app up through Docker's DNS on every request (answer cached for 10 seconds), so
+  when nginx starts first it answers `502 Bad Gateway` for a few seconds and then recovers by itself.
+- It proxies to the alias `claude-usage.internal`, which the overlay gives the app. A name with a
+  dot matters: some LAN resolvers answer an unknown single-label name with an outside address, and
+  nginx would then send requests off the host. A `.internal` name gets "not found" instead.
+
+After changing `nginx-tls.conf`, recreate the sidecar so it reads the new file:
+`docker compose up -d --force-recreate claude-usage-tls`. A plain `up -d` keeps the old one, because
+the file is mounted on its own and an edited or re-checked-out file is a new file to Docker.
 
 ## Adding an account
 
