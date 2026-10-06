@@ -213,6 +213,18 @@ export class RateLimiter {
 	succeed(key: string): void {
 		this.perKey.delete(key);
 	}
+
+	/**
+	 * Gives back the newest attempt of this client (and one from the global count). Sign-in counts
+	 * every attempt BEFORE checking the password, so guesses sent in parallel cannot all slip past
+	 * the limit; a correct password then takes back only its own attempt. Earlier failures stay, so
+	 * signing in to one account never wipes the count of guesses made against another.
+	 */
+	forgive(key: string): void {
+		const mine = this.perKey.get(key);
+		if (mine?.length) this.perKey.set(key, mine.slice(0, -1));
+		if (this.all.length) this.all = this.all.slice(0, -1);
+	}
 }
 
 export const loginLimiter = new RateLimiter(

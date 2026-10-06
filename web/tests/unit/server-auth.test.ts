@@ -159,6 +159,23 @@ describe('login rate limit', () => {
 		t += 15 * 60_000 + 1;
 		expect(rl.retryAfter('1.2.3.4')).toBe(0);
 	});
+	it('forgive gives back one attempt only: a sign-in elsewhere does not wipe earlier guesses', () => {
+		let t = 1_000_000;
+		const rl = new auth.RateLimiter(3, 30, 60_000, () => t);
+		rl.fail('a');
+		rl.fail('a');
+		// the third attempt is counted up front, turns out correct, and is given back
+		rl.fail('a');
+		expect(rl.retryAfter('a')).toBeGreaterThan(0);
+		rl.forgive('a');
+		expect(rl.retryAfter('a')).toBe(0);
+		// the two real failures are still there: one more wrong guess locks the client
+		rl.fail('a');
+		expect(rl.retryAfter('a')).toBeGreaterThan(0);
+		rl.forgive('nobody'); // unknown client: nothing to give back for it
+		t += 60_001;
+		expect(rl.retryAfter('a')).toBe(0);
+	});
 	it('success clears the client; the global cap still applies across clients', () => {
 		let t = 0;
 		const rl = new auth.RateLimiter(5, 6, 60_000, () => t);

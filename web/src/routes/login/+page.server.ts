@@ -22,13 +22,15 @@ export const actions = {
 			return fail(429, { error: `Too many attempts. Try again in ${Math.ceil(wait / 60)} minute(s).` });
 		}
 		const form = await request.formData();
+		// Counted before the (slow) password check: guesses sent in parallel all land in the count.
+		loginLimiter.fail(ip);
 		const user = await authenticate(form.get('username'), form.get('password'));
 		if (!user) {
-			loginLimiter.fail(ip);
 			console.warn(`[account-manager] failed sign-in ip=${ip} at=${new Date().toISOString()}`);
 			return fail(400, { error: 'Wrong username or password.' });
 		}
-		loginLimiter.succeed(ip);
+		// A correct sign-in takes back its own attempt only; earlier failures from this address stay.
+		loginLimiter.forgive(ip);
 		cookies.set(cookieName(), createSession(user.id), {
 			path: '/',
 			httpOnly: true,
