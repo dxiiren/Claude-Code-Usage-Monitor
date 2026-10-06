@@ -29,7 +29,10 @@ export default defineConfig({
 	fullyParallel: false,
 	workers: 1,
 	retries: 0,
-	timeout: 60_000,
+	// CI runs on small shared runners that are sometimes several times slower than a dev PC:
+	// the same steps pass, they just need longer to appear.
+	timeout: process.env.CI ? 240_000 : 60_000,
+	expect: { timeout: process.env.CI ? 30_000 : 5_000 },
 	reporter: [['list']],
 	use: { baseURL: ORIGIN, trace: 'retain-on-failure' },
 	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],

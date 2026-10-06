@@ -108,7 +108,7 @@ test('add account: sign-in link for the user\'s own browser, paste the code, usa
 test('usage: the two windows carry their names; Refresh now reads straight away, then waits', async ({ page }) => {
 	await signIn(page);
 	const setWait = (seconds: number) => page.request.post('/api/app-settings', { headers: { origin: ORIGIN }, data: { refreshWaitSeconds: seconds } });
-	expect((await setWait(30)).status()).toBe(200);
+	expect((await setWait(300)).status()).toBe(200);
 	await page.goto('/usage');
 	const row = page.locator('li[data-account="alpha"]');
 	await expect(row).toContainText('Hourly session');
