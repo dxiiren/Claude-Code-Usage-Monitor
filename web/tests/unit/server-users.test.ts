@@ -37,6 +37,20 @@ beforeAll(async () => {
 	reportData = await import('../../src/lib/server/reportData');
 });
 
+describe('password hashing', () => {
+	it('uses the full scrypt cost by default; a wrong password or a damaged hash never verifies', async () => {
+		const h = await users.hashPassword(PW);
+		expect(h).toMatch(/^scrypt\$16384\$8\$1\$[\w-]+\$[\w-]+$/);
+		expect(await users.verifyPassword(PW, h)).toBe(true);
+		expect(await users.verifyPassword(`${PW} `, h)).toBe(false);
+		expect(await users.verifyPassword(PW, h.slice(0, -2))).toBe(false);
+		expect(await users.verifyPassword(PW, 'not-a-hash')).toBe(false);
+		expect(await users.verifyPassword(undefined, h)).toBe(false);
+		// every case below hashes with a light cost: dozens of full-strength hashes starve a small CI runner
+		users.setHashCostForTests(1024);
+	});
+});
+
 describe('the first admin comes from the environment', () => {
 	it('is created on first start with every screen, and can sign in', async () => {
 		expect(await users.syncEnvAdmin()).toBe('created');
@@ -56,7 +70,7 @@ describe('the first admin comes from the environment', () => {
 	});
 	it('stores a scrypt hash, never the password', () => {
 		const stored = rows<{ pw_hash: string }>('SELECT pw_hash FROM users');
-		expect(stored[0].pw_hash).toMatch(/^scrypt\$16384\$8\$1\$/);
+		expect(stored[0].pw_hash).toMatch(/^scrypt\$\d+\$8\$1\$/);
 		expect(JSON.stringify(rows('SELECT * FROM users'))).not.toContain(PW);
 	});
 	it('a changed environment password resets that admin and signs everyone out', async () => {

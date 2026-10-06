@@ -26,6 +26,7 @@ beforeAll(async () => {
 	auth = await import('../../src/lib/server/auth');
 	users = await import('../../src/lib/server/users');
 	(await import('../../src/lib/server/db')).initDb();
+	users.setHashCostForTests(1024); // sessions are under test here, not hashing
 	uid = (await users.createUser('session-owner', 'a long enough password', ['usage'])).id;
 });
 

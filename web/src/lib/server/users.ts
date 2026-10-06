@@ -51,9 +51,20 @@ function scrypt(password: string, salt: Buffer, n = N, r = R, p = P): Promise<Bu
 	);
 }
 
+let cost = N;
+
+/**
+ * Unit tests only: hash with a light cost. Dozens of full-strength hashes starve a small CI
+ * runner and time out unrelated test files. Nothing in the app calls this, and it cannot be
+ * reached from the environment or a request; stored hashes carry their own cost either way.
+ */
+export function setHashCostForTests(n: number): void {
+	cost = n;
+}
+
 export async function hashPassword(password: string): Promise<string> {
 	const salt = crypto.randomBytes(16);
-	return `scrypt$${N}$${R}$${P}$${salt.toString('base64url')}$${(await scrypt(password, salt)).toString('base64url')}`;
+	return `scrypt$${cost}$${R}$${P}$${salt.toString('base64url')}$${(await scrypt(password, salt, cost)).toString('base64url')}`;
 }
 
 export async function verifyPassword(password: unknown, stored: string): Promise<boolean> {
