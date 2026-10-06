@@ -4,7 +4,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { UserError, database } from './db';
+import { UserError, batch, database } from './db';
 import { DATA_DIR, PUBLIC_ORIGIN } from './paths';
 import { getSettings } from './settings';
 
@@ -104,14 +104,16 @@ export interface SessionUser {
 /** New session for a user: cookie value `<id>.<hmac>`; only sha256(id) is stored. */
 export function createSession(userId: string, nowS = Math.floor(Date.now() / 1000)): string {
 	const id = crypto.randomBytes(32).toString('base64url');
-	const d = database();
-	d.prepare('DELETE FROM admin_sessions WHERE expires_unix <= ?').run(nowS);
-	d.prepare('INSERT INTO admin_sessions (id_hash, created_at, expires_unix, user_id) VALUES (?, ?, ?, ?)').run(
-		sha256(id),
-		new Date(nowS * 1000).toISOString(),
-		nowS + sessionTtlS(),
-		userId
-	);
+	const ttl = sessionTtlS();
+	batch((d) => {
+		d.prepare('DELETE FROM admin_sessions WHERE expires_unix <= ?').run(nowS);
+		d.prepare('INSERT INTO admin_sessions (id_hash, created_at, expires_unix, user_id) VALUES (?, ?, ?, ?)').run(
+			sha256(id),
+			new Date(nowS * 1000).toISOString(),
+			nowS + ttl,
+			userId
+		);
+	});
 	return `${id}.${sign(id)}`;
 }
 

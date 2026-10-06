@@ -107,7 +107,15 @@ function open(): DatabaseSync {
 	// Rollback journal, NOT WAL: the widget reads read-only through winsqlite3.dll.
 	d.exec('PRAGMA journal_mode = DELETE;');
 	d.exec('PRAGMA busy_timeout = 5000;');
-	d.exec(`
+	// Tests only: skip the disk flush after every write. On a busy CI disk each flush can take
+	// seconds; a test database is thrown away anyway. Never set this on a real server.
+	if (process.env.ACCTMGR_TEST_FAST_DB === '1') d.exec('PRAGMA synchronous = OFF;');
+	// Everything start-up creates or updates goes in one transaction: one flush, not a dozen.
+	let migrated = false;
+	let themeRowAdded = false;
+	d.exec('BEGIN IMMEDIATE');
+	try {
+		d.exec(`
 CREATE TABLE IF NOT EXISTS accounts (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL UNIQUE,
@@ -124,25 +132,30 @@ CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );`);
-	if (SERVER) {
-		d.exec(SERVER_SCHEMA);
-		// Sessions from before users existed carry no identity: drop them (everyone signs in once more).
-		const sc = (d.prepare('PRAGMA table_info(admin_sessions)').all() as unknown as { name: string }[]).map((c) => c.name);
-		if (!sc.includes('user_id')) d.exec('ALTER TABLE admin_sessions ADD COLUMN user_id TEXT');
-		d.exec('DELETE FROM admin_sessions WHERE user_id IS NULL');
+		if (SERVER) {
+			d.exec(SERVER_SCHEMA);
+			// Sessions from before users existed carry no identity: drop them (everyone signs in once more).
+			const sc = (d.prepare('PRAGMA table_info(admin_sessions)').all() as unknown as { name: string }[]).map((c) => c.name);
+			if (!sc.includes('user_id')) d.exec('ALTER TABLE admin_sessions ADD COLUMN user_id TEXT');
+			d.exec('DELETE FROM admin_sessions WHERE user_id IS NULL');
+		}
+		// Schema 1 DB (no provider column): add it; every existing row is Claude (the DEFAULT).
+		const cols = (d.prepare('PRAGMA table_info(accounts)').all() as unknown as { name: string }[]).map((c) => c.name);
+		migrated = !cols.includes('provider');
+		if (migrated) d.exec("ALTER TABLE accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'");
+		const ins = d.prepare('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)');
+		ins.run('revision', '0');
+		// schema 2 tells the widget that zero codex rows means zero Codex accounts.
+		d.prepare("INSERT INTO meta (key, value) VALUES ('schema', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(SCHEMA_VERSION);
+		themeRowAdded = ins.run('card_theme', 'auto').changes === 1;
+		d.prepare("INSERT INTO meta (key, value) VALUES ('manager_url', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+			MANAGER_URL
+		);
+		d.exec('COMMIT');
+	} catch (e) {
+		d.exec('ROLLBACK');
+		throw e;
 	}
-	// Schema 1 DB (no provider column): add it; every existing row is Claude (the DEFAULT).
-	const cols = (d.prepare('PRAGMA table_info(accounts)').all() as unknown as { name: string }[]).map((c) => c.name);
-	const migrated = !cols.includes('provider');
-	if (migrated) d.exec("ALTER TABLE accounts ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'");
-	const ins = d.prepare('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)');
-	ins.run('revision', '0');
-	// schema 2 tells the widget that zero codex rows means zero Codex accounts.
-	d.prepare("INSERT INTO meta (key, value) VALUES ('schema', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(SCHEMA_VERSION);
-	const themeRowAdded = ins.run('card_theme', 'auto').changes === 1;
-	d.prepare("INSERT INTO meta (key, value) VALUES ('manager_url', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
-		MANAGER_URL
-	);
 	db = d;
 	if (SERVER) {
 		// The schema change counts as a write for remote widgets too.
@@ -378,6 +391,24 @@ export function setCardTheme(raw: unknown): void {
 	write((d) => {
 		d.prepare("INSERT INTO meta (key, value) VALUES ('card_theme', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(raw as string);
 	});
+}
+
+/**
+ * Several writes as one transaction: one disk flush instead of one per statement. For the
+ * server-only tables; it does not bump meta.revision (account writes use write() for that).
+ * Do not nest.
+ */
+export function batch<T>(fn: (d: DatabaseSync) => T): T {
+	const d = open();
+	d.exec('BEGIN IMMEDIATE');
+	try {
+		const result = fn(d);
+		d.exec('COMMIT');
+		return result;
+	} catch (e) {
+		d.exec('ROLLBACK');
+		throw e;
+	}
 }
 
 /** Server mode: the shared connection for auth / tokens / usage tables (same file, same rules). */

@@ -21,6 +21,7 @@ export function isolateHome(): { root: string; home: string; appData: string; ap
 	// ...nor the real Codex CLI (it would open the default browser).
 	process.env.CODEX_BIN = FAKE_CODEX;
 	process.env.EDGE_EXE = 'none';
+	process.env.ACCTMGR_TEST_FAST_DB = '1'; // throwaway database: no disk flush per write
 	return { root, home, appData, appDir: path.join(appData, 'ClaudeCodeUsageMonitor') };
 }
 
@@ -44,6 +45,7 @@ export function isolateServer(extra: Record<string, string> = {}): { root: strin
 		CLAUDE_BIN: FAKE_CLAUDE,
 		CODEX_BIN: FAKE_CODEX,
 		EDGE_EXE: 'none',
+		ACCTMGR_TEST_FAST_DB: '1', // throwaway database: no disk flush per write
 		...extra
 	});
 	delete process.env.ACCTMGR_SESSION_SECRET;
