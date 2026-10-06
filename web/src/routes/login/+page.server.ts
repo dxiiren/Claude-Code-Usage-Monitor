@@ -1,24 +1,12 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { SERVER } from '$lib/server/paths';
-import {
-	SESSION_TTL_S,
-	checkCredentials,
-	clientIp,
-	cookieName,
-	createSession,
-	loginLimiter,
-	secureCookies,
-	validSession
-} from '$lib/server/auth';
-
-/** Only same-site paths: never `//evil.example` or an absolute URL. */
-function safeNext(raw: string | null): string {
-	return raw && raw.startsWith('/') && !raw.startsWith('//') && !raw.startsWith('/\\') ? raw : '/';
-}
+import { clientIp, cookieName, createSession, loginLimiter, safeNext, secureCookies, sessionTtlS, sessionUser } from '$lib/server/auth';
+import { authenticate, homeFor } from '$lib/server/users';
 
 export const load = ({ cookies, url }) => {
 	if (!SERVER) redirect(303, '/');
-	if (validSession(cookies.get(cookieName()))) redirect(303, safeNext(url.searchParams.get('next')));
+	const user = sessionUser(cookies.get(cookieName()));
+	if (user) redirect(303, safeNext(url.searchParams.get('next'), homeFor(user.screens)));
 	return {};
 };
 
@@ -34,19 +22,21 @@ export const actions = {
 			return fail(429, { error: `Too many attempts. Try again in ${Math.ceil(wait / 60)} minute(s).` });
 		}
 		const form = await request.formData();
-		if (!checkCredentials(form.get('username'), form.get('password'))) {
+		const user = await authenticate(form.get('username'), form.get('password'));
+		if (!user) {
 			loginLimiter.fail(ip);
 			console.warn(`[account-manager] failed sign-in ip=${ip} at=${new Date().toISOString()}`);
 			return fail(400, { error: 'Wrong username or password.' });
 		}
 		loginLimiter.succeed(ip);
-		cookies.set(cookieName(), createSession(), {
+		cookies.set(cookieName(), createSession(user.id), {
 			path: '/',
 			httpOnly: true,
 			sameSite: 'strict',
 			secure: secureCookies(),
-			maxAge: SESSION_TTL_S
+			maxAge: sessionTtlS()
 		});
-		redirect(303, safeNext(url.searchParams.get('next')));
+		// A reset password must be replaced before anything else opens.
+		redirect(303, user.mustChange ? '/account' : safeNext(url.searchParams.get('next'), homeFor(user.screens)));
 	}
 };

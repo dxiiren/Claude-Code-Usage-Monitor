@@ -83,10 +83,19 @@ server, not the PC, owns the logins and fetches usage; Windows widgets only read
   the access token is expired), every `ACCTMGR_POLL_SECONDS` (default 300), honouring 429 /
   Retry-After. Results are stored per account (last usage, last error, polled_at).
 - Access control (the page is no longer loopback-only):
+  - Every page and `/api/*` (except the login page, `/healthz` and the widget endpoint) needs a
+    signed-in user: a login form and an HttpOnly, SameSite=Strict session cookie (`Secure` when
+    `ACCTMGR_PUBLIC_ORIGIN` is https). Login attempts are rate limited.
+  - Users live in table `users` (scrypt password hash). Each user has a list of screens they may
+    open (`accounts`, `usage`, `report`, `tokens`, `settings`, `users`); a request to a screen
+    not on the list is refused (`403`, or a redirect for a page). Whoever has `users` is an admin.
+    A new user, or one whose password an admin reset, must choose their own password before
+    anything else opens.
   - `ACCTMGR_ADMIN_USER` (default `Admin`, case-insensitive) + `ACCTMGR_ADMIN_PASSWORD`
-    (required in server mode; refuse to start without it) protect
-    every page and `/api/*` with a login form and an HttpOnly, SameSite=Strict session cookie
-    (`Secure` when `ACCTMGR_PUBLIC_ORIGIN` is https). Login attempts are rate limited.
+    (required in server mode; refuse to start without it) create the first admin on first start.
+    When `ACCTMGR_ADMIN_PASSWORD` changes between starts, or no user is left who has `users`,
+    that admin gets the environment password and all screens again and every session ends: this
+    is the recovery path when locked out.
   - `ACCTMGR_PUBLIC_ORIGIN` (e.g. `https://claude.example.com`) replaces the
     127.0.0.1:47291 Origin/Host check.
   - `ACCTMGR_TRUST_PROXY=1` counts sign-in attempts per `CF-Connecting-IP` (only when the
@@ -95,6 +104,24 @@ server, not the PC, owns the logins and fetches usage; Windows widgets only read
     `api_tokens(id TEXT PK, name TEXT, token_hash TEXT UNIQUE, created_at TEXT, last_used_at TEXT)`,
     revocable. Only `GET /api/v1/widget` accepts them (`Authorization: Bearer <token>`).
 - Tokens / credentials are never returned by any endpoint or written to logs.
+
+### Server-only tables
+
+These tables exist only in server mode, in the same `accounts.db`. The widget never reads them, and
+a write to any of them never bumps `meta.revision`. `accounts` and `meta` are unchanged.
+
+- `users(id TEXT PK, username TEXT UNIQUE, screens TEXT, pw_hash TEXT, must_change INTEGER,
+  created_at, updated_at, last_login_at)`: dashboard sign-ins; `screens` is a JSON array.
+- `admin_sessions(id_hash, created_at, expires_unix, user_id)`: `user_id` is new and says who signed
+  in. Sessions without it (from before users existed) are deleted at start.
+- `usage_samples(account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix)`, primary key
+  `(account_id, ts_unix)`: one row per successful poll per account, for reports. Pruned by the
+  history setting (`ACCTMGR_HISTORY_DAYS`, default 400, 0 = keep forever).
+- `report_accounts(account_id PK, name, provider)`: last known name of each account, so a removed
+  account keeps its name in old reports.
+- `app_settings(key PK, value)`: values saved on the Settings screen, as JSON. A missing key means
+  the built-in default; `ACCTMGR_POLL_SECONDS`, `ACCTMGR_TIMEZONE` (then `TZ`) and
+  `ACCTMGR_HISTORY_DAYS` supply the defaults of three of them.
 
 ### `GET /api/v1/widget` (Bearer token) -- what remote widgets read
 

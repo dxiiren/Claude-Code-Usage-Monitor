@@ -139,7 +139,7 @@
 	input {
 		padding: 0.45rem 0.6rem;
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		background: var(--surface);
 		color: var(--text);
 	}
@@ -150,7 +150,7 @@
 	button {
 		padding: 0.4rem 0.8rem;
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		background: var(--surface);
 		color: var(--text);
 		cursor: pointer;
@@ -169,7 +169,7 @@
 	}
 	.err,
 	.ok {
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		padding: 0.6rem 0.75rem;
 		margin: 0.75rem 0 0;
 		overflow-wrap: anywhere;
@@ -190,7 +190,7 @@
 		padding: 1.25rem;
 		text-align: center;
 		border: 1px dashed var(--border);
-		border-radius: 10px;
+		border-radius: var(--radius);
 		margin-top: 1rem;
 	}
 	.list {
@@ -208,7 +208,7 @@
 		flex-wrap: wrap;
 		background: var(--surface);
 		border: 1px solid var(--border);
-		border-radius: 10px;
+		border-radius: var(--radius);
 		padding: 0.6rem 0.9rem;
 	}
 	.name {

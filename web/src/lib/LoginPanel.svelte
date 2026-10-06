@@ -310,7 +310,7 @@
 <style>
 	.panel {
 		border: 1px solid var(--accent);
-		border-radius: 10px;
+		border-radius: var(--radius);
 		background: var(--surface);
 		padding: 1rem;
 		margin: 1rem 0;
@@ -340,7 +340,7 @@
 	input {
 		padding: 0.45rem 0.6rem;
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		background: var(--bg);
 		color: var(--text);
 	}
@@ -348,7 +348,7 @@
 	.btn {
 		padding: 0.45rem 0.9rem;
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		background: var(--surface);
 		color: var(--text);
 		cursor: pointer;
@@ -398,7 +398,7 @@
 	.err,
 	.warn,
 	.ok {
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		padding: 0.6rem 0.75rem;
 		margin: 0.5rem 0 0;
 		overflow-wrap: anywhere;

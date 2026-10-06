@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import UsageBar from '$lib/UsageBar.svelte';
-	import { needsLogin, pctText, resetsIn } from '$lib/format';
+	import { needsLogin, pctText, post, resetsIn } from '$lib/format';
 	import type { Snapshot } from '$lib/server/api';
 
 	let { data } = $props();
+	/** Names of the two windows, colour levels and refresh timing (Settings, server mode). */
+	const ui = $derived(data.ui);
 
 	// svelte-ignore state_referenced_locally
 	let snap = $state<Snapshot>(data.snap);
@@ -24,12 +26,40 @@
 
 	onMount(() => {
 		const tick = setInterval(() => (now = Date.now()), 1000);
-		const poll = setInterval(refresh, 15_000);
+		// 0 = the page does not refresh itself (Settings)
+		const poll = ui.autoRefreshSeconds > 0 ? setInterval(refresh, ui.autoRefreshSeconds * 1000) : null;
 		return () => {
 			clearInterval(tick);
-			clearInterval(poll);
+			if (poll) clearInterval(poll);
 		};
 	});
+
+	// "Refresh now" (server mode): read usage straight away instead of waiting for the next reading.
+	let refreshing = $state(false);
+	let waitUntil = $state(0);
+	let notice = $state<{ ok: boolean; text: string } | null>(null);
+	const waitLeft = $derived(Math.max(0, Math.ceil((waitUntil - now) / 1000)));
+
+	async function refreshNow() {
+		if (refreshing || waitLeft > 0) return;
+		refreshing = true;
+		notice = null;
+		try {
+			const out = await post<{ refreshed: number; skipped: number; snap: Snapshot }>('/api/usage/refresh');
+			snap = out.snap;
+			stale = false;
+			notice = out.refreshed
+				? { ok: true, text: `Refreshed ${out.refreshed} ${out.refreshed === 1 ? 'account' : 'accounts'}.${out.skipped ? ` ${out.skipped} skipped: the provider asked us to wait.` : ''}` }
+				: { ok: false, text: 'Nothing refreshed: the provider asked us to wait before reading again.' };
+			waitUntil = Date.now() + ui.refreshWaitSeconds * 1000;
+		} catch (e) {
+			const err = e as Error & { data?: { retryAfter?: number } };
+			if (err.data?.retryAfter) waitUntil = Date.now() + err.data.retryAfter * 1000;
+			notice = { ok: false, text: err.message };
+		} finally {
+			refreshing = false;
+		}
+	}
 
 	/** Accounts whose numbers can be trusted right now (logged in, login not expired). */
 	const loggedIn = $derived(snap.accounts.filter((a) => a.email && !needsLogin(a.status.state)));
@@ -92,7 +122,7 @@
 			<span class="tag">Best to use now</span>
 			<strong>{best.name}</strong>
 			<span class="muted">
-				&middot; 5h {pctText(best.usage?.session?.percentage)} used, weekly {pctText(best.usage?.weekly?.percentage)}
+				&middot; {ui.hourlyLabel} {pctText(best.usage?.session?.percentage)} used, {ui.weeklyLabel.toLowerCase()} {pctText(best.usage?.weekly?.percentage)}
 			</span>
 		{:else if nextFree}
 			<span class="tag full">All at their limit</span>
@@ -106,11 +136,19 @@
 	<div class="card">
 		<div class="cardhead">
 			<p class="title">{cardTitle}</p>
-			<p class="updated" class:stale>
-				{#if updated}updated {updated.toLocaleTimeString()}{:else}{snap.mode === 'server' ? 'not polled yet' : 'no widget data yet'}{/if}
-				{#if stale}&middot; server unreachable{/if}
-			</p>
+			<div class="headright">
+				<p class="updated" class:stale>
+					{#if updated}updated {updated.toLocaleTimeString()}{:else}{snap.mode === 'server' ? 'not polled yet' : 'no widget data yet'}{/if}
+					{#if stale}&middot; server unreachable{/if}
+				</p>
+				{#if snap.mode === 'server'}
+					<button class="k-btn primary" type="button" disabled={refreshing || waitLeft > 0} onclick={refreshNow} data-testid="refresh-all">
+						{refreshing ? 'Refreshing...' : waitLeft > 0 ? `Refresh in ${waitLeft}s` : 'Refresh now'}
+					</button>
+				{/if}
+			</div>
 		</div>
+		{#if notice}<p class="notice" class:bad={!notice.ok} role="status" data-testid="refresh-notice">{notice.text}</p>{/if}
 		<ul>
 			{#each snap.accounts as a (a.id)}
 				{@const login = needsLogin(a.status.state)}
@@ -131,9 +169,10 @@
 						</div>
 					{:else if a.email}
 						<div class="bars">
-							<UsageBar label="5h" title="5-hour session" pct={a.usage?.session?.percentage} resetsAt={a.usage?.session?.resetsAt} {now} seconds />
-							<UsageBar label="7d" title="Weekly" pct={a.usage?.weekly?.percentage} resetsAt={a.usage?.weekly?.resetsAt} {now} seconds />
+							<UsageBar label={ui.hourlyLabel} title="{ui.hourlyLabel} (5-hour window)" pct={a.usage?.session?.percentage} resetsAt={a.usage?.session?.resetsAt} {now} seconds warnAt={ui.warnAt} highAt={ui.highAt} />
+							<UsageBar label={ui.weeklyLabel} title="{ui.weeklyLabel} (7-day window)" pct={a.usage?.weekly?.percentage} resetsAt={a.usage?.weekly?.resetsAt} {now} seconds warnAt={ui.warnAt} highAt={ui.highAt} />
 						</div>
+
 						{#if a.status.state === 'error'}<p class="error" data-testid="status-error">{a.status.message}</p>{/if}
 					{/if}
 				</li>
@@ -191,10 +230,30 @@
 		background: var(--card-bg);
 		color: var(--card-text);
 		border: 1px solid var(--card-border);
-		border-radius: 10px;
-		padding: 10px 14px 12px;
+		border-radius: var(--radius);
+		padding: 0.75rem 1rem;
 		box-shadow: var(--card-shadow);
 	}
+	.headright {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.4rem 0.75rem;
+	}
+	.notice {
+		margin: 0.5rem 0 0;
+		padding: 0.4rem 0.6rem;
+		border: 1px solid var(--ok-border);
+		border-radius: calc(var(--radius) * 0.8);
+		background: var(--ok-bg);
+		color: var(--text);
+		font-size: 0.8125rem;
+	}
+	.notice.bad {
+		border-color: var(--warn-border);
+		background: var(--warn-bg);
+	}
+
 	.card a {
 		color: var(--card-link);
 	}
@@ -207,9 +266,10 @@
 	}
 	.title {
 		margin: 0;
-		font-size: 0.8rem;
-		font-weight: 600;
-		color: var(--card-muted);
+		font-family: 'Noto Sans Variable', 'Noto Sans', system-ui, sans-serif;
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: var(--card-text);
 	}
 	.updated {
 		margin: 0;
@@ -226,7 +286,7 @@
 	}
 	li {
 		display: grid;
-		grid-template-columns: minmax(7rem, 11rem) 1fr;
+		grid-template-columns: minmax(7rem, 11rem) minmax(0, 1fr);
 		gap: 0.4rem 1rem;
 		align-items: center;
 		padding: 0.6rem 0;
@@ -301,7 +361,7 @@
 	.attention {
 		background: var(--err-bg);
 		border: 1px solid var(--err-border);
-		border-radius: 8px;
+		border-radius: var(--radius);
 		padding: 0.6rem 0.8rem;
 		margin: 0.5rem 0 0.75rem;
 	}
@@ -326,7 +386,7 @@
 	.card a.btn {
 		display: inline-block;
 		padding: 0.3rem 0.9rem;
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		background: var(--card-red);
 		color: var(--card-pill-text);
 		font-weight: 600;
@@ -341,7 +401,7 @@
 	}
 	@media (max-width: 600px) {
 		li {
-			grid-template-columns: 1fr;
+			grid-template-columns: minmax(0, 1fr);
 		}
 	}
 </style>

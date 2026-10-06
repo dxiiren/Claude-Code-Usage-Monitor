@@ -39,7 +39,7 @@
 	.seg {
 		display: inline-flex;
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		overflow: hidden;
 	}
 	button {

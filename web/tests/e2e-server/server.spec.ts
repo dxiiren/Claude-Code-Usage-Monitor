@@ -105,6 +105,38 @@ test('add account: sign-in link for the user\'s own browser, paste the code, usa
 	await page.emulateMedia({ colorScheme: 'light' });
 });
 
+test('usage: the two windows carry their names; Refresh now reads straight away, then waits', async ({ page }) => {
+	await signIn(page);
+	const setWait = (seconds: number) => page.request.post('/api/app-settings', { headers: { origin: ORIGIN }, data: { refreshWaitSeconds: seconds } });
+	expect((await setWait(30)).status()).toBe(200);
+	await page.goto('/usage');
+	const row = page.locator('li[data-account="alpha"]');
+	await expect(row).toContainText('Hourly session');
+	await expect(row).toContainText('Weekly session');
+	await expect(page.getByTestId('best')).toContainText('Hourly session 12% used, weekly session 44%');
+
+	const before = (await (await page.request.get(`${USAGE}/calls`)).json()).calls;
+	await page.getByTestId('refresh-all').click();
+	await expect(page.getByTestId('refresh-notice')).toHaveText('Refreshed 1 account.');
+	expect((await (await page.request.get(`${USAGE}/calls`)).json()).calls).toBe(before + 1);
+	// the wait between manual refreshes: the button counts down and the server refuses a second go
+	await expect(page.getByTestId('refresh-all')).toBeDisabled();
+	await expect(page.getByTestId('refresh-all')).toContainText(/Refresh in \d+s/);
+	const again = await page.request.post('/api/usage/refresh', { headers: { origin: ORIGIN }, data: {} });
+	expect(again.status()).toBe(429);
+	expect(Number(again.headers()['retry-after'])).toBeGreaterThan(0);
+
+	// with the wait switched off the button is ready again at once, and Accounts has the same button
+	expect((await setWait(0)).status()).toBe(200);
+	await page.goto('/');
+	await page.getByTestId('refresh-all').click();
+	await expect(page.getByTestId('refresh-notice')).toHaveText('Refreshed 1 account.');
+	expect((await (await page.request.get(`${USAGE}/calls`)).json()).calls).toBe(before + 2);
+	// every reading was kept for the reports
+	const kept = await page.request.get('/api/report?period=day');
+	expect((await kept.json()).accounts.map((a: { name: string }) => a.name)).toContain('alpha');
+});
+
 test('an account whose token the usage endpoint rejects shows as expired', async ({ page }) => {
 	await signIn(page);
 	await page.getByLabel('Add an account').fill('beta');
@@ -242,7 +274,8 @@ test('codex: cancelling a server login stops the CLI (port 1455 free again)', as
 test('sign out ends the session', async ({ page, context }) => {
 	await signIn(page);
 	const before = (await context.cookies()).find((x) => x.name === 'acctmgr_session')!.value;
-	await page.getByRole('button', { name: 'Sign out' }).click();
+	await page.getByRole('button', { name: /^Account menu/ }).click();
+	await page.getByRole('menuitem', { name: 'Sign out' }).click();
 	await expect(page).toHaveURL(/\/login$/);
 	// The old cookie no longer works server side.
 	await context.addCookies([{ name: 'acctmgr_session', value: before, url: ORIGIN }]);

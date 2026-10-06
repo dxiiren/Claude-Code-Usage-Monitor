@@ -8,10 +8,13 @@
 		resetsAt: number | null | undefined;
 		now: number;
 		seconds?: boolean;
+		/** amber / red levels (Settings); default = the widget's 70 / 90 */
+		warnAt?: number;
+		highAt?: number;
 	}
-	let { label, title, pct, resetsAt, now, seconds = false }: Props = $props();
+	let { label, title, pct, resetsAt, now, seconds = false, warnAt = 70, highAt = 90 }: Props = $props();
 
-	const lv = $derived(level(pct));
+	const lv = $derived(level(pct, warnAt, highAt));
 	const width = $derived(pct === null || pct === undefined ? 0 : Math.max(1, Math.min(100, pct)));
 </script>
 
@@ -39,7 +42,8 @@
 <style>
 	.row {
 		display: grid;
-		grid-template-columns: 2rem minmax(3rem, 1fr) auto;
+		/* the label is a configurable name ("Hourly session"), so it gets room and may wrap */
+		grid-template-columns: minmax(2rem, 7rem) minmax(3rem, 1fr) auto;
 		align-items: center;
 		gap: 0.5rem;
 		font-size: 0.8125rem;
@@ -47,6 +51,7 @@
 	.lab {
 		color: var(--muted);
 		font-weight: 500;
+		overflow-wrap: anywhere;
 	}
 	.track {
 		height: 6px;
@@ -96,11 +101,8 @@
 	}
 	@media (max-width: 520px) {
 		.row {
-			grid-template-columns: 2rem 1fr;
+			grid-template-columns: 1fr;
 			row-gap: 0.15rem;
-		}
-		.val {
-			grid-column: 2;
 		}
 		.val strong {
 			min-width: 0;

@@ -25,7 +25,7 @@
 		margin: 3rem auto;
 		background: var(--surface);
 		border: 1px solid var(--border);
-		border-radius: 10px;
+		border-radius: var(--radius);
 		padding: 1.25rem;
 	}
 	h1 {
@@ -47,13 +47,13 @@
 	input {
 		padding: 0.5rem 0.6rem;
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		background: var(--bg);
 		color: var(--text);
 	}
 	button {
 		padding: 0.5rem 0.9rem;
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		border: 1px solid var(--accent);
 		background: var(--accent);
 		color: var(--accent-text);
@@ -65,7 +65,7 @@
 	.err {
 		margin: 0.25rem 0 0;
 		padding: 0.5rem 0.75rem;
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		background: var(--err-bg);
 		border: 1px solid var(--err-border);
 	}
