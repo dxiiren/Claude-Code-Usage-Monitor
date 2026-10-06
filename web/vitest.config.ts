@@ -11,6 +11,8 @@ export default defineConfig({
 		environment: 'node',
 		pool: 'forks',
 		testTimeout: 30_000,
+		// a cold, two-CPU CI runner imports the server modules much more slowly than a dev PC
+		hookTimeout: 60_000,
 		projects: [
 			{ extends: true, test: { name: 'unit', include: ['tests/unit/**/*.test.ts'], exclude: CODEX } },
 			{ extends: true, test: { name: 'codex', include: CODEX, fileParallelism: false } }
