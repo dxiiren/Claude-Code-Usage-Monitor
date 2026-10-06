@@ -3,16 +3,8 @@ import { initDb } from '$lib/server/db';
 import { sweepStaleLogins } from '$lib/server/claude';
 import { checkRequest, checkServerRequest, type GuardResult } from '$lib/server/guard';
 import { PORT, PUBLIC_ORIGIN, SERVER } from '$lib/server/paths';
-import {
-	WEAK_PASSWORD_LENGTH,
-	clientIp,
-	cookieName,
-	loginLimiter,
-	rotateSessionsIfPasswordChanged,
-	serverConfigProblems,
-	sessionSecret,
-	validSession
-} from '$lib/server/auth';
+import { WEAK_PASSWORD_LENGTH, clientIp, cookieName, loginLimiter, serverConfigProblems, sessionSecret, sessionUser } from '$lib/server/auth';
+import { homeFor, screensFor, syncEnvAdmin } from '$lib/server/users';
 import { getPoller } from '$lib/server/serverUsage';
 
 export const init: ServerInit = async () => {
@@ -27,7 +19,9 @@ export const init: ServerInit = async () => {
 	await sweepStaleLogins();
 	if (SERVER) {
 		sessionSecret();
-		rotateSessionsIfPasswordChanged();
+		const admin = await syncEnvAdmin();
+		if (admin === 'created') console.log('[account-manager] created the first admin from ACCTMGR_ADMIN_USER / ACCTMGR_ADMIN_PASSWORD.');
+		if (admin === 'reset') console.log('[account-manager] ACCTMGR_ADMIN_PASSWORD changed: that admin now signs in with it, and everyone was signed out.');
 		getPoller().start();
 		console.log(`[account-manager] server mode, public origin ${PUBLIC_ORIGIN}`);
 		if ((process.env.ACCTMGR_ADMIN_PASSWORD ?? '').length < WEAK_PASSWORD_LENGTH)
@@ -39,13 +33,14 @@ export const init: ServerInit = async () => {
 	}
 };
 
-/** Server mode: reachable without a session. Everything else needs the admin login. */
+/** Server mode: reachable without a session. Everything else needs a signed-in user. */
 function isPublic(pathname: string): boolean {
 	return (
 		pathname === '/login' ||
 		pathname === '/api/v1/widget' || // its own Bearer check
 		pathname.startsWith('/_app/') ||
 		pathname === '/favicon.svg' ||
+		pathname.startsWith('/brand-') || // the organisation's mark and logo (see lib/brand.ts)
 		pathname === '/robots.txt'
 	);
 }
@@ -58,14 +53,28 @@ function denied(g: Extract<GuardResult, { action: 'deny' }>): Response {
 	});
 }
 
+const jsonError = (status: number, error: string) =>
+	new Response(JSON.stringify({ error }), { status, headers: { 'content-type': 'application/json' } });
+const seeOther = (location: string) => new Response(null, { status: 303, headers: { location } });
+
+/** Signed in? Allowed to open this screen? Sets event.locals.user for the pages and routes. */
 function authGate(event: RequestEvent): Response | null {
 	const p = event.url.pathname;
 	if (isPublic(p)) return null;
-	if (validSession(event.cookies.get(cookieName()))) return null;
-	if (p.startsWith('/api/'))
-		return new Response(JSON.stringify({ error: 'Not signed in.' }), { status: 401, headers: { 'content-type': 'application/json' } });
-	const next = `${p}${event.url.search}`;
-	return new Response(null, { status: 303, headers: { location: next === '/' ? '/login' : `/login?next=${encodeURIComponent(next)}` } });
+	const api = p.startsWith('/api/');
+	const user = sessionUser(event.cookies.get(cookieName()));
+	if (!user) {
+		if (api) return jsonError(401, 'Not signed in.');
+		const next = `${p}${event.url.search}`;
+		return seeOther(next === '/' ? '/login' : `/login?next=${encodeURIComponent(next)}`);
+	}
+	event.locals.user = user;
+	const needs = screensFor(event.request.method, p);
+	// After an admin reset, nothing opens until the user has chosen their own password.
+	if (user.mustChange && needs.length) return api ? jsonError(403, 'Choose a new password first.') : seeOther('/account');
+	if (needs.length && !needs.some((sc) => user.screens.includes(sc)))
+		return api ? jsonError(403, 'Your account cannot open this screen.') : seeOther(homeFor(user.screens));
+	return null;
 }
 
 export const handle: Handle = async ({ event, resolve }) => {

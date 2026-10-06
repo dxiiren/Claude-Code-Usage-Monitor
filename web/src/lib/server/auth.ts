@@ -1,13 +1,16 @@
-// Server-mode access control: admin password -> session cookie, login rate limit, widget API tokens.
+// Server-mode access control: user sign-in -> session cookie, login rate limit, widget API tokens.
+// Users, their passwords and the screens they may open live in users.ts.
 // Nothing secret is ever logged or returned: sessions and tokens are stored as SHA-256 hashes only.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { UserError, database } from './db';
 import { DATA_DIR, PUBLIC_ORIGIN } from './paths';
+import { getSettings } from './settings';
 
 const env = process.env;
-export const SESSION_TTL_S = 14 * 24 * 3600;
+/** How long a sign-in lasts (Settings > Sign-in). */
+export const sessionTtlS = () => getSettings().sessionDays * 24 * 3600;
 /** Below this the server still starts (the owner decides), but logs a warning at every start. */
 export const WEAK_PASSWORD_LENGTH = 12;
 
@@ -18,7 +21,7 @@ const sha256 = (s: string) => crypto.createHash('sha256').update(s, 'utf8').dige
 /** Everything server mode refuses to start without. Returns the problems (empty = ok). */
 export function serverConfigProblems(e: NodeJS.ProcessEnv = env): string[] {
 	const out: string[] = [];
-	if (!e.ACCTMGR_ADMIN_PASSWORD) out.push('ACCTMGR_ADMIN_PASSWORD is required in server mode (it protects every page and API).');
+	if (!e.ACCTMGR_ADMIN_PASSWORD) out.push('ACCTMGR_ADMIN_PASSWORD is required in server mode (it creates the first admin and is the way back in if you are locked out).');
 	if (e.ACCTMGR_ADMIN_USER !== undefined && !e.ACCTMGR_ADMIN_USER.trim()) out.push('ACCTMGR_ADMIN_USER is set but empty.');
 	if (e.ACCTMGR_PUBLIC_ORIGIN) {
 		try {
@@ -35,28 +38,10 @@ export const secureCookies = () => PUBLIC_ORIGIN.startsWith('https:');
 /** `__Host-` pins the cookie to this exact host (requires Secure, Path=/, no Domain). */
 export const cookieName = () => (secureCookies() ? '__Host-acctmgr_session' : 'acctmgr_session');
 
-// ---------- username + password ----------
+// ---------- the bootstrap admin ----------
 
-/** Constant-time: both sides hashed to 32 bytes first, so length differences leak nothing either. */
-function sameSecret(given: unknown, expected: string): boolean {
-	const a = crypto.createHash('sha256').update(typeof given === 'string' ? given : '', 'utf8').digest();
-	const b = crypto.createHash('sha256').update(expected, 'utf8').digest();
-	return crypto.timingSafeEqual(a, b) && typeof given === 'string' && expected.length > 0;
-}
-
-export function checkPassword(given: unknown, expected: string = env.ACCTMGR_ADMIN_PASSWORD ?? ''): boolean {
-	return sameSecret(given, expected);
-}
-
-/** ACCTMGR_ADMIN_USER (default "Admin"), compared case-insensitively. */
+/** ACCTMGR_ADMIN_USER (default "Admin"): the first admin, and the way back in (see users.ts). */
 export const adminUser = (e: NodeJS.ProcessEnv = env) => (e.ACCTMGR_ADMIN_USER ?? '').trim() || 'Admin';
-
-/** Username AND password; both are always compared (no early exit that would time the username). */
-export function checkCredentials(user: unknown, password: unknown, e: NodeJS.ProcessEnv = env): boolean {
-	const u = sameSecret(typeof user === 'string' ? user.trim().toLowerCase() : user, adminUser(e).toLowerCase());
-	const p = sameSecret(password, e.ACCTMGR_ADMIN_PASSWORD ?? '');
-	return u && p;
-}
 
 /**
  * The address a login attempt is counted against. `CF-Connecting-IP` is honoured ONLY with
@@ -73,6 +58,15 @@ export function clientIp(headers: Headers, socketAddress: () => string, e: NodeJ
 	} catch {
 		return 'unknown';
 	}
+}
+
+/**
+ * Where to go after sign-in: the `next` from the address only when it is one same-site path.
+ * Never `//evil.example`, a backslash form or an absolute URL; and printable ASCII only, because
+ * browsers drop tabs and newlines from addresses ("/<tab>/evil.example" would become "//evil.example").
+ */
+export function safeNext(raw: string | null | undefined, fallback: string): string {
+	return raw && /^\/(?!\/)[\x21-\x7e]*$/.test(raw) && !raw.includes('\\') ? raw : fallback;
 }
 
 // ---------- session secret ----------
@@ -100,18 +94,23 @@ const sign = (id: string) => crypto.createHmac('sha256', sessionSecret()).update
 
 // ---------- sessions ----------
 
-/**
- * New session: cookie value `<id>.<hmac>`; only sha256(id) is stored. Changing the admin password
- * ends every existing session (a fingerprint of it is kept in meta).
- */
-export function createSession(nowS = Math.floor(Date.now() / 1000)): string {
+export interface SessionUser {
+	id: string;
+	username: string;
+	screens: string[];
+	mustChange: boolean;
+}
+
+/** New session for a user: cookie value `<id>.<hmac>`; only sha256(id) is stored. */
+export function createSession(userId: string, nowS = Math.floor(Date.now() / 1000)): string {
 	const id = crypto.randomBytes(32).toString('base64url');
 	const d = database();
 	d.prepare('DELETE FROM admin_sessions WHERE expires_unix <= ?').run(nowS);
-	d.prepare('INSERT INTO admin_sessions (id_hash, created_at, expires_unix) VALUES (?, ?, ?)').run(
+	d.prepare('INSERT INTO admin_sessions (id_hash, created_at, expires_unix, user_id) VALUES (?, ?, ?, ?)').run(
 		sha256(id),
 		new Date(nowS * 1000).toISOString(),
-		nowS + SESSION_TTL_S
+		nowS + sessionTtlS(),
+		userId
 	);
 	return `${id}.${sign(id)}`;
 }
@@ -127,28 +126,43 @@ function parseCookie(value: string | undefined | null): string | null {
 	return id;
 }
 
-export function validSession(cookie: string | undefined | null, nowS = Math.floor(Date.now() / 1000)): boolean {
+/** Who this cookie belongs to, or null (bad signature, expired, signed out, user removed). */
+export function sessionUser(cookie: string | undefined | null, nowS = Math.floor(Date.now() / 1000)): SessionUser | null {
 	const id = parseCookie(cookie);
-	if (!id) return false;
-	const row = database().prepare('SELECT expires_unix FROM admin_sessions WHERE id_hash = ?').get(sha256(id)) as
-		| { expires_unix: number }
-		| undefined;
-	return !!row && row.expires_unix > nowS;
+	if (!id) return null;
+	const row = database()
+		.prepare(
+			`SELECT s.expires_unix, u.id, u.username, u.screens, u.must_change
+			   FROM admin_sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = ?`
+		)
+		.get(sha256(id)) as { expires_unix: number; id: string; username: string; screens: string; must_change: number } | undefined;
+	if (!row || row.expires_unix <= nowS) return null;
+	let screens: string[] = [];
+	try {
+		const v = JSON.parse(row.screens);
+		if (Array.isArray(v)) screens = v.filter((x): x is string => typeof x === 'string');
+	} catch {
+		/* no screens */
+	}
+	return { id: row.id, username: row.username, screens, mustChange: !!row.must_change };
 }
+
+export const validSession = (cookie: string | undefined | null, nowS?: number): boolean => !!sessionUser(cookie, nowS);
 
 export function destroySession(cookie: string | undefined | null): void {
 	const id = parseCookie(cookie);
 	if (id) database().prepare('DELETE FROM admin_sessions WHERE id_hash = ?').run(sha256(id));
 }
 
-/** Startup: if the admin user or password changed since the sessions were issued, log everyone out. */
-export function rotateSessionsIfPasswordChanged(password = env.ACCTMGR_ADMIN_PASSWORD ?? '', user = adminUser()): void {
-	const fp = crypto.createHmac('sha256', sessionSecret()).update(`pw:${user.toLowerCase()}:${password}`).digest('hex');
-	const d = database();
-	const old = (d.prepare("SELECT value FROM meta WHERE key = 'admin_pw_fp'").get() as { value: string } | undefined)?.value;
-	if (old === fp) return;
-	d.prepare('DELETE FROM admin_sessions').run();
-	d.prepare("INSERT INTO meta (key, value) VALUES ('admin_pw_fp', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(fp);
+/** Signs a user out everywhere (password reset, removal); `exceptCookie` keeps the caller's own session. */
+export function destroyUserSessions(userId: string, exceptCookie?: string | null): void {
+	const keep = exceptCookie ? parseCookie(exceptCookie) : null;
+	database().prepare('DELETE FROM admin_sessions WHERE user_id = ? AND id_hash <> ?').run(userId, keep ? sha256(keep) : '');
+}
+
+/** HMAC of the env admin's name + password, to notice when it was changed between starts. */
+export function envAdminFingerprint(password = env.ACCTMGR_ADMIN_PASSWORD ?? '', user = adminUser()): string {
+	return crypto.createHmac('sha256', sessionSecret()).update(`pw:${user.toLowerCase()}:${password}`).digest('hex');
 }
 
 // ---------- login rate limit ----------
@@ -160,12 +174,20 @@ export function rotateSessionsIfPasswordChanged(password = env.ACCTMGR_ADMIN_PAS
 export class RateLimiter {
 	private perKey = new Map<string, number[]>();
 	private all: number[] = [];
+	/** Limits may be functions so the live Settings values apply without a restart. */
 	constructor(
-		private maxPerKey = 5,
+		private perKeyMax: number | (() => number) = 5,
 		private maxGlobal = 30,
-		private windowMs = 15 * 60_000,
+		private windowLength: number | (() => number) = 15 * 60_000,
 		private now: () => number = Date.now
 	) {}
+
+	private get maxPerKey(): number {
+		return typeof this.perKeyMax === 'function' ? this.perKeyMax() : this.perKeyMax;
+	}
+	private get windowMs(): number {
+		return typeof this.windowLength === 'function' ? this.windowLength() : this.windowLength;
+	}
 
 	private prune(list: number[]): number[] {
 		const since = this.now() - this.windowMs;
@@ -191,9 +213,25 @@ export class RateLimiter {
 	succeed(key: string): void {
 		this.perKey.delete(key);
 	}
+
+	/**
+	 * Gives back the newest attempt of this client (and one from the global count). Sign-in counts
+	 * every attempt BEFORE checking the password, so guesses sent in parallel cannot all slip past
+	 * the limit; a correct password then takes back only its own attempt. Earlier failures stay, so
+	 * signing in to one account never wipes the count of guesses made against another.
+	 */
+	forgive(key: string): void {
+		const mine = this.perKey.get(key);
+		if (mine?.length) this.perKey.set(key, mine.slice(0, -1));
+		if (this.all.length) this.all = this.all.slice(0, -1);
+	}
 }
 
-export const loginLimiter = new RateLimiter();
+export const loginLimiter = new RateLimiter(
+	() => getSettings().loginTries,
+	30,
+	() => getSettings().loginPauseMinutes * 60_000
+);
 
 // ---------- widget API tokens ----------
 

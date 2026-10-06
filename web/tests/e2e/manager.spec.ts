@@ -309,16 +309,16 @@ test('page theme switch: Auto follows OS, Light/Dark apply and persist across re
 	await page.emulateMedia({ colorScheme: 'dark' });
 	await page.goto('/usage');
 	await expect(page.getByRole('button', { name: 'Auto' })).toHaveAttribute('aria-pressed', 'true');
-	expect(await bg()).toBe('rgb(1, 4, 9)');
+	expect(await bg()).toBe('rgb(30, 32, 48)');
 	await page.emulateMedia({ colorScheme: 'light' });
-	expect(await bg()).toBe('rgb(246, 248, 250)');
+	expect(await bg()).toBe('rgb(255, 255, 255)');
 
 	await page.getByRole('button', { name: 'Dark' }).click();
 	expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
-	expect(await cardBg()).toBe('rgb(13, 17, 23)');
+	expect(await cardBg()).toBe('rgb(46, 50, 72)');
 	await page.reload();
 	await expect(page.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
-	expect(await bg()).toBe('rgb(1, 4, 9)');
+	expect(await bg()).toBe('rgb(30, 32, 48)');
 	await page.setViewportSize({ width: 1280, height: 800 });
 	await page.screenshot({ path: path.join(shots, 'usage-dark.png'), fullPage: true });
 	await page.goto('/');
@@ -326,7 +326,7 @@ test('page theme switch: Auto follows OS, Light/Dark apply and persist across re
 
 	await page.emulateMedia({ colorScheme: 'dark' });
 	await page.getByRole('button', { name: 'Light' }).click();
-	expect(await bg()).toBe('rgb(246, 248, 250)');
+	expect(await bg()).toBe('rgb(255, 255, 255)');
 	await page.goto('/usage');
 	await expect(page.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true');
 	expect(await cardBg()).toBe('rgb(255, 255, 255)');
@@ -337,7 +337,7 @@ test('page theme switch: Auto follows OS, Light/Dark apply and persist across re
 	await page.getByRole('button', { name: 'Auto' }).click();
 	await page.reload();
 	expect(await page.evaluate(() => document.documentElement.hasAttribute('data-theme'))).toBe(false);
-	expect(await bg()).toBe('rgb(1, 4, 9)');
+	expect(await bg()).toBe('rgb(30, 32, 48)');
 });
 
 test('card theme setting: stored in meta.card_theme, bumps revision, regenerates the widget theme', async ({ page }) => {

@@ -5,8 +5,11 @@ import { level, resetsIn } from '../../src/lib/format';
 
 describe('level thresholds (same as the widget)', () => {
 	it('green < 70, amber 70-89, red >= 90, full at 100', () => {
-		expect([0, 69.9, 70, 89.9, 90, 99.9, 100, 120].map(level)).toEqual(['ok', 'ok', 'warn', 'warn', 'high', 'high', 'full', 'full']);
+		expect([0, 69.9, 70, 89.9, 90, 99.9, 100, 120].map((p) => level(p))).toEqual(['ok', 'ok', 'warn', 'warn', 'high', 'high', 'full', 'full']);
 		expect(level(null)).toBe('none');
+	});
+	it('the amber and red levels can be moved (Settings); 100 always means blocked', () => {
+		expect([49, 50, 79, 80, 100].map((p) => level(p, 50, 80))).toEqual(['ok', 'warn', 'warn', 'high', 'full']);
 	});
 	it('resetsIn formats like kit Format-Reset, optional seconds', () => {
 		const now = 1_000_000_000_000;
@@ -52,7 +55,10 @@ describe('colour tokens meet WCAG AA', () => {
 		// login-needed notice + badge + Usage-page Re-login button
 		['text', 'err-bg'], ['card-muted', 'card-bg'],
 		// the small "Codex" provider tag (Accounts + Usage pages)
-		['codex-text', 'codex-bg'], ['codex-text', 'surface'], ['codex-text', 'card-bg']
+		['codex-text', 'codex-bg'], ['codex-text', 'surface'], ['codex-text', 'card-bg'],
+		// side menu, zebra tables, notices and coloured figures on the Report, Settings and Users screens
+		['text', 'soft'], ['muted', 'soft'], ['text', 'zebra'], ['muted', 'zebra'], ['card-link', 'surface'], ['card-link', 'soft'],
+		['green', 'surface'], ['amber', 'surface'], ['text', 'warn-bg'], ['text', 'ok-bg']
 	];
 	for (const [name, t] of [['light', light], ['dark', dark]] as const) {
 		it(`${name}: every text pair >= 4.5:1`, () => {

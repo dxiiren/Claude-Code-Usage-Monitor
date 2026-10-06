@@ -18,11 +18,16 @@
     "prepare": "svelte-kit sync || echo \"\""
   },
   "devDependencies": {
+    "@fontsource-variable/noto-sans": "^5.3.0",
+    "@fontsource-variable/raleway": "^5.3.0",
     "@playwright/test": "^1.63.0",
     "@sveltejs/adapter-node": "^5.5.7",
     "@sveltejs/kit": "^2.70.3",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@types/node": "^26.6.2",
+    "@types/pdfmake": "^0.3.3",
+    "docx": "^9.8.1",
+    "pdfmake": "^0.3.11",
     "svelte": "^5.57.1",
     "svelte-check": "^4.7.6",
     "typescript": "^6.0.3",

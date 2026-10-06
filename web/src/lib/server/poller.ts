@@ -475,7 +475,7 @@ export class Poller {
 		}
 	}
 
-	start(): void {
+	start(now = true): void {
 		if (this.timer || this.stopped) return;
 		const tick = () => {
 			if (!this.running)
@@ -483,9 +483,19 @@ export class Poller {
 					.catch((e) => console.error('[account-manager] poll cycle failed:', (e as Error).message))
 					.finally(() => (this.running = null));
 		};
-		tick();
+		if (now) tick();
 		this.timer = setInterval(tick, this.intervalS * 1000);
 		this.timer.unref?.();
+	}
+
+	/** Settings changed the interval: the next cycle starts on the new rhythm (no restart needed). */
+	setIntervalS(seconds: number): void {
+		if (seconds === this.intervalS) return;
+		this.intervalS = seconds;
+		if (!this.timer) return;
+		clearInterval(this.timer);
+		this.timer = null;
+		this.start(false);
 	}
 
 	stop(): void {

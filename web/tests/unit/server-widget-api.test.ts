@@ -42,7 +42,7 @@ describe('server-mode data layout', () => {
 		d.close();
 		expect(cols).toEqual(['id', 'name', 'config_dir', 'email', 'plan', 'enabled', 'sort_order', 'created_at', 'updated_at', 'provider']);
 		expect(mode).toBe('delete');
-		expect(tables).toEqual(['account_usage', 'accounts', 'admin_sessions', 'api_tokens', 'meta']);
+		expect(tables).toEqual(['account_usage', 'accounts', 'admin_sessions', 'api_tokens', 'app_settings', 'meta', 'report_accounts', 'usage_samples', 'users']);
 	});
 
 	it('ids are never reused, even after removal', () => {

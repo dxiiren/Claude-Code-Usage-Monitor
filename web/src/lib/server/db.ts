@@ -41,7 +41,11 @@ let db: DatabaseSync | null = null;
  * - api_tokens: widget API tokens, SHA-256 hashes only (contract).
  * - account_usage: the server's own poll result per account. Poll results are NOT account writes,
  *   so they never bump meta.revision (the widget's read contract is unchanged).
- * - admin_sessions: browser sessions, SHA-256 of the session id only.
+ * - admin_sessions: browser sessions, SHA-256 of the session id only; user_id = who signed in.
+ * - users: dashboard sign-ins (scrypt hashes) and the screens each one may open.
+ * - usage_samples: every good poll reading, kept so reports can be cut into any time slots later.
+ * - report_accounts: last known name per account id, so a removed account keeps its name in old reports.
+ * - app_settings: everything the Settings screen saves (JSON values); absent key = built-in default.
  */
 const SERVER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS api_tokens (
@@ -62,7 +66,37 @@ CREATE TABLE IF NOT EXISTS account_usage (
 CREATE TABLE IF NOT EXISTS admin_sessions (
   id_hash      TEXT PRIMARY KEY,
   created_at   TEXT NOT NULL,
-  expires_unix INTEGER NOT NULL
+  expires_unix INTEGER NOT NULL,
+  user_id      TEXT
+);
+CREATE TABLE IF NOT EXISTS users (
+  id            TEXT PRIMARY KEY,
+  username      TEXT NOT NULL UNIQUE,      -- stored lower-case
+  screens       TEXT NOT NULL,             -- JSON array of screen ids this user may open
+  pw_hash       TEXT NOT NULL,             -- scrypt$N$r$p$salt$hash
+  must_change   INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  last_login_at TEXT
+);
+CREATE TABLE IF NOT EXISTS usage_samples (
+  account_id    TEXT NOT NULL,
+  ts_unix       INTEGER NOT NULL,
+  s_pct         REAL,                      -- session (5-hour) % used; NULL = window not available
+  s_reset_unix  INTEGER,
+  w_pct         REAL,                      -- weekly (7-day) % used
+  w_reset_unix  INTEGER,
+  PRIMARY KEY (account_id, ts_unix)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS usage_samples_ts ON usage_samples (ts_unix);
+CREATE TABLE IF NOT EXISTS report_accounts (
+  account_id TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  provider   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS app_settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );`;
 
 function open(): DatabaseSync {
@@ -90,7 +124,13 @@ CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );`);
-	if (SERVER) d.exec(SERVER_SCHEMA);
+	if (SERVER) {
+		d.exec(SERVER_SCHEMA);
+		// Sessions from before users existed carry no identity: drop them (everyone signs in once more).
+		const sc = (d.prepare('PRAGMA table_info(admin_sessions)').all() as unknown as { name: string }[]).map((c) => c.name);
+		if (!sc.includes('user_id')) d.exec('ALTER TABLE admin_sessions ADD COLUMN user_id TEXT');
+		d.exec('DELETE FROM admin_sessions WHERE user_id IS NULL');
+	}
 	// Schema 1 DB (no provider column): add it; every existing row is Claude (the DEFAULT).
 	const cols = (d.prepare('PRAGMA table_info(accounts)').all() as unknown as { name: string }[]).map((c) => c.name);
 	const migrated = !cols.includes('provider');

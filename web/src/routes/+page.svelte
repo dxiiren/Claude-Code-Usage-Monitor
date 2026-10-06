@@ -6,6 +6,8 @@
 	import type { Snapshot } from '$lib/server/api';
 
 	let { data } = $props();
+	/** Names of the two usage windows and the colour levels (Settings, server mode). */
+	const ui = $derived(data.ui);
 
 	// svelte-ignore state_referenced_locally
 	let snap = $state<Snapshot>(data.snap);
@@ -17,6 +19,9 @@
 	let login = $state<LoginInfo | null>(null);
 	let notice = $state('');
 	let widgetBusy = $state(false);
+	/** Server mode "Refresh now" (every account) and what came of it. */
+	let refreshing = $state(false);
+	let refreshMsg = $state('');
 	let widgetMsg = $state('');
 	let renamingId = $state<string | null>(null);
 	let renameValue = $state('');
@@ -146,6 +151,22 @@
 		await refresh();
 	}
 
+	async function refreshUsage() {
+		if (refreshing) return;
+		refreshing = true;
+		refreshMsg = '';
+		try {
+			const out = await post<{ refreshed: number; skipped: number; snap: Snapshot }>('/api/usage/refresh');
+			snap = out.snap;
+			refreshMsg = out.refreshed
+				? `Refreshed ${out.refreshed} ${out.refreshed === 1 ? 'account' : 'accounts'}.`
+				: 'Nothing refreshed: the provider asked us to wait before reading again.';
+		} catch (err) {
+			refreshMsg = (err as Error).message;
+		}
+		refreshing = false;
+	}
+
 	async function restartWidget() {
 		widgetBusy = true;
 		widgetMsg = '';
@@ -257,8 +278,8 @@
 				{/if}
 				{#if a.email}
 					<div class="bars" class:stale={needsLogin(a.status.state)}>
-						<UsageBar label="5h" title="5-hour session" pct={a.usage?.session?.percentage} resetsAt={a.usage?.session?.resetsAt} {now} />
-						<UsageBar label="7d" title="Weekly" pct={a.usage?.weekly?.percentage} resetsAt={a.usage?.weekly?.resetsAt} {now} />
+						<UsageBar label={ui.hourlyLabel} title="{ui.hourlyLabel} (5-hour window)" pct={a.usage?.session?.percentage} resetsAt={a.usage?.session?.resetsAt} {now} warnAt={ui.warnAt} highAt={ui.highAt} />
+						<UsageBar label={ui.weeklyLabel} title="{ui.weeklyLabel} (7-day window)" pct={a.usage?.weekly?.percentage} resetsAt={a.usage?.weekly?.resetsAt} {now} warnAt={ui.warnAt} highAt={ui.highAt} />
 					</div>
 				{/if}
 
@@ -291,6 +312,10 @@
 				{snap.usageUpdatedUnix ? new Date(snap.usageUpdatedUnix * 1000).toLocaleTimeString() : 'not yet'}
 			</span>
 		</div>
+		<button type="button" onclick={refreshUsage} disabled={refreshing || snap.accounts.length === 0} data-testid="refresh-all">
+			{refreshing ? 'Refreshing...' : 'Refresh now'}
+		</button>
+		{#if refreshMsg}<span class="hint" role="status" data-testid="refresh-notice">{refreshMsg}</span>{/if}
 	{:else}
 		<div>
 			<strong>Desktop widget</strong>
@@ -363,14 +388,14 @@
 	input:not([type='checkbox']) {
 		padding: 0.45rem 0.6rem;
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		background: var(--surface);
 		color: var(--text);
 	}
 	button {
 		padding: 0.4rem 0.8rem;
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		background: var(--surface);
 		color: var(--text);
 		cursor: pointer;
@@ -405,7 +430,7 @@
 		padding: 1.5rem;
 		text-align: center;
 		border: 1px dashed var(--border);
-		border-radius: 10px;
+		border-radius: var(--radius);
 	}
 	.list {
 		list-style: none;
@@ -417,7 +442,7 @@
 	.acc {
 		background: var(--surface);
 		border: 1px solid var(--border);
-		border-radius: 10px;
+		border-radius: var(--radius);
 		padding: 0.8rem 1rem;
 		display: grid;
 		gap: 0.6rem;
@@ -520,7 +545,7 @@
 		flex-wrap: wrap;
 		gap: 0.5rem;
 		padding: 0.55rem 0.75rem;
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		background: var(--err-bg);
 		border: 1px solid var(--err-border);
 	}
@@ -542,7 +567,7 @@
 	.err,
 	.warn,
 	.ok {
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		padding: 0.55rem 0.75rem;
 		margin: 0.5rem 0 0;
 		overflow-wrap: anywhere;
@@ -582,7 +607,7 @@
 	select {
 		padding: 0.35rem 0.5rem;
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: calc(var(--radius) * 0.8);
 		background: var(--surface);
 		color: var(--text);
 	}
@@ -591,7 +616,7 @@
 	}
 	dialog {
 		border: 1px solid var(--border);
-		border-radius: 10px;
+		border-radius: var(--radius);
 		background: var(--surface);
 		color: var(--text);
 		max-width: min(30rem, calc(100vw - 32px));

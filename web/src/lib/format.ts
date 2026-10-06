@@ -1,11 +1,14 @@
 export type Level = 'ok' | 'warn' | 'high' | 'full' | 'none';
 
-/** Same thresholds as the widget: green < 70, amber 70-89, red >= 90; 100 = blocked. */
-export function level(pct: number | null | undefined): Level {
+/**
+ * Default thresholds are the widget's: green < 70, amber 70-89, red >= 90; 100 = blocked.
+ * Server mode can move the amber and red levels in Settings.
+ */
+export function level(pct: number | null | undefined, warnAt = 70, highAt = 90): Level {
 	if (pct === null || pct === undefined || Number.isNaN(pct)) return 'none';
 	if (pct >= 100) return 'full';
-	if (pct >= 90) return 'high';
-	if (pct >= 70) return 'warn';
+	if (pct >= highAt) return 'high';
+	if (pct >= warnAt) return 'warn';
 	return 'ok';
 }
 
@@ -44,4 +47,17 @@ export async function post<T = Record<string, unknown>>(url: string, data: unkno
 /** Login states that need the user to sign in again (mirrors needsLogin in server/status.ts). */
 export function needsLogin(state: string): boolean {
 	return state === 'expired' || state === 'logged_out';
+}
+
+/** GET JSON from our own API; throws Error(message) with the server's `error` on a non-2xx. */
+export async function getJson<T>(url: string): Promise<T> {
+	let res: Response;
+	try {
+		res = await fetch(url);
+	} catch {
+		throw new Error('Cannot reach the server. Check your connection and try again.');
+	}
+	const out = (await res.json().catch(() => ({}))) as T & { error?: string };
+	if (!res.ok) throw Object.assign(new Error(out.error || `Request failed (${res.status})`), { data: out, status: res.status });
+	return out;
 }

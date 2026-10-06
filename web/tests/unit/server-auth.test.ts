@@ -6,7 +6,11 @@ import { isolateServer } from './helpers';
 
 const env = isolateServer();
 type Auth = typeof import('../../src/lib/server/auth');
+type Users = typeof import('../../src/lib/server/users');
 let auth: Auth;
+let users: Users;
+/** A user to own the sessions these tests create. */
+let uid: string;
 
 const dbFile = () => path.join(env.data, 'accounts.db');
 function rows<T>(sql: string): T[] {
@@ -20,7 +24,9 @@ function rows<T>(sql: string): T[] {
 
 beforeAll(async () => {
 	auth = await import('../../src/lib/server/auth');
+	users = await import('../../src/lib/server/users');
 	(await import('../../src/lib/server/db')).initDb();
+	uid = (await users.createUser('session-owner', 'a long enough password', ['usage'])).id;
 });
 
 describe('server config', () => {
@@ -39,39 +45,20 @@ describe('server config', () => {
 	});
 });
 
-describe('password', () => {
-	it('accepts only the exact password, any type/length mismatch is false', () => {
-		expect(auth.checkPassword('correct horse battery')).toBe(true);
-		expect(auth.checkPassword('correct horse batter')).toBe(false);
-		expect(auth.checkPassword('correct horse battery ')).toBe(false);
-		expect(auth.checkPassword('')).toBe(false);
-		expect(auth.checkPassword(undefined)).toBe(false);
-		expect(auth.checkPassword(['correct horse battery'])).toBe(false);
-		expect(auth.checkPassword('x', '')).toBe(false); // no configured password never matches
+describe('the bootstrap admin name', () => {
+	it('defaults to Admin; ACCTMGR_ADMIN_USER overrides it (surrounding spaces ignored)', () => {
+		expect(auth.adminUser({})).toBe('Admin');
+		expect(auth.adminUser({ ACCTMGR_ADMIN_USER: '  Yana ' })).toBe('Yana');
 	});
 });
 
-describe('username + password', () => {
-	const e = { ACCTMGR_ADMIN_PASSWORD: 'pw-123' } as NodeJS.ProcessEnv;
-	it('username defaults to Admin and is case-insensitive (surrounding spaces ignored)', () => {
-		expect(auth.adminUser({})).toBe('Admin');
-		for (const u of ['Admin', 'admin', 'ADMIN', ' aDmIn ']) expect(auth.checkCredentials(u, 'pw-123', e), u).toBe(true);
-	});
-	it('a wrong or missing username fails even with the right password', () => {
-		for (const u of ['Admin2', 'adm', '', undefined, null, 42]) expect(auth.checkCredentials(u, 'pw-123', e), String(u)).toBe(false);
-	});
-	it('the password stays case-sensitive; a wrong password fails with the right username', () => {
-		expect(auth.checkCredentials('admin', 'PW-123', e)).toBe(false);
-		expect(auth.checkCredentials('admin', '', e)).toBe(false);
-		expect(auth.checkCredentials('admin', undefined, e)).toBe(false);
-	});
-	it('ACCTMGR_ADMIN_USER overrides the default', () => {
-		const c = { ...e, ACCTMGR_ADMIN_USER: 'Yana' };
-		expect(auth.checkCredentials('yana', 'pw-123', c)).toBe(true);
-		expect(auth.checkCredentials('Admin', 'pw-123', c)).toBe(false);
-	});
-	it('no configured password never matches', () => {
-		expect(auth.checkCredentials('Admin', '', {})).toBe(false);
+describe('where sign-in sends you next', () => {
+	it('keeps a same-site path, falls back for anything that could leave the site', () => {
+		const next = (raw: string | null) => auth.safeNext(raw, '/home');
+		expect(next('/usage')).toBe('/usage');
+		expect(next('/report?period=week&date=2026-10-06')).toBe('/report?period=week&date=2026-10-06');
+		for (const bad of [null, '', 'usage', 'https://evil.example', '//evil.example', '/\\evil.example', '/\t/evil.example', '/\n/evil.example', '/a\\b', '/a b'])
+			expect(next(bad), JSON.stringify(bad)).toBe('/home');
 	});
 });
 
@@ -116,36 +103,46 @@ describe('sessions', () => {
 	});
 	it('a new session validates; tampering, unknown ids and expiry do not', () => {
 		const now = Math.floor(Date.now() / 1000);
-		const c = auth.createSession(now);
+		const c = auth.createSession(uid, now);
 		expect(auth.validSession(c, now)).toBe(true);
+		expect(auth.sessionUser(c, now)).toMatchObject({ id: uid, username: 'session-owner', screens: ['usage'], mustChange: true });
 		const [id, mac] = c.split('.');
 		expect(auth.validSession(`${id}.${mac.slice(0, -1)}${mac.endsWith('A') ? 'B' : 'A'}`, now)).toBe(false);
 		expect(auth.validSession(`${id}x.${mac}`, now)).toBe(false);
 		expect(auth.validSession(id, now)).toBe(false);
 		expect(auth.validSession('', now)).toBe(false);
 		expect(auth.validSession(null, now)).toBe(false);
-		expect(auth.validSession(c, now + auth.SESSION_TTL_S + 1)).toBe(false);
+		expect(auth.validSession(c, now + auth.sessionTtlS() + 1)).toBe(false);
 	});
 	it('stores only a hash of the session id', () => {
-		const c = auth.createSession();
+		const c = auth.createSession(uid);
 		const id = c.split('.')[0];
 		const stored = rows<{ id_hash: string }>('SELECT id_hash FROM admin_sessions').map((r) => r.id_hash);
 		expect(stored).toContain(auth.hashToken(id));
 		expect(stored.join()).not.toContain(id);
 	});
 	it('logout destroys the session server side', () => {
-		const c = auth.createSession();
+		const c = auth.createSession(uid);
 		expect(auth.validSession(c)).toBe(true);
 		auth.destroySession(c);
 		expect(auth.validSession(c)).toBe(false);
 	});
-	it('changing the admin password ends every session', () => {
-		auth.rotateSessionsIfPasswordChanged('correct horse battery');
-		const c = auth.createSession();
-		auth.rotateSessionsIfPasswordChanged('correct horse battery'); // same password: kept
+	it('a session of a user who was removed stops working', async () => {
+		const other = await users.createUser('short-lived', 'a long enough password', ['report']);
+		const admin = await users.createUser('boss', 'a long enough password', ['users']);
+		const c = auth.createSession(other.id);
 		expect(auth.validSession(c)).toBe(true);
-		auth.rotateSessionsIfPasswordChanged('a different password');
+		users.removeUser(other.id, admin.id);
 		expect(auth.validSession(c)).toBe(false);
+	});
+	it('signing a user out everywhere can keep the session that asked for it', () => {
+		const a = auth.createSession(uid);
+		const b = auth.createSession(uid);
+		auth.destroyUserSessions(uid, a);
+		expect(auth.validSession(a)).toBe(true);
+		expect(auth.validSession(b)).toBe(false);
+		auth.destroyUserSessions(uid);
+		expect(auth.validSession(a)).toBe(false);
 	});
 });
 
@@ -161,6 +158,23 @@ describe('login rate limit', () => {
 		expect(rl.retryAfter('5.6.7.8')).toBe(0); // other clients unaffected
 		t += 15 * 60_000 + 1;
 		expect(rl.retryAfter('1.2.3.4')).toBe(0);
+	});
+	it('forgive gives back one attempt only: a sign-in elsewhere does not wipe earlier guesses', () => {
+		let t = 1_000_000;
+		const rl = new auth.RateLimiter(3, 30, 60_000, () => t);
+		rl.fail('a');
+		rl.fail('a');
+		// the third attempt is counted up front, turns out correct, and is given back
+		rl.fail('a');
+		expect(rl.retryAfter('a')).toBeGreaterThan(0);
+		rl.forgive('a');
+		expect(rl.retryAfter('a')).toBe(0);
+		// the two real failures are still there: one more wrong guess locks the client
+		rl.fail('a');
+		expect(rl.retryAfter('a')).toBeGreaterThan(0);
+		rl.forgive('nobody'); // unknown client: nothing to give back for it
+		t += 60_001;
+		expect(rl.retryAfter('a')).toBe(0);
 	});
 	it('success clears the client; the global cap still applies across clients', () => {
 		let t = 0;
