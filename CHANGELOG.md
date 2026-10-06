@@ -4,6 +4,39 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.16.0] - 2026-10-06
+
+### Added
+
+- Account Manager (server mode): a Report screen. Every usage reading is now kept, and the report cuts the readings into time slots for a day, week or month, as a graph, a table or both, with a calendar to open past days. Download as Word, PDF or CSV. History starts with the first reading after this version is installed.
+- Account Manager (server mode): a Settings screen. Time slots (name, from, to, to the minute), collection interval, history length, time zone, the names of the two usage windows, the amber and red levels, report defaults, the downloaded document's text, and sign-in rules are all changed there (sign-in rules by admins only). The organisation's name, mark and logo come from `web/src/lib/brand.ts`. `ACCTMGR_TIMEZONE` and `ACCTMGR_HISTORY_DAYS` are new optional defaults.
+- Account Manager (server mode): users. Each user signs in with their own password and sees only the screens an admin ticked for them; the server refuses the rest. Admins add users, reset passwords and remove users. `ACCTMGR_ADMIN_USER` / `ACCTMGR_ADMIN_PASSWORD` now create the first admin and remain the way back in when locked out.
+- Account Manager (server mode): "Refresh now" on the Usage and Accounts screens reads every account straight away.
+
+### Changed
+
+- Account Manager: the two usage windows are shown as "Hourly session" (5-hour) and "Weekly session" (7-day). The Windows widget still shows 5h / 7d.
+- Account Manager: new look, with a collapsible side menu, a slide-in menu on phones, and layouts that stack on narrow screens.
+- Account Manager (server mode): sessions belong to a user, so everyone signs in once more after upgrading.
+
+## [2.15.17] - 2026-09-24
+
+### Added
+
+- Codex accounts in the Account Manager and the widget; the widget contract matches the app-server login.
+
+## [2.15.16] - 2026-09-24
+
+### Added
+
+- Widget remote mode: the widget can read accounts and usage from an Account Manager server.
+
+## [2.15.15] - 2026-09-24
+
+### Added
+
+- Account Manager web app; the widget reads its accounts from the shared SQLite database.
+
 ## [2.15.14] - 2026-09-24
 
 ### Fixed
@@ -1173,3 +1206,7 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.15.12]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.15.11...v2.15.12
 [2.15.13]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.15.12...v2.15.13
 [2.15.14]: https://github.com/CodeZeno/Claude-Code-Usage-Monitor/compare/v2.15.13...v2.15.14
+[2.15.15]: https://github.com/dxiiren/Claude-Code-Usage-Monitor/compare/v2.15.14...v2.15.15
+[2.15.16]: https://github.com/dxiiren/Claude-Code-Usage-Monitor/compare/v2.15.15...v2.15.16
+[2.15.17]: https://github.com/dxiiren/Claude-Code-Usage-Monitor/compare/v2.15.16...v2.15.17
+[2.16.0]: https://github.com/dxiiren/Claude-Code-Usage-Monitor/compare/v2.15.17...v2.16.0
