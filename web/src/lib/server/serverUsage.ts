@@ -1,6 +1,6 @@
 // Server mode: account_usage rows (the server's own poll results), the reading history that
 // reports are cut from (usage_samples), and the one Poller instance.
-import { UserError, database, listAccounts, type Account } from './db';
+import { UserError, batch, database, listAccounts, type Account } from './db';
 import { refreshTokenViaCli } from './claude';
 import { refreshCodexTokenViaCli } from './codex';
 import { Poller, defaultUrls, type PollResult, type Usage } from './poller';
@@ -18,24 +18,26 @@ interface Row {
 
 /** Keeps the last GOOD usage when a poll fails (like the widget keeps stale data). */
 export function saveResult(id: string, r: PollResult, nowMs: number): void {
-	const d = database();
-	// The account may have been removed while its poll was running.
-	if (!d.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)) return;
 	const unix = Math.floor(nowMs / 1000);
 	const iso = new Date(nowMs).toISOString();
-	if (r.ok) {
-		d.prepare(
-			`INSERT INTO account_usage (account_id, usage_json, error_json, polled_at, polled_unix, ok_unix) VALUES (?, ?, NULL, ?, ?, ?)
-			 ON CONFLICT(account_id) DO UPDATE SET usage_json = excluded.usage_json, error_json = NULL, polled_at = excluded.polled_at,
-			   polled_unix = excluded.polled_unix, ok_unix = excluded.ok_unix`
-		).run(id, JSON.stringify(r.usage), iso, unix, unix);
-		recordSample(id, r.usage, unix);
-	} else {
-		d.prepare(
-			`INSERT INTO account_usage (account_id, usage_json, error_json, polled_at, polled_unix, ok_unix) VALUES (?, NULL, ?, ?, ?, NULL)
-			 ON CONFLICT(account_id) DO UPDATE SET error_json = excluded.error_json, polled_at = excluded.polled_at, polled_unix = excluded.polled_unix`
-		).run(id, JSON.stringify(r.error), iso, unix);
-	}
+	// the latest value, the kept reading and the account's name go in together: one flush per poll
+	batch((d) => {
+		// The account may have been removed while its poll was running.
+		if (!d.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)) return;
+		if (r.ok) {
+			d.prepare(
+				`INSERT INTO account_usage (account_id, usage_json, error_json, polled_at, polled_unix, ok_unix) VALUES (?, ?, NULL, ?, ?, ?)
+				 ON CONFLICT(account_id) DO UPDATE SET usage_json = excluded.usage_json, error_json = NULL, polled_at = excluded.polled_at,
+				   polled_unix = excluded.polled_unix, ok_unix = excluded.ok_unix`
+			).run(id, JSON.stringify(r.usage), iso, unix, unix);
+			recordSample(id, r.usage, unix);
+		} else {
+			d.prepare(
+				`INSERT INTO account_usage (account_id, usage_json, error_json, polled_at, polled_unix, ok_unix) VALUES (?, NULL, ?, ?, ?, NULL)
+				 ON CONFLICT(account_id) DO UPDATE SET error_json = excluded.error_json, polled_at = excluded.polled_at, polled_unix = excluded.polled_unix`
+			).run(id, JSON.stringify(r.error), iso, unix);
+		}
+	});
 }
 
 // ---------- reading history (what reports are cut from) ----------

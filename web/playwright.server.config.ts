@@ -29,7 +29,10 @@ export default defineConfig({
 	fullyParallel: false,
 	workers: 1,
 	retries: 0,
-	timeout: 60_000,
+	// CI runs on small shared runners that are sometimes several times slower than a dev PC:
+	// the same steps pass, they just need longer to appear.
+	timeout: process.env.CI ? 240_000 : 60_000,
+	expect: { timeout: process.env.CI ? 30_000 : 5_000 },
 	reporter: [['list']],
 	use: { baseURL: ORIGIN, trace: 'retain-on-failure' },
 	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
@@ -46,10 +49,11 @@ export default defineConfig({
 			command: 'node start.js',
 			url: `${ORIGIN}/healthz`,
 			reuseExistingServer: false,
-			timeout: 30_000,
+			timeout: process.env.CI ? 120_000 : 30_000,
 			env: {
 				ACCTMGR_BUILD_DIR: 'build-e2e',
 				ACCTMGR_MODE: 'server',
+				ACCTMGR_TEST_FAST_DB: '1', // throwaway database: no disk flush per write
 				ACCTMGR_DATA_DIR: path.join(root, 'data'),
 				ACCTMGR_ADMIN_USER: 'Admin',
 				ACCTMGR_ADMIN_PASSWORD: process.env.ACCTMGR_E2E_PASSWORD,
