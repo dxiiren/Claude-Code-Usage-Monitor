@@ -21,9 +21,10 @@ export const actions = {
 			setHeaders({ 'retry-after': String(wait) });
 			return fail(429, { error: `Too many attempts. Try again in ${Math.ceil(wait / 60)} minute(s).` });
 		}
-		const form = await request.formData();
-		// Counted before the (slow) password check: guesses sent in parallel all land in the count.
+		// Counted straight after the check, with nothing awaited in between: requests sent in parallel
+		// each see the attempts before them, so they cannot all pass the limit together.
 		loginLimiter.fail(ip);
+		const form = await request.formData();
 		const user = await authenticate(form.get('username'), form.get('password'));
 		if (!user) {
 			console.warn(`[account-manager] failed sign-in ip=${ip} at=${new Date().toISOString()}`);
