@@ -253,8 +253,9 @@ export function buildDoc(r: ReportPayload, doc: DocSettings, view: View, prepare
 /** The tables only, as CSV (opens in Excel: UTF-8 with a byte-order mark, CRLF lines). */
 export function toCsv(m: DocModel): string {
 	const cell = (raw: string) => {
-		// a leading = + - @ (or tab / CR) would run as a formula when the file is opened
-		const v = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+		// a leading = + - @ (or tab / CR) would run as a formula when the file is opened;
+		// a dash on its own is the "no data" mark and runs nothing, so it stays as it is
+		const v = raw !== '-' && /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
 		return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 	};
 	const lines: string[] = [cell(m.title), cell(m.period), ''];
