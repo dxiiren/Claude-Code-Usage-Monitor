@@ -45,11 +45,12 @@
 		refreshing = true;
 		notice = null;
 		try {
-			const out = await post<{ refreshed: number; failed: number; pending: number; skipped: number; snap: Snapshot }>('/api/usage/refresh');
+			const out = await post<{ refreshed: number; failed: number; pending: number; skipped: number; fresh: number; freshSeconds: number; snap: Snapshot }>('/api/usage/refresh');
 			snap = out.snap;
 			stale = false;
 			notice = refreshSummary(out);
-			waitUntil = Date.now() + ui.refreshWaitSeconds * 1000;
+			// the wait starts only when the provider was actually asked (the server does the same)
+			if (out.refreshed || out.failed || out.pending) waitUntil = Date.now() + ui.refreshWaitSeconds * 1000;
 		} catch (e) {
 			const err = e as Error & { data?: { retryAfter?: number } };
 			if (err.data?.retryAfter) waitUntil = Date.now() + err.data.retryAfter * 1000;

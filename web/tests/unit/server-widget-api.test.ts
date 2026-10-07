@@ -181,6 +181,16 @@ describe('GET /api/v1/widget', () => {
 		expect(p.cooldownRemaining(kv.id)).toBe(0);
 	});
 
+	it('"Refresh now" leaves alone accounts read a moment ago: the provider would refuse and the next reading would be lost', async () => {
+		const enabled = db.listAccounts().filter((a) => a.enabled);
+		const usage = { session: { available: true, percentage: 5, resets_at_unix: null }, weekly: { available: true, percentage: 6, resets_at_unix: null } };
+		for (const a of enabled) store.saveResult(a.id, { ok: true, usage }, Date.now() - 40_000);
+		store.resetManualRefresh();
+		// no request leaves the server: every account is current
+		expect(await store.refreshNow(Date.now(), 50)).toEqual({ refreshed: 0, failed: 0, pending: 0, skipped: 0, fresh: enabled.length, freshSeconds: 120 });
+		expect(store.readServerUsage(enabled).byId[enabled[0].id]).toMatchObject({ pollError: null, session: { percentage: 5 } });
+	});
+
 	it('numbers nobody has refreshed for a while are sent as stale, never as current', async () => {
 		const ba = db.listAccounts().find((a) => a.id === 'ba')!;
 		const read = 1790241000;
