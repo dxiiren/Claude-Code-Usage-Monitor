@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ago, level, pctText, refreshSummary, resetsIn, windowFull, windowOver } from '../../src/lib/format';
+import { ago, level, pctText, readingOver, refreshSummary, resetsIn, windowFull, windowOver } from '../../src/lib/format';
 
 describe('level thresholds (same as the widget)', () => {
 	it('green < 70, amber 70-89, red >= 90, full at 100', () => {
@@ -37,6 +37,16 @@ describe('level thresholds (same as the widget)', () => {
 		expect(windowFull({ percentage: 100, resetsAt: s - 60 }, now)).toBe(false);
 		expect(windowFull({ percentage: 99.6, resetsAt: s + 60 }, now)).toBe(false);
 		expect(windowFull(null, now)).toBe(false);
+	});
+	it('a number read before the window reset is not quoted as the current one', () => {
+		const now = 1_000_000_000_000;
+		const s = now / 1000;
+		expect(readingOver(100, s - 60, now)).toBe(true);
+		expect(readingOver(100, s + 60, now)).toBe(false);
+		// an unused window says nothing false at 0%, so it is left as it is
+		expect(readingOver(0, s - 60, now)).toBe(false);
+		expect(readingOver(null, s - 60, now)).toBe(false);
+		expect(readingOver(40, null, now)).toBe(false);
 	});
 	it('says how old a reading is', () => {
 		const now = 1_000_000_000_000;

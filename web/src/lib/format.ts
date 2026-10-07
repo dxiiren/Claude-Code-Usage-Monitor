@@ -50,6 +50,11 @@ export function windowOver(resetsAt: number | null | undefined, nowMs: number): 
 	return !!resetsAt && resetsAt * 1000 <= nowMs;
 }
 
+/** A reading above zero whose window has reset since: the number describes a window that is over. */
+export function readingOver(pct: number | null | undefined, resetsAt: number | null | undefined, nowMs: number): boolean {
+	return pct !== null && pct !== undefined && pct > 0 && windowOver(resetsAt, nowMs);
+}
+
 interface Window {
 	percentage: number;
 	resetsAt: number | null;

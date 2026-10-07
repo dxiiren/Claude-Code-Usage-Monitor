@@ -200,6 +200,8 @@ export function getPoller(): Poller {
 		},
 		interval
 	);
+	// The first cycle runs at once: skip the accounts the previous run read within the last interval.
+	for (const [id, r] of readRows()) if (r.polled_unix) poller.hold(id, (r.polled_unix + interval) * 1000);
 	return poller;
 }
 

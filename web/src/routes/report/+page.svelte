@@ -121,6 +121,17 @@
 
 <svelte:head><title>Report - Claude Usage</title></svelte:head>
 
+{#snippet limits()}
+	<section class="k-card" data-testid="limits">
+		<div class="k-cardhead"><h2>Limits reached</h2><span class="k-small k-muted">{r.hits.length} in this period</span></div>
+		{#if r.hits.length}
+			{#each r.hits as h (`${h.accountId}-${h.window}-${h.ts}`)}
+				<div class="kv"><span><b>{h.account}</b> <span class="k-small k-muted">{r.labels[h.window]} &middot; {reachedLabel(h, r.timezone)}</span></span><span class="k-num blocked">{hitState(h, r.timezone)}</span></div>
+			{/each}
+		{:else}<p class="empty k-muted">No account was blocked by a limit.</p>{/if}
+	</section>
+{/snippet}
+
 <div class="k-stack">
 	<h1>Report</h1>
 
@@ -196,6 +207,8 @@
 					{:else}No history yet. The server saves a reading of every account on its schedule; the report fills in from the first reading on.{/if}
 				</p>
 			</div>
+			<!-- no reading in the period, yet a limit reached earlier still held during it -->
+			{#if r.hits.length}{@render limits()}{/if}
 		{:else}
 			<div class="kpis" data-testid="kpis">
 				<div class="kpi"><div class="k-label">Total used</div><div class="v">{pct(r.total)}</div><div class="s">{r.accounts.length} {r.accounts.length === 1 ? 'account' : 'accounts'}{many ? ` · ${r.daysWithData} ${r.daysWithData === 1 ? 'day' : 'days'}` : ''}</div></div>
@@ -273,14 +286,7 @@
 				</section>
 			{/if}
 
-			<section class="k-card" data-testid="limits">
-				<div class="k-cardhead"><h2>Limits reached</h2><span class="k-small k-muted">{r.hits.length} in this period</span></div>
-				{#if r.hits.length}
-					{#each r.hits as h (`${h.accountId}-${h.window}-${h.ts}`)}
-						<div class="kv"><span><b>{h.account}</b> <span class="k-small k-muted">{r.labels[h.window]} &middot; {reachedLabel(h, r.timezone)}</span></span><span class="k-num blocked">{hitState(h, r.timezone)}</span></div>
-					{/each}
-				{:else}<p class="empty k-muted">No account was blocked by a limit.</p>{/if}
-			</section>
+			{@render limits()}
 		{/if}
 		<p class="k-note">
 			Figures are a percentage of one hourly session per account. Over 100% means the session reset and was used again.
