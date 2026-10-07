@@ -75,16 +75,25 @@ export function pruneSamples(nowUnix: number, days = getSettings().historyDays):
 	return Number(database().prepare('DELETE FROM usage_samples WHERE ts_unix < ?').run(nowUnix - days * 86_400).changes);
 }
 
-/** Readings of the hourly-session window per account, oldest first, for from <= ts < to. */
+/** Readings of both windows per account, oldest first, for from <= ts <= to. */
 export function samplesBetween(from: number, to: number): Map<string, Sample[]> {
 	const rows = database()
-		.prepare('SELECT account_id, ts_unix, s_pct, s_reset_unix FROM usage_samples WHERE ts_unix >= ? AND ts_unix < ? ORDER BY account_id, ts_unix')
-		.all(from, to) as unknown as { account_id: string; ts_unix: number; s_pct: number | null; s_reset_unix: number | null }[];
+		.prepare(
+			'SELECT account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix FROM usage_samples WHERE ts_unix >= ? AND ts_unix <= ? ORDER BY account_id, ts_unix'
+		)
+		.all(from, to) as unknown as {
+		account_id: string;
+		ts_unix: number;
+		s_pct: number | null;
+		s_reset_unix: number | null;
+		w_pct: number | null;
+		w_reset_unix: number | null;
+	}[];
 	const out = new Map<string, Sample[]>();
 	for (const r of rows) {
 		let list = out.get(r.account_id);
 		if (!list) out.set(r.account_id, (list = []));
-		list.push({ ts: r.ts_unix, pct: r.s_pct, reset: r.s_reset_unix });
+		list.push({ ts: r.ts_unix, pct: r.s_pct, reset: r.s_reset_unix, weekPct: r.w_pct, weekReset: r.w_reset_unix });
 	}
 	return out;
 }
@@ -156,9 +165,16 @@ export function readServerUsage(accounts: Account[]): UsageSnapshot {
 		const u = storedUsage(r);
 		const win = (w: Usage['session'] | undefined) =>
 			w && w.available ? { percentage: w.percentage, resetsAt: w.resets_at_unix ?? null } : null;
-		byId[a.id] = { session: win(u?.session), weekly: win(u?.weekly), pollError: parse(r.error_json) };
+		// ok_unix, not polled_unix: a failed poll keeps the old numbers, and they keep their old age
+		const models = (u?.models ?? []).map((m) => ({ label: m.label, percentage: m.percentage, resetsAt: m.resets_at_unix ?? null }));
+		byId[a.id] = { session: win(u?.session), weekly: win(u?.weekly), models, pollError: parse(r.error_json), readUnix: u ? r.ok_unix : null };
 	}
 	return { updatedUnix: updated, byId };
+}
+
+/** A good reading older than this no longer describes the account: three readings missed, and never under 10 minutes. */
+export function staleAfterSeconds(): number {
+	return Math.max(3 * getSettings().pollSeconds, 600);
 }
 
 let poller: Poller | null = null;
@@ -188,8 +204,8 @@ export function getPoller(): Poller {
 }
 
 /** Fire-and-forget poll of one account (after login); errors land in the row, never thrown. */
-export function pollAccountSoon(a: Pick<Account, 'id' | 'config_dir'> & { provider?: Account['provider'] }): Promise<void> {
-	return getPoller().pollOne({ id: a.id, configDir: a.config_dir, provider: a.provider ?? 'claude' }, true);
+export async function pollAccountSoon(a: Pick<Account, 'id' | 'config_dir'> & { provider?: Account['provider'] }): Promise<void> {
+	await getPoller().pollOne({ id: a.id, configDir: a.config_dir, provider: a.provider ?? 'claude' }, true);
 }
 
 // ---------- "Refresh now" on the Usage page ----------
@@ -201,7 +217,18 @@ let lastManualMs = 0;
  * reading. Accounts the API has rate limited are skipped (their cooldown still applies).
  * Settings > Wait between manual refreshes spaces the button out for everyone.
  */
-export async function refreshNow(nowMs = Date.now()): Promise<{ refreshed: number; skipped: number }> {
+export interface RefreshResult {
+	/** accounts that gave a new reading */
+	refreshed: number;
+	/** accounts whose reading failed: their row says why */
+	failed: number;
+	/** accounts still being read when the wait ran out */
+	pending: number;
+	/** accounts left alone because the provider asked us to wait */
+	skipped: number;
+}
+
+export async function refreshNow(nowMs = Date.now(), waitMs = 20_000): Promise<RefreshResult> {
 	const waitS = getSettings().refreshWaitSeconds;
 	const left = Math.ceil((lastManualMs + waitS * 1000 - nowMs) / 1000);
 	if (left > 0) throw Object.assign(new UserError(`Refreshed a moment ago. Try again in ${left} seconds.`, 429), { retryAfter: left });
@@ -209,10 +236,12 @@ export async function refreshNow(nowMs = Date.now()): Promise<{ refreshed: numbe
 	const targets = listAccounts().filter((a) => a.enabled);
 	lastManualMs = nowMs;
 	const ready = targets.filter((a) => p.cooldownRemaining(a.id) === 0);
+	const done: boolean[] = [];
 	// A slow or hung API must not hold the button forever; the readings still land when they finish.
-	const settle = Promise.all(ready.map((a) => p.pollOne({ id: a.id, configDir: a.config_dir, provider: a.provider })));
-	await Promise.race([settle, new Promise((r) => setTimeout(r, 20_000))]);
-	return { refreshed: ready.length, skipped: targets.length - ready.length };
+	const settle = Promise.all(ready.map((a) => p.pollOne({ id: a.id, configDir: a.config_dir, provider: a.provider }).then((ok) => void done.push(ok))));
+	await Promise.race([settle, new Promise((r) => setTimeout(r, waitMs))]);
+	const refreshed = done.filter(Boolean).length;
+	return { refreshed, failed: done.length - refreshed, pending: ready.length - done.length, skipped: targets.length - ready.length };
 }
 
 /** Tests only. */

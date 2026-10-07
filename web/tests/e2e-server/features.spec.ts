@@ -251,6 +251,49 @@ test('report: an empty history says so; kept readings are cut into the saved slo
 	await expect(page.getByRole('group', { name: 'Period' })).toBeVisible();
 });
 
+test('report: a weekly limit already in force is listed, in the page and in the document', async ({ page }) => {
+	const date = seedHistory();
+	// an account that never touched its hourly session but sat at its weekly limit the whole time
+	const d = new DatabaseSync(dbFile);
+	d.exec('PRAGMA busy_timeout = 5000');
+	const first = (d.prepare("SELECT MAX(ts_unix) AS t FROM usage_samples WHERE account_id = 'legacy'").get() as { t: number }).t - 120;
+	d.prepare("INSERT OR REPLACE INTO report_accounts (account_id, name, provider) VALUES ('capped', 'Capped team', 'claude')").run();
+	const ins = d.prepare("INSERT OR REPLACE INTO usage_samples (account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix) VALUES ('capped', ?, 0, NULL, 100, ?)");
+	for (const t of [first, first + 60, first + 120]) ins.run(t, first + 2 * 86400);
+	d.close();
+	try {
+		await signIn(page);
+		await page.goto(`/report?period=day&date=${date}`);
+		await expect(page.getByTestId('kpis').locator('.kpi').filter({ hasText: 'Limits reached' }).locator('.v')).toHaveText('1');
+		const limits = page.getByTestId('limits');
+		await expect(limits).toContainText('1 in this period');
+		await expect(limits).toContainText('Capped team');
+		await expect(limits).toContainText('Weekly session');
+		// nobody saw it get there, so the report does not pretend to know when
+		await expect(limits).toContainText('Before ');
+		await expect(limits).toContainText('blocked at least 2 d 0 h');
+		await expect(limits).not.toContainText('No account');
+		for (const width of [1280, 390]) {
+			await page.setViewportSize({ width, height: 800 });
+			expect(await sideways(page), `limits at ${width}px`).toBeLessThanOrEqual(0);
+		}
+		await page.setViewportSize({ width: 1280, height: 800 });
+		await page.screenshot({ path: path.join(shots, 'report-weekly-limit.png'), fullPage: true });
+
+		await page.getByRole('button', { name: 'Download preview' }).click();
+		const preview = page.getByTestId('doc-preview');
+		await expect(preview).toContainText('An account was blocked by a limit 1 time: Capped team.');
+		await expect(preview).toContainText('Blocked until');
+		await expect(preview).toContainText('at least 2 d 0 h');
+	} finally {
+		// the later steps count on the history they seeded themselves
+		const c = new DatabaseSync(dbFile);
+		c.exec('PRAGMA busy_timeout = 5000');
+		c.exec("DELETE FROM usage_samples WHERE account_id = 'capped'; DELETE FROM report_accounts WHERE account_id = 'capped';");
+		c.close();
+	}
+});
+
 test('report: the download menu closes on an outside click; Word, PDF and CSV files are real', async ({ page }) => {
 	const date = seedHistory();
 	await signIn(page);

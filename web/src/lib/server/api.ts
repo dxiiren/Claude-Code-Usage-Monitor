@@ -6,7 +6,7 @@ import { AuthStatusCache, loginStatus } from './status';
 import { readUsage } from './usage';
 import { findWidgetExe, widgetRunning } from './widget';
 import { SERVER } from './paths';
-import { clearError, pollAccountSoon, readServerUsage } from './serverUsage';
+import { clearError, pollAccountSoon, readServerUsage, staleAfterSeconds } from './serverUsage';
 import type { Provider } from './paths';
 
 export async function body(request: Request): Promise<Record<string, unknown>> {
@@ -88,6 +88,8 @@ export async function snapshot() {
 		revision: Number(meta.revision ?? 0),
 		cardTheme: getCardTheme(),
 		usageUpdatedUnix: usage.updatedUnix,
+		/** Server: a reading older than this is shown as out of date. Local: the widget's cache has no per-account time. */
+		staleAfterSeconds: SERVER ? staleAfterSeconds() : null,
 		widget: SERVER ? { installed: false, running: false } : { installed: !!findWidgetExe(), running: widgetRunning() },
 		accounts: accounts.map((a, i) => {
 			const u = usage.byId[a.id];
@@ -110,7 +112,8 @@ export async function snapshot() {
 							.map((o) => o.name)
 					: [],
 				status: loginStatus({ pollError: stale ? null : u?.pollError, auth: auths[i], everLoggedIn: !!a.email, provider: a.provider }),
-				usage: u ? { session: u.session, weekly: u.weekly } : null
+				usage: u ? { session: u.session, weekly: u.weekly, models: u.models } : null,
+				usageReadUnix: u?.readUnix ?? null
 			};
 		})
 	};

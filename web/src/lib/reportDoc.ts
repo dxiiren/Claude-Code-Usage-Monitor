@@ -66,10 +66,37 @@ export function whenLabel(unix: number, timezone: string): string {
 	return new Intl.DateTimeFormat('en-GB', { timeZone: timezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(unix * 1000);
 }
 
+/** "45 min", "2 h 15 min", "2 d 3 h" */
 export function blockedLabel(seconds: number | null): string {
 	if (seconds === null) return 'not known';
 	const m = Math.round(seconds / 60);
+	if (m >= 1440) return `${Math.floor(m / 1440)} d ${Math.floor((m % 1440) / 60)} h`;
 	return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+}
+
+type Hit = ReportPayload['hits'][number];
+
+/** When a limit was reached; "Before ..." when no reading saw the account get there. */
+export const reachedLabel = (h: Hit, timezone: string) => `${h.before ? 'Before ' : ''}${whenLabel(h.ts, timezone)}`;
+/** Only 100% blocks an account; Settings can count a lower level as "limit reached". */
+export const isBlocked = (h: Hit) => h.pct >= 100;
+/** "2 h 15 min"; "at least ..." when it was reached before the first reading that saw it. */
+export function blockedFor(h: Hit): string {
+	if (!isBlocked(h)) return `not blocked (${pct(h.pct)})`;
+	return `${h.before && h.blockedSeconds !== null ? 'at least ' : ''}${blockedLabel(h.blockedSeconds)}`;
+}
+/** A limit's row on the page: "blocked 2 h 0 min · until Tue, 6 Oct, 11:30". */
+export function hitState(h: Hit, timezone: string): string {
+	if (!isBlocked(h)) return `reached ${pct(h.pct)}${h.until === null ? '' : ` · resets ${whenLabel(h.until, timezone)}`}`;
+	return h.until === null ? 'blocked' : `blocked ${blockedFor(h)} · until ${whenLabel(h.until, timezone)}`;
+}
+
+const times = (n: number) => `${n} ${n === 1 ? 'time' : 'times'}`;
+/** "Claude", "Codex" or "Claude and Codex": whose accounts the report covers. */
+function services(r: ReportPayload): string {
+	const codex = r.accounts.some((a) => a.provider === 'codex');
+	const claude = r.accounts.some((a) => a.provider !== 'codex');
+	return codex && claude ? 'Claude and Codex' : codex ? 'Codex' : 'Claude';
 }
 
 const head = (s: Slot) => (s.name.trim() ? `${slotName(s)} (${slotRange(s)})` : slotRange(s));
@@ -100,9 +127,14 @@ export function summaryLines(r: ReportPayload): string[] {
 		`Total usage across ${r.accounts.length} ${r.accounts.length === 1 ? 'account' : 'accounts'} was ${pct(r.total)} of an hourly session${many ? ` over ${r.daysWithData} ${r.daysWithData === 1 ? 'day' : 'days'} with data` : ''}.`
 	];
 	if (r.busiestSlot !== null) out.push(`The busiest time slot was ${head(r.slots[r.busiestSlot])} with ${pct(r.slotTotals[r.busiestSlot])}.`);
-	if (r.topAccount) out.push(`The most used account was ${r.topAccount} with ${pct(r.accounts.find((a) => a.name === r.topAccount)?.total ?? 0)}.`);
-	out.push(r.hits.length ? `An account reached its limit ${r.hits.length} ${r.hits.length === 1 ? 'time' : 'times'}.` : 'No account reached its limit.');
-	if (r.idle.length) out.push(`Not used at all: ${r.idle.join(', ')}.`);
+	if (r.topAccount) out.push(`The most used account was ${r.topAccount} with ${pct(r.topTotal)}.`);
+	const blocked = r.hits.filter(isBlocked);
+	out.push(blocked.length ? `An account was blocked by a limit ${times(blocked.length)}: ${[...new Set(blocked.map((h) => h.account))].join(', ')}.` : 'No account was blocked by a limit.');
+	const near = r.hits.length - blocked.length;
+	if (near) out.push(`An account reached ${r.limitAt}% of a limit without being blocked ${times(near)}.`);
+	if (r.idle.length) out.push(`${r.idleBelow > 1 ? `Used less than ${r.idleBelow}%` : 'Not used at all'}: ${r.idle.join(', ')}.`);
+	if (r.noReadings.length) out.push(`No readings were saved for: ${r.noReadings.join(', ')}. Their use in this period is not known.`);
+	if (r.outsideSlots >= 0.5) out.push(`${pct(r.outsideSlots)} was used at times no time slot covers and is in none of these figures.`);
 	return out;
 }
 
@@ -120,7 +152,7 @@ export function buildDoc(r: ReportPayload, doc: DocSettings, view: View, prepare
 		sections.push({
 			title: 'Summary',
 			blocks: [
-				{ type: 'p', text: "This report shows how the company's Claude accounts were used during the period, split by time slot." },
+				{ type: 'p', text: `This report shows how the company's ${services(r)} accounts were used during the period, split by time slot.` },
 				{ type: 'bullets', items: summaryLines(r) }
 			]
 		});
@@ -162,15 +194,24 @@ export function buildDoc(r: ReportPayload, doc: DocSettings, view: View, prepare
 			title: 'Limits Reached',
 			blocks: r.hits.length
 				? [
-						{ type: 'p', text: 'The times an account reached its limit and could not be used until its session reset.' },
+						{
+							type: 'p',
+							text: `Each time an account was at a limit and could not be used until that limit reset. A limit reached before the period and still in force during it is listed too.${r.limitAt < 100 ? ` Settings counts ${r.limitAt}% as a limit reached; an account is only blocked at 100%.` : ''}`
+						},
 						{
 							type: 'table',
-							head: ['Date and time', 'Account', 'Limit', 'Blocked for'],
-							rows: r.hits.map((h) => [whenLabel(h.ts, r.timezone), h.account, 'Hourly session', blockedLabel(h.blockedSeconds)]),
+							head: ['Reached', 'Account', 'Limit', 'Blocked for', 'Blocked until'],
+							rows: r.hits.map((h) => [
+								reachedLabel(h, r.timezone),
+								h.account,
+								r.labels[h.window],
+								blockedFor(h),
+								!isBlocked(h) ? '-' : h.until === null ? 'not known' : whenLabel(h.until, r.timezone)
+							]),
 							caption: `Table ${++tab}. Limits reached`
 						}
 					]
-				: [{ type: 'p', text: 'No account reached its limit in this period.' }]
+				: [{ type: 'p', text: 'No account was blocked by a limit in this period.' }]
 		});
 	}
 

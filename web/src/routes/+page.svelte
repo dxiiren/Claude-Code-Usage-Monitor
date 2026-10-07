@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import UsageBar from '$lib/UsageBar.svelte';
 	import LoginPanel, { type LoginInfo } from '$lib/LoginPanel.svelte';
-	import { needsLogin, post } from '$lib/format';
+	import { ago, needsLogin, post, refreshSummary, resetsIn, windowFull } from '$lib/format';
 	import type { Snapshot } from '$lib/server/api';
 
 	let { data } = $props();
@@ -29,6 +29,9 @@
 	let removeTarget = $state<Snapshot['accounts'][number] | null>(null);
 	let removeDialog: HTMLDialogElement | undefined = $state();
 	const server = $derived(snap.mode === 'server');
+	/** The last good reading is too old to describe the account (server mode). */
+	const isOld = (a: Snapshot['accounts'][number]) =>
+		snap.staleAfterSeconds !== null && a.usageReadUnix !== null && now / 1000 - a.usageReadUnix > snap.staleAfterSeconds;
 
 	async function refresh() {
 		try {
@@ -156,11 +159,10 @@
 		refreshing = true;
 		refreshMsg = '';
 		try {
-			const out = await post<{ refreshed: number; skipped: number; snap: Snapshot }>('/api/usage/refresh');
+			const out = await post<{ refreshed: number; failed: number; pending: number; skipped: number; snap: Snapshot }>('/api/usage/refresh');
 			snap = out.snap;
-			refreshMsg = out.refreshed
-				? `Refreshed ${out.refreshed} ${out.refreshed === 1 ? 'account' : 'accounts'}.`
-				: 'Nothing refreshed: the provider asked us to wait before reading again.';
+			now = Date.now();
+			refreshMsg = refreshSummary(out).text;
 		} catch (err) {
 			refreshMsg = (err as Error).message;
 		}
@@ -276,8 +278,16 @@
 				{:else if a.status.state === 'error'}
 					<p class="transient" data-testid="status-error">{a.status.message}</p>
 				{/if}
+				{#if a.email && !needsLogin(a.status.state)}
+					{#each (a.usage?.models ?? []).filter((m) => windowFull(m, now)) as m (m.label)}
+						<p class="transient" data-testid="model-limit">{m.label} limit reached{m.resetsAt ? `, resets in ${resetsIn(m.resetsAt, now)}` : ''}. Other models still work.</p>
+					{/each}
+				{/if}
+				{#if a.email && !needsLogin(a.status.state) && isOld(a)}
+					<p class="transient" data-testid="old-reading">Last read {ago(a.usageReadUnix!, now)} ago{a.enabled ? '' : ' (hidden accounts are not read)'}. These numbers may be out of date.</p>
+				{/if}
 				{#if a.email}
-					<div class="bars" class:stale={needsLogin(a.status.state)}>
+					<div class="bars" class:stale={needsLogin(a.status.state) || isOld(a)}>
 						<UsageBar label={ui.hourlyLabel} title="{ui.hourlyLabel} (5-hour window)" pct={a.usage?.session?.percentage} resetsAt={a.usage?.session?.resetsAt} {now} warnAt={ui.warnAt} highAt={ui.highAt} />
 						<UsageBar label={ui.weeklyLabel} title="{ui.weeklyLabel} (7-day window)" pct={a.usage?.weekly?.percentage} resetsAt={a.usage?.weekly?.resetsAt} {now} warnAt={ui.warnAt} highAt={ui.highAt} />
 					</div>

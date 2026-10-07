@@ -2,6 +2,7 @@
 //  1. the widget's usage-cache.json `error` for that account (serde snake_case of src/poller.rs PollError)
 //  2. `claude auth status` for that account's folder (cached, so page polling does not spawn the CLI each time)
 import fs from 'node:fs';
+import { SERVER } from './paths';
 
 export type LoginState = 'ok' | 'expired' | 'logged_out' | 'error';
 
@@ -34,7 +35,8 @@ function classifyClaude(raw: unknown): { kind: PollErrorKind; message: string } 
 			case 'no_credentials':
 				return { kind: 'logged_out', message: 'No saved login in this folder.' };
 			case 'network_error':
-				return { kind: 'transient', message: 'The widget could not reach Claude (network error).' };
+				// whoever reads the usage: the server itself in server mode, the desktop widget otherwise
+				return { kind: 'transient', message: `The ${SERVER ? 'server' : 'widget'} could not reach Claude (network error).` };
 			case 'request_failed':
 				return { kind: 'transient', message: 'The last usage request failed.' };
 			case 'unexpected_response':

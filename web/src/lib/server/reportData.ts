@@ -6,8 +6,11 @@ import { firstSampleUnix, reportAccounts, sampleHours, samplesBetween } from './
 import { getSettings } from './settings';
 
 const PERIODS: Period[] = ['day', 'week', 'month'];
-/** Readings this far before the period give each account a baseline level to measure rises from. */
-const BASELINE_S = 6 * 3600;
+/**
+ * Readings this far before the period are loaded too. They give each account a baseline level to
+ * measure rises from, and they show when a weekly limit still in force at the start was reached.
+ */
+const LOOKBACK_S = 7 * 86_400 + 6 * 3600;
 
 export function asPeriod(raw: unknown): Period {
 	return PERIODS.includes(raw as Period) ? (raw as Period) : getSettings().reportPeriod;
@@ -30,6 +33,11 @@ export interface ReportPayload extends Report {
 	/** first report day that has any reading, or null when history has not started */
 	firstDate: string | null;
 	generatedUnix: number;
+	/** the two windows' names from Settings, as the Usage page shows them */
+	labels: { session: string; weekly: string };
+	/** the levels from Settings the report was cut with */
+	limitAt: number;
+	idleBelow: number;
 }
 
 export function loadReport(rawPeriod: unknown, rawDate: unknown, nowMs = Date.now()): ReportPayload {
@@ -46,13 +54,16 @@ export function loadReport(rawPeriod: unknown, rawDate: unknown, nowMs = Date.no
 			slots: s.slots,
 			timezone: s.timezone,
 			accounts: reportAccounts(),
-			samples: samplesBetween(range.from - BASELINE_S, range.to),
+			samples: samplesBetween(range.from - LOOKBACK_S, range.to),
 			limitAt: s.limitAt,
 			idleBelow: s.idleBelow
 		}),
 		today: todayDate(nowMs),
 		firstDate: first === null ? null : reportDateOf(s.timezone, first, s.slots),
-		generatedUnix: Math.floor(nowMs / 1000)
+		generatedUnix: Math.floor(nowMs / 1000),
+		labels: { session: s.hourlyLabel, weekly: s.weeklyLabel },
+		limitAt: s.limitAt,
+		idleBelow: s.idleBelow
 	};
 }
 

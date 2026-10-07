@@ -27,8 +27,50 @@ export function resetsIn(unix: number | null | undefined, nowMs: number, withSec
 	return `${m}m`;
 }
 
+/** Whole percent. Only a real 100 reads "100%": 99.6 is not a reached limit and must not look like one. */
 export function pctText(pct: number | null | undefined): string {
-	return pct === null || pct === undefined ? '--' : `${Math.round(pct)}%`;
+	if (pct === null || pct === undefined) return '--';
+	const whole = Math.round(pct);
+	return `${pct < 100 ? Math.min(whole, 99) : whole}%`;
+}
+
+/** "4m", "3h 5m", "2d 4h": how long ago a moment (unix seconds) was. */
+export function ago(unix: number, nowMs: number): string {
+	const s = Math.max(0, Math.floor(nowMs / 1000 - unix));
+	const d = Math.floor(s / 86400);
+	const h = Math.floor((s % 86400) / 3600);
+	const m = Math.floor((s % 3600) / 60);
+	if (d > 0) return `${d}d ${h}h`;
+	if (h > 0) return `${h}h ${m}m`;
+	return `${Math.max(1, m)}m`;
+}
+
+/** True once a window's reset time has passed: the number read before it is of a window that is over. */
+export function windowOver(resetsAt: number | null | undefined, nowMs: number): boolean {
+	return !!resetsAt && resetsAt * 1000 <= nowMs;
+}
+
+interface Window {
+	percentage: number;
+	resetsAt: number | null;
+}
+/** At its limit right now: 100% or more in a window that has not reset yet. */
+export function windowFull(w: Window | null | undefined, nowMs: number): boolean {
+	return !!w && w.percentage >= 100 && !windowOver(w.resetsAt, nowMs);
+}
+
+/** What "Refresh now" did. `ok` = every account asked gave a new reading. */
+export function refreshSummary(r: { refreshed: number; failed?: number; pending?: number; skipped: number }): { ok: boolean; text: string } {
+	const failed = r.failed ?? 0;
+	const pending = r.pending ?? 0;
+	const n = (k: number) => `${k} ${k === 1 ? 'account' : 'accounts'}`;
+	const parts: string[] = [];
+	if (r.refreshed) parts.push(`Refreshed ${n(r.refreshed)}.`);
+	if (failed) parts.push(`${n(failed)} could not be read: the reason is on ${failed === 1 ? 'its' : 'their'} row.`);
+	if (pending) parts.push(`${n(pending)} still being read: the numbers change when that finishes.`);
+	if (r.skipped) parts.push(r.refreshed || failed || pending ? `${r.skipped} skipped: the provider asked us to wait.` : 'Nothing refreshed: the provider asked us to wait before reading again.');
+	if (!parts.length) parts.push('Nothing to refresh: no account is switched on.');
+	return { ok: r.refreshed > 0 && !failed && !pending, text: parts.join(' ') };
 }
 
 /** POST JSON to our own API; throws Error(message) on a non-2xx with the server's `error`. */
