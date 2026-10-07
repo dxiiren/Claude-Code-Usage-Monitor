@@ -215,10 +215,12 @@ export async function pollAccountSoon(a: Pick<Account, 'id' | 'config_dir'> & { 
 let lastManualMs = 0;
 
 /**
- * Reads usage straight away for every enabled account instead of waiting for the next scheduled
- * reading. Accounts the API has rate limited are skipped (their cooldown still applies).
- * Settings > Wait between manual refreshes spaces the button out for everyone.
+ * A good reading this recent is current already. The provider refuses a second reading of an
+ * account soon after the first (HTTP 429: seen 66-68 s after, never 120 s after), and the refusal
+ * then costs the next scheduled reading as well, so asking again would make the numbers older.
  */
+const FRESH_SECONDS = 120;
+
 export interface RefreshResult {
 	/** accounts that gave a new reading */
 	refreshed: number;
@@ -228,22 +230,45 @@ export interface RefreshResult {
 	pending: number;
 	/** accounts left alone because the provider asked us to wait */
 	skipped: number;
+	/** accounts left alone because their last good reading is under `freshSeconds` old */
+	fresh: number;
+	freshSeconds: number;
 }
 
+/**
+ * Reads usage straight away for every enabled account instead of waiting for the next scheduled
+ * reading. Accounts read a moment ago are left alone, and so are accounts the API has rate limited
+ * (their cooldown still applies). Settings > Wait between manual refreshes spaces the button out
+ * for everyone.
+ */
 export async function refreshNow(nowMs = Date.now(), waitMs = 20_000): Promise<RefreshResult> {
 	const waitS = getSettings().refreshWaitSeconds;
 	const left = Math.ceil((lastManualMs + waitS * 1000 - nowMs) / 1000);
 	if (left > 0) throw Object.assign(new UserError(`Refreshed a moment ago. Try again in ${left} seconds.`, 429), { retryAfter: left });
 	const p = getPoller();
 	const targets = listAccounts().filter((a) => a.enabled);
-	lastManualMs = nowMs;
-	const ready = targets.filter((a) => p.cooldownRemaining(a.id) === 0);
+	const rows = readRows();
+	const isFresh = (id: string) => {
+		const r = rows.get(id);
+		return !!r?.ok_unix && !r.error_json && nowMs / 1000 - r.ok_unix < FRESH_SECONDS;
+	};
+	const due = targets.filter((a) => !isFresh(a.id));
+	const ready = due.filter((a) => p.cooldownRemaining(a.id) === 0);
+	// the wait between manual refreshes spaces out what is asked of the provider: nothing asked, no wait
+	if (ready.length) lastManualMs = nowMs;
 	const done: boolean[] = [];
 	// A slow or hung API must not hold the button forever; the readings still land when they finish.
 	const settle = Promise.all(ready.map((a) => p.pollOne({ id: a.id, configDir: a.config_dir, provider: a.provider }).then((ok) => void done.push(ok))));
 	await Promise.race([settle, new Promise((r) => setTimeout(r, waitMs))]);
 	const refreshed = done.filter(Boolean).length;
-	return { refreshed, failed: done.length - refreshed, pending: ready.length - done.length, skipped: targets.length - ready.length };
+	return {
+		refreshed,
+		failed: done.length - refreshed,
+		pending: ready.length - done.length,
+		skipped: due.length - ready.length,
+		fresh: targets.length - due.length,
+		freshSeconds: FRESH_SECONDS
+	};
 }
 
 /** Tests only. */

@@ -61,6 +61,11 @@ describe('level thresholds (same as the widget)', () => {
 		expect(refreshSummary({ refreshed: 2, failed: 0, pending: 0, skipped: 1 })).toEqual({ ok: true, text: 'Refreshed 2 accounts. 1 skipped: the provider asked us to wait.' });
 		expect(refreshSummary({ refreshed: 0, failed: 0, pending: 0, skipped: 3 })).toEqual({ ok: false, text: 'Nothing refreshed: the provider asked us to wait before reading again.' });
 		expect(refreshSummary({ refreshed: 0, failed: 0, pending: 0, skipped: 0 })).toEqual({ ok: false, text: 'Nothing to refresh: no account is switched on.' });
+		// numbers read a moment ago are current: not a failure, and not "refreshed" either
+		expect(refreshSummary({ refreshed: 0, failed: 0, pending: 0, skipped: 0, fresh: 6, freshSeconds: 120 })).toEqual({ ok: true, text: 'Already up to date: every account was read in the last 2 minutes.' });
+		expect(refreshSummary({ refreshed: 2, failed: 0, pending: 0, skipped: 0, fresh: 4, freshSeconds: 120 })).toEqual({ ok: true, text: 'Refreshed 2 accounts. 4 accounts already up to date (read in the last 2 minutes).' });
+		expect(refreshSummary({ refreshed: 0, failed: 1, pending: 0, skipped: 0, fresh: 1, freshSeconds: 60 })).toMatchObject({ ok: false, text: expect.stringContaining('1 account already up to date (read in the last 1 minute).') });
+		expect(refreshSummary({ refreshed: 0, failed: 0, pending: 0, skipped: 2, fresh: 1, freshSeconds: 120 })).toEqual({ ok: false, text: '1 account already up to date (read in the last 2 minutes). 2 skipped: the provider asked us to wait.' });
 	});
 });
 

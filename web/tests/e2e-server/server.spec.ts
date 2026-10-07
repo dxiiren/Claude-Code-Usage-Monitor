@@ -25,6 +25,15 @@ async function signIn(page: Page, password = PASSWORD, username = 'admin') {
 
 let widgetToken = '';
 
+/** Makes an account's stored reading `seconds` old, as if its last poll had been that long ago. */
+function ageReading(seconds: number, id = 'alpha') {
+	const at = Math.floor(Date.now() / 1000) - seconds;
+	const d = new DatabaseSync(path.join(data, 'accounts.db'));
+	d.exec('PRAGMA busy_timeout = 5000');
+	d.prepare('UPDATE account_usage SET ok_unix = ?, polled_unix = ? WHERE account_id = ?').run(at, at, id);
+	d.close();
+}
+
 test('healthz is public and says nothing else', async ({ request }) => {
 	const r = await request.get('/healthz');
 	expect(r.status()).toBe(200);
@@ -116,10 +125,20 @@ test('usage: the two windows carry their names; Refresh now reads straight away,
 	await expect(row).toContainText('Weekly session');
 	await expect(page.getByTestId('best')).toContainText('Hourly session 12% used, weekly session 44%');
 
-	const before = (await (await page.request.get(`${USAGE}/calls`)).json()).calls;
+	const calls = async () => (await (await page.request.get(`${USAGE}/calls`)).json()).calls;
+	const before = await calls();
+	// The numbers are seconds old. The provider refuses a second reading that soon, so nothing is
+	// asked again and the page says the numbers are current. Nothing was asked, so no wait starts.
+	await page.getByTestId('refresh-all').click();
+	await expect(page.getByTestId('refresh-notice')).toHaveText('Already up to date: every account was read in the last 2 minutes.');
+	expect(await calls()).toBe(before);
+	await expect(page.getByTestId('refresh-all')).toBeEnabled();
+
+	// a reading a few minutes old is read again straight away
+	ageReading(200);
 	await page.getByTestId('refresh-all').click();
 	await expect(page.getByTestId('refresh-notice')).toHaveText('Refreshed 1 account.');
-	expect((await (await page.request.get(`${USAGE}/calls`)).json()).calls).toBe(before + 1);
+	expect(await calls()).toBe(before + 1);
 	// the wait between manual refreshes: the button counts down and the server refuses a second go
 	await expect(page.getByTestId('refresh-all')).toBeDisabled();
 	await expect(page.getByTestId('refresh-all')).toContainText(/Refresh in \d+s/);
@@ -130,9 +149,10 @@ test('usage: the two windows carry their names; Refresh now reads straight away,
 	// with the wait switched off the button is ready again at once, and Accounts has the same button
 	expect((await setWait(0)).status()).toBe(200);
 	await page.goto('/');
+	ageReading(200);
 	await page.getByTestId('refresh-all').click();
 	await expect(page.getByTestId('refresh-notice')).toHaveText('Refreshed 1 account.');
-	expect((await (await page.request.get(`${USAGE}/calls`)).json()).calls).toBe(before + 2);
+	expect(await calls()).toBe(before + 2);
 	// every reading was kept for the reports
 	const kept = await page.request.get('/api/report?period=day');
 	expect((await kept.json()).accounts.map((a: { name: string }) => a.name)).toContain('alpha');
@@ -172,7 +192,8 @@ test('usage: a limit whose reset time has passed no longer blocks and is not quo
 	};
 	const d = new DatabaseSync(path.join(data, 'accounts.db'));
 	d.exec('PRAGMA busy_timeout = 5000');
-	d.prepare("UPDATE account_usage SET usage_json = ?, ok_unix = ?, polled_unix = ? WHERE account_id = 'alpha'").run(JSON.stringify(usage), now, now);
+	// read a few minutes ago: recent enough to count, old enough for "Refresh now" to read it again
+	d.prepare("UPDATE account_usage SET usage_json = ?, ok_unix = ?, polled_unix = ? WHERE account_id = 'alpha'").run(JSON.stringify(usage), now - 200, now - 200);
 	d.close();
 	await page.goto('/usage');
 	const row = page.locator('li[data-account="alpha"]');

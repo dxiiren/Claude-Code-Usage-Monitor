@@ -65,17 +65,32 @@ export function windowFull(w: Window | null | undefined, nowMs: number): boolean
 }
 
 /** What "Refresh now" did. `ok` = every account asked gave a new reading. */
-export function refreshSummary(r: { refreshed: number; failed?: number; pending?: number; skipped: number }): { ok: boolean; text: string } {
+export function refreshSummary(r: { refreshed: number; failed?: number; pending?: number; skipped: number; fresh?: number; freshSeconds?: number }): {
+	ok: boolean;
+	text: string;
+} {
 	const failed = r.failed ?? 0;
 	const pending = r.pending ?? 0;
+	const fresh = r.fresh ?? 0;
 	const n = (k: number) => `${k} ${k === 1 ? 'account' : 'accounts'}`;
+	const window = duration(r.freshSeconds ?? 120);
+	const tried = r.refreshed || failed || pending;
 	const parts: string[] = [];
 	if (r.refreshed) parts.push(`Refreshed ${n(r.refreshed)}.`);
 	if (failed) parts.push(`${n(failed)} could not be read: the reason is on ${failed === 1 ? 'its' : 'their'} row.`);
 	if (pending) parts.push(`${n(pending)} still being read: the numbers change when that finishes.`);
-	if (r.skipped) parts.push(r.refreshed || failed || pending ? `${r.skipped} skipped: the provider asked us to wait.` : 'Nothing refreshed: the provider asked us to wait before reading again.');
+	// a reading that recent is current; asking the provider again so soon is refused
+	if (fresh) parts.push(tried || r.skipped ? `${n(fresh)} already up to date (read in the last ${window}).` : `Already up to date: every account was read in the last ${window}.`);
+	if (r.skipped) parts.push(tried || fresh ? `${r.skipped} skipped: the provider asked us to wait.` : 'Nothing refreshed: the provider asked us to wait before reading again.');
 	if (!parts.length) parts.push('Nothing to refresh: no account is switched on.');
-	return { ok: r.refreshed > 0 && !failed && !pending, text: parts.join(' ') };
+	return { ok: !failed && !pending && (r.refreshed > 0 || (fresh > 0 && !r.skipped)), text: parts.join(' ') };
+}
+
+/** "2 minutes", "90 seconds", "1 minute" */
+function duration(seconds: number): string {
+	if (seconds % 60 !== 0) return `${seconds} seconds`;
+	const m = seconds / 60;
+	return `${m} ${m === 1 ? 'minute' : 'minutes'}`;
 }
 
 /** POST JSON to our own API; throws Error(message) on a non-2xx with the server's `error`. */

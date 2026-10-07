@@ -159,7 +159,7 @@
 		refreshing = true;
 		refreshMsg = '';
 		try {
-			const out = await post<{ refreshed: number; failed: number; pending: number; skipped: number; snap: Snapshot }>('/api/usage/refresh');
+			const out = await post<{ refreshed: number; failed: number; pending: number; skipped: number; fresh: number; freshSeconds: number; snap: Snapshot }>('/api/usage/refresh');
 			snap = out.snap;
 			now = Date.now();
 			refreshMsg = refreshSummary(out).text;
