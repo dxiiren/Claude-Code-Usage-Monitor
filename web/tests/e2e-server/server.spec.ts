@@ -163,6 +163,33 @@ test('usage: numbers nobody has refreshed are shown as old and never picked as t
 	await expect(page.getByTestId('best')).toContainText('alpha');
 });
 
+test('usage: a limit whose reset time has passed no longer blocks and is not quoted as 100% used', async ({ page }) => {
+	await signIn(page);
+	const now = Math.floor(Date.now() / 1000);
+	const usage = {
+		session: { available: true, percentage: 100, resets_at_unix: now - 60 },
+		weekly: { available: true, percentage: 44, resets_at_unix: now + 3 * 86400 }
+	};
+	const d = new DatabaseSync(path.join(data, 'accounts.db'));
+	d.exec('PRAGMA busy_timeout = 5000');
+	d.prepare("UPDATE account_usage SET usage_json = ?, ok_unix = ?, polled_unix = ? WHERE account_id = 'alpha'").run(JSON.stringify(usage), now, now);
+	d.close();
+	await page.goto('/usage');
+	const row = page.locator('li[data-account="alpha"]');
+	await expect(row).toContainText('has reset, new reading due');
+	await expect(row.getByText('blocked', { exact: true })).toHaveCount(0);
+	await expect(row).not.toContainText('limit reached');
+	const best = page.getByTestId('best');
+	await expect(best).toContainText('alpha');
+	await expect(best).toContainText('Hourly session has reset, weekly session 44%');
+	await expect(best).not.toContainText('100%');
+
+	// the next reading puts the real numbers back
+	await page.getByTestId('refresh-all').click();
+	await expect(page.getByTestId('refresh-notice')).toHaveText('Refreshed 1 account.');
+	await expect(best).toContainText('Hourly session 12% used, weekly session 44%');
+});
+
 test('an account whose token the usage endpoint rejects shows as expired', async ({ page }) => {
 	await signIn(page);
 	await page.getByLabel('Add an account').fill('beta');

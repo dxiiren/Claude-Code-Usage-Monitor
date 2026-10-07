@@ -217,8 +217,9 @@ export function limitHits(samples: Sample[], limitAt: number, window: LimitWindo
 			open.last = cur.ts;
 			open.pct = Math.max(open.pct, cur.pct);
 			if (cur.reset !== null && cur.reset > cur.ts) {
-				open.until = cur.reset;
-				open.blockedSeconds = cur.reset - open.ts;
+				// to the minute: the provider reports the same reset a second early or late from reading to reading
+				open.until = Math.round(cur.reset / 60) * 60;
+				open.blockedSeconds = open.until - open.ts;
 			}
 		}
 		prev = cur;
@@ -304,8 +305,9 @@ export function buildReport(input: ReportInput): Report {
 		let limited = false;
 		for (const window of ['session', 'weekly'] as const)
 			for (const { last, ...h } of limitHits(all, input.limitAt, window)) {
-				// in force at some moment of the period, whenever it began
-				if (h.ts > range.to || last <= range.from) continue;
+				// In force at some moment of the period, whenever it began. A level only falls when the
+				// window resets, so the limit held until then even if the readings stopped earlier.
+				if (h.ts > range.to || Math.max(last, h.until ?? 0) <= range.from) continue;
 				hits.push({ ...h, accountId: a.id, account: a.name });
 				limited = true;
 			}

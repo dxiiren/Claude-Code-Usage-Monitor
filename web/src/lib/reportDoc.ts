@@ -146,8 +146,34 @@ export function buildDoc(r: ReportPayload, doc: DocSettings, view: View, prepare
 	let tab = 0;
 	const sections: DocModel['sections'] = [];
 
+	const limits = (): DocModel['sections'][number] => ({
+		title: 'Limits Reached',
+		blocks: r.hits.length
+			? [
+					{
+						type: 'p',
+						text: `Each time an account was at a limit and could not be used until that limit reset. A limit reached before the period and still in force during it is listed too.${r.limitAt < 100 ? ` Settings counts ${r.limitAt}% as a limit reached; an account is only blocked at 100%.` : ''}`
+					},
+					{
+						type: 'table',
+						head: ['Reached', 'Account', 'Limit', 'Blocked for', 'Blocked until'],
+						rows: r.hits.map((h) => [
+							reachedLabel(h, r.timezone),
+							h.account,
+							r.labels[h.window],
+							blockedFor(h),
+							!isBlocked(h) ? '-' : h.until === null ? 'not known' : whenLabel(h.until, r.timezone)
+						]),
+						caption: `Table ${++tab}. Limits reached`
+					}
+				]
+			: [{ type: 'p', text: 'No account was blocked by a limit in this period.' }]
+	});
+
 	if (!r.hasData) {
 		sections.push({ title: 'Summary', blocks: [{ type: 'p', text: 'No usage data was saved for this period.' }] });
+		// no reading in the period, yet a limit reached earlier still held during it
+		if (r.hits.length) sections.push(limits());
 	} else {
 		sections.push({
 			title: 'Summary',
@@ -190,29 +216,7 @@ export function buildDoc(r: ReportPayload, doc: DocSettings, view: View, prepare
 			sections.push({ title: 'Usage by Day', blocks: dayBlocks });
 		}
 
-		sections.push({
-			title: 'Limits Reached',
-			blocks: r.hits.length
-				? [
-						{
-							type: 'p',
-							text: `Each time an account was at a limit and could not be used until that limit reset. A limit reached before the period and still in force during it is listed too.${r.limitAt < 100 ? ` Settings counts ${r.limitAt}% as a limit reached; an account is only blocked at 100%.` : ''}`
-						},
-						{
-							type: 'table',
-							head: ['Reached', 'Account', 'Limit', 'Blocked for', 'Blocked until'],
-							rows: r.hits.map((h) => [
-								reachedLabel(h, r.timezone),
-								h.account,
-								r.labels[h.window],
-								blockedFor(h),
-								!isBlocked(h) ? '-' : h.until === null ? 'not known' : whenLabel(h.until, r.timezone)
-							]),
-							caption: `Table ${++tab}. Limits reached`
-						}
-					]
-				: [{ type: 'p', text: 'No account was blocked by a limit in this period.' }]
-		});
+		sections.push(limits());
 	}
 
 	sections.push({

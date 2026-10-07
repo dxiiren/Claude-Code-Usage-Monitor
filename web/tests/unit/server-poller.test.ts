@@ -255,6 +255,25 @@ describe('Poller scheduling', () => {
 		expect(saved[1]).toMatchObject({ ok: true });
 		expect(p.cooldownRemaining('x')).toBe(0);
 	});
+	it('an account the previous run read a moment ago is left alone at start-up', async () => {
+		let now = 4_000_000_000_000;
+		const dir = account({ claudeAiOauth: { accessToken: 'tok', expiresAt: now + 3600_000 } });
+		const f = fakeFetch(() => json(okBody));
+		const p = new P.Poller({ targets: () => [{ id: 'h', configDir: dir }], save: () => undefined }, deps(f.fn, async () => undefined, () => now), 120, 0, async () => undefined);
+		p.hold('h', now + 50_000); // read 70 s ago, with readings every 120 s
+		await p.cycle();
+		expect(f.calls).toHaveLength(0);
+		expect(p.cooldownRemaining('h')).toBe(50);
+		// a hold in the past changes nothing, and never shortens a wait already in force
+		p.hold('h', now - 1);
+		expect(p.cooldownRemaining('h')).toBe(50);
+		now += 120_000;
+		await p.cycle();
+		expect(f.calls).toHaveLength(1);
+		// a login reads the account straight away whatever the hold says
+		p.hold('h', now + 60_000);
+		expect(await p.pollOne({ id: 'h', configDir: dir }, true)).toBe(true);
+	});
 	it('pollOne says whether a new reading was saved', async () => {
 		const now = 3_000_000_000_000;
 		const dir = account({ claudeAiOauth: { accessToken: 'tok', expiresAt: now + 3600_000 } });

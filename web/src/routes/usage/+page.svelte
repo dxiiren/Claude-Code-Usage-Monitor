@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import UsageBar from '$lib/UsageBar.svelte';
-	import { ago, needsLogin, pctText, post, refreshSummary, resetsIn, windowFull } from '$lib/format';
+	import { ago, needsLogin, pctText, post, readingOver, refreshSummary, resetsIn, windowFull } from '$lib/format';
 	import type { Snapshot } from '$lib/server/api';
 
 	let { data } = $props();
@@ -76,9 +76,13 @@
 	 */
 	const current = $derived(loggedIn.filter((a) => !isOld(a) && (a.usage?.session || a.usage?.weekly)));
 
+	/** This window was read above zero and has reset since: its number is of a window that is over. */
+	const over = (w: { percentage: number; resetsAt: number | null } | null | undefined) => readingOver(w?.percentage, w?.resetsAt, now);
+
 	/** Most room right now: lowest 5h % among the current accounts that are not at a limit. */
 	const best = $derived.by(() => {
-		const used = (a: Acc) => a.usage?.session?.percentage ?? 0;
+		// a session that has reset since it was read is empty again, whatever the old number says
+		const used = (a: Acc) => (over(a.usage?.session) ? 0 : (a.usage?.session?.percentage ?? 0));
 		return current.filter((a) => !isBlocked(a)).sort((x, y) => used(x) - used(y))[0] ?? null;
 	});
 	const allBlocked = $derived(current.length > 0 && !best);
@@ -129,7 +133,7 @@
 			<span class="tag">Best to use now</span>
 			<strong>{best.name}</strong>
 			<span class="muted">
-				&middot; {ui.hourlyLabel} {pctText(best.usage?.session?.percentage)} used, {ui.weeklyLabel.toLowerCase()} {pctText(best.usage?.weekly?.percentage)}
+				&middot; {ui.hourlyLabel} {over(best.usage?.session) ? 'has reset' : `${pctText(best.usage?.session?.percentage)} used`}, {ui.weeklyLabel.toLowerCase()} {over(best.usage?.weekly) ? 'has reset' : pctText(best.usage?.weekly?.percentage)}
 			</span>
 		{:else if allBlocked}
 			<span class="tag full">All at their limit</span>

@@ -246,12 +246,28 @@ describe('limits', () => {
 		const r = report([sw('2026-10-06', '09:00', 50, 80, DAY_S), sw('2026-10-06', '09:30', 92, 95, DAY_S - 1800)], { limitAt: 90 });
 		expect(r.hits.map((h) => h.window).sort()).toEqual(['session', 'weekly']);
 	});
+	it('a limit holds until its reset even when the readings stop before the day begins', () => {
+		// the last reading is at 08:58, two minutes before the 7th starts; the weekly window resets at 09:50
+		const stopped = [sw('2026-10-07', '08:40', 0, 95, 70 * 60), sw('2026-10-07', '08:50', 0, 100, 60 * 60), sw('2026-10-07', '08:58', 0, 100, 52 * 60)];
+		const r = report(stopped, { date: '2026-10-07' });
+		expect(r.hasData).toBe(false);
+		expect(r.hits).toMatchObject([{ ts: kl('2026-10-07', '08:50'), window: 'weekly', until: kl('2026-10-07', '09:50') }]);
+		expect(report(stopped, { date: '2026-10-08' }).hits).toEqual([]);
+		// a reading exactly on the boundary belongs to the day before, and the limit still shows on the new day
+		const onTheLine = [sw('2026-10-07', '08:40', 0, 95, 70 * 60), sw('2026-10-07', '09:00', 0, 100, 50 * 60)];
+		expect(report(onTheLine, { date: '2026-10-07' }).hits).toHaveLength(1);
+	});
+	it('reads one reset time, whichever second the provider reports it at', () => {
+		const at = kl('2026-10-08', '13:00');
+		const wobble = [at - 1, at, at - 1].map((weekReset, i) => ({ ...s('2026-10-06', `12:2${2 + i * 2}`, 0), weekPct: 100, weekReset }));
+		expect(report(wobble).hits[0].until).toBe(at);
+	});
 });
 
 describe('the limits in the document', () => {
 	const DOC: DocSettings = { title: 'Usage', company: '', website: '', email: '', footer: '', notice: '', format: 'docx', cover: false, contents: false, logo: false };
-	const payload = (samples: Sample[], limitAt = 100): ReportPayload => ({
-		...report(samples, { limitAt }),
+	const payload = (samples: Sample[], limitAt = 100, date = '2026-10-06'): ReportPayload => ({
+		...report(samples, { limitAt, date }),
 		today: '2026-10-06',
 		firstDate: '2026-10-06',
 		generatedUnix: kl('2026-10-06', '18:00'),
@@ -287,6 +303,15 @@ describe('the limits in the document', () => {
 		expect(summaryLines(r)).toContain('An account reached 90% of a limit without being blocked 1 time.');
 		const rows = (limitsOf(r).find((b) => b.type === 'table') as { rows: string[][] }).rows;
 		expect(rows[0].slice(2)).toEqual(['Hourly session', 'not blocked (92%)', '-']);
+	});
+	it('a day with no readings still lists a limit that held during it', () => {
+		const week = (date: string, hhmm: string, pct: number, resetIn: number): Sample => ({ ...s(date, hhmm, 0), weekPct: pct, weekReset: kl(date, hhmm) + resetIn });
+		const r = payload([week('2026-10-07', '08:40', 95, 70 * 60), week('2026-10-07', '08:58', 100, 52 * 60)], 100, '2026-10-07');
+		expect(r.hasData).toBe(false);
+		expect(buildDoc(r, DOC, 'table', 'admin').sections.map((x) => x.title)).toEqual(['Summary', 'Limits Reached', 'Notes on the Figures']);
+		expect((limitsOf(r).find((b) => b.type === 'table') as { rows: string[][] }).rows[0].slice(1, 3)).toEqual(['Alpha', 'Weekly session']);
+		// with nothing to list, a day without readings says only that
+		expect(buildDoc(payload([], 100, '2026-10-07'), DOC, 'table', 'admin').sections.map((x) => x.title)).toEqual(['Summary', 'Notes on the Figures']);
 	});
 	it('writes a long block in days', () => {
 		expect(blockedLabel(45 * 60)).toBe('45 min');

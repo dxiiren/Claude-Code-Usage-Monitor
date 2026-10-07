@@ -170,6 +170,17 @@ describe('GET /api/v1/widget', () => {
 		expect(body.accounts[1].usage).toMatchObject({ session: { percentage: 12 } });
 	});
 
+	it('after a restart, an account read within the last interval is not read again at once', () => {
+		const [kv, ba] = db.listAccounts().filter((a) => a.enabled);
+		const usage = { session: { available: true, percentage: 5, resets_at_unix: null }, weekly: { available: true, percentage: 6, resets_at_unix: null } };
+		// ba was read 30 s before the server went down; kv long ago
+		store.saveResult(ba.id, { ok: true, usage }, Date.now() - 30_000);
+		const p = store.getPoller(); // the first use of the poller in this run, as at start-up
+		expect(p.cooldownRemaining(ba.id)).toBeGreaterThan(200);
+		expect(p.cooldownRemaining(ba.id)).toBeLessThanOrEqual(270);
+		expect(p.cooldownRemaining(kv.id)).toBe(0);
+	});
+
 	it('numbers nobody has refreshed for a while are sent as stale, never as current', async () => {
 		const ba = db.listAccounts().find((a) => a.id === 'ba')!;
 		const read = 1790241000;

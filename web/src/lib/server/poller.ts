@@ -496,6 +496,15 @@ export class Poller {
 		if (secs > 0) this.cooldownUntil.set(id, at + secs * 1000);
 	}
 
+	/**
+	 * Leave an account alone until `untilMs`: it was read a moment ago by the previous run of the
+	 * server. A second reading inside the interval is answered with 429, which would put "rate
+	 * limited" on the row after every restart.
+	 */
+	hold(id: string, untilMs: number): void {
+		if (untilMs > (this.cooldownUntil.get(id) ?? 0)) this.cooldownUntil.set(id, untilMs);
+	}
+
 	/** Seconds until this account may be polled again (0 = no cooldown). */
 	cooldownRemaining(id: string): number {
 		return Math.max(0, Math.ceil(((this.cooldownUntil.get(id) ?? 0) - this.deps.nowMs()) / 1000));

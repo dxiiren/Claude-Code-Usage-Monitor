@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { level, pctText, resetsIn, windowOver } from './format';
+	import { level, pctText, readingOver, resetsIn } from './format';
 
 	interface Props {
 		label: string;
@@ -16,7 +16,7 @@
 
 	const none = $derived(pct === null || pct === undefined);
 	/** The window this number was read in has reset since: what was used in it says nothing about now. */
-	const over = $derived(!none && pct! > 0 && windowOver(resetsAt, now));
+	const over = $derived(readingOver(pct, resetsAt, now));
 	const lv = $derived(over ? 'none' : level(pct, warnAt, highAt));
 	const width = $derived(none || over ? 0 : Math.max(1, Math.min(100, pct!)));
 </script>
