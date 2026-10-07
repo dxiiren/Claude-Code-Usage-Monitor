@@ -14,8 +14,12 @@ export interface UsageWindow {
 export interface AccountUsage {
 	session: UsageWindow | null;
 	weekly: UsageWindow | null;
+	/** Limits that cover one model only (server mode, when the provider reports them). */
+	models: (UsageWindow & { label: string })[];
 	/** The widget's PollError as serialized (e.g. "token_expired", {"http_status":401}); null when the last poll was fine. */
 	pollError: unknown;
+	/** When these numbers were read (unix seconds). Null in local mode: the widget's cache keeps one time for all. */
+	readUnix: number | null;
 }
 
 export interface UsageSnapshot {
@@ -56,7 +60,9 @@ export function readUsage(accounts: UsageAccount[]): UsageSnapshot {
 		byId[a.id] = {
 			session: win(u.session),
 			weekly: win(u.weekly),
-			pollError: e.error ?? null
+			models: [],
+			pollError: e.error ?? null,
+			readUnix: null
 		};
 	}
 	return { updatedUnix: typeof cache.updated_unix === 'number' ? cache.updated_unix : null, byId };

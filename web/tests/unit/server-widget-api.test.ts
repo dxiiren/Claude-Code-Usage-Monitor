@@ -134,7 +134,7 @@ describe('GET /api/v1/widget', () => {
 		const t = auth.createToken('pc2');
 		const rev = Number(db.getMeta().revision);
 
-		const r = await api.handleWidgetRequest(`Bearer ${t.token}`, loggedIn);
+		const r = await api.handleWidgetRequest(`Bearer ${t.token}`, loggedIn, 1790240820_000);
 		expect(r.status).toBe(200);
 		expect(r.body).toEqual({
 			schema: 2,
@@ -168,5 +168,26 @@ describe('GET /api/v1/widget', () => {
 		expect(body.updated_unix).toBe(1790240900);
 		expect(body.accounts.map((a) => a.status)).toEqual(['logged_out', 'error']);
 		expect(body.accounts[1].usage).toMatchObject({ session: { percentage: 12 } });
+	});
+
+	it('numbers nobody has refreshed for a while are sent as stale, never as current', async () => {
+		const ba = db.listAccounts().find((a) => a.id === 'ba')!;
+		const read = 1790241000;
+		const usage = { session: { available: true, percentage: 3, resets_at_unix: read + 9000 }, weekly: { available: true, percentage: 10, resets_at_unix: read + 90_000 } };
+		store.saveResult(ba.id, { ok: true, usage }, read * 1000);
+		const t = auth.createToken('pc4');
+		const at = async (secondsLater: number) =>
+			((await api.handleWidgetRequest(`Bearer ${t.token}`, loggedIn, (read + secondsLater) * 1000)).body as { accounts: { id: string; status: string; status_message: string; usage: unknown }[] }).accounts.find((a) => a.id === 'ba')!;
+		expect((await at(60)).status).toBe('ok');
+		// no poll failed, the reader just stopped: the widget must not show these as fresh
+		const later = await at(2 * 3600);
+		expect(later.status).toBe('error');
+		expect(later.status_message).toMatch(/No new reading/);
+		expect(later.usage).toMatchObject({ session: { percentage: 3 } });
+		// the dashboard gets the reading's own time, so it can say how old the numbers are
+		expect(store.readServerUsage([ba]).byId[ba.id]).toMatchObject({ readUnix: read });
+		store.saveResult(ba.id, { ok: false, error: 'network_error' }, (read + 600) * 1000);
+		expect(store.readServerUsage([ba])).toMatchObject({ updatedUnix: read + 600, byId: { [ba.id]: { readUnix: read, session: { percentage: 3 } } } });
+		expect(store.staleAfterSeconds()).toBeGreaterThanOrEqual(600);
 	});
 });

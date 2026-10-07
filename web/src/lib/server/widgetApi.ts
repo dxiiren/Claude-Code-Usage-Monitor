@@ -2,7 +2,7 @@
 import { getCardTheme, getMeta, listAccounts } from './db';
 import { verifyBearer } from './auth';
 import { loginStatus, type AuthSnapshot } from './status';
-import { readRows, storedUsage } from './serverUsage';
+import { readRows, staleAfterSeconds, storedUsage } from './serverUsage';
 import type { WindowUsage } from './poller';
 
 export interface WidgetAccount {
@@ -37,9 +37,10 @@ const win = (w: Partial<WindowUsage> | undefined): WindowUsage => ({
 export type AuthLookup = (configDir: string, provider: 'claude' | 'codex') => Promise<AuthSnapshot | null>;
 
 /** Enabled accounts only, in sort_order. */
-export async function widgetPayload(auth: AuthLookup): Promise<WidgetPayload> {
+export async function widgetPayload(auth: AuthLookup, nowMs = Date.now()): Promise<WidgetPayload> {
 	const meta = getMeta();
 	const rows = readRows();
+	const staleBefore = nowMs / 1000 - staleAfterSeconds();
 	const accounts = listAccounts().filter((a) => a.enabled);
 	const auths = await Promise.all(accounts.map((a) => auth(a.config_dir, a.provider)));
 	let updated = 0;
@@ -52,8 +53,12 @@ export async function widgetPayload(auth: AuthLookup): Promise<WidgetPayload> {
 		} catch {
 			pollError = 'request_failed';
 		}
-		const st = loginStatus({ pollError, auth: auths[i], everLoggedIn: !!a.email, provider: a.provider });
+		let st = loginStatus({ pollError, auth: auths[i], everLoggedIn: !!a.email, provider: a.provider });
 		const u = storedUsage(r);
+		// No poll has failed, yet the numbers are old (the reader stopped): "error" makes the widget
+		// mark the reading stale instead of showing it as current.
+		if (st.state === 'ok' && u && r?.ok_unix && r.ok_unix < staleBefore)
+			st = { state: 'error', message: 'No new reading for a while: the numbers shown are the last ones read.' };
 		return {
 			id: a.id,
 			name: a.name,
@@ -78,8 +83,9 @@ export async function widgetPayload(auth: AuthLookup): Promise<WidgetPayload> {
 /** Bearer check + payload. 401 for a missing, unknown or revoked token. */
 export async function handleWidgetRequest(
 	authorization: string | null,
-	auth: AuthLookup
+	auth: AuthLookup,
+	nowMs = Date.now()
 ): Promise<{ status: number; body: unknown }> {
 	if (!verifyBearer(authorization)) return { status: 401, body: { error: 'Missing or invalid API token.' } };
-	return { status: 200, body: await widgetPayload(auth) };
+	return { status: 200, body: await widgetPayload(auth, nowMs) };
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { level, pctText, resetsIn } from './format';
+	import { level, pctText, resetsIn, windowOver } from './format';
 
 	interface Props {
 		label: string;
@@ -14,8 +14,11 @@
 	}
 	let { label, title, pct, resetsAt, now, seconds = false, warnAt = 70, highAt = 90 }: Props = $props();
 
-	const lv = $derived(level(pct, warnAt, highAt));
-	const width = $derived(pct === null || pct === undefined ? 0 : Math.max(1, Math.min(100, pct)));
+	const none = $derived(pct === null || pct === undefined);
+	/** The window this number was read in has reset since: what was used in it says nothing about now. */
+	const over = $derived(!none && pct! > 0 && windowOver(resetsAt, now));
+	const lv = $derived(over ? 'none' : level(pct, warnAt, highAt));
+	const width = $derived(none || over ? 0 : Math.max(1, Math.min(100, pct!)));
 </script>
 
 <div class="row" data-level={lv}>
@@ -26,15 +29,15 @@
 		aria-label="{title} used"
 		aria-valuemin={0}
 		aria-valuemax={100}
-		aria-valuenow={pct ?? 0}
+		aria-valuenow={over ? 0 : (pct ?? 0)}
 	>
 		<div class="fill" style:width="{width}%"></div>
 	</div>
 	<span class="val">
-		<strong>{pctText(pct)}</strong>
+		<strong>{over ? '--' : pctText(pct)}</strong>
 		{#if lv === 'full'}<span class="blocked">limit reached</span>{/if}
 		<span class="reset">
-			{#if pct === null || pct === undefined}no data{:else}resets in {resetsIn(resetsAt, now, seconds)}{/if}
+			{#if none}no data{:else if over}has reset, new reading due{:else}resets in {resetsIn(resetsAt, now, seconds)}{/if}
 		</span>
 	</span>
 </div>

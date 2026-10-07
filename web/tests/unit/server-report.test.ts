@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { buildReport, increments, limitHits, periodDates, reportDateOf, slotWindows, wallToUnix, type ReportAccount, type Sample } from '../../src/lib/server/report';
 import { slotsProblem, uncoveredMinutes, type Slot } from '../../src/lib/slots';
-import { toCsv, type DocModel } from '../../src/lib/reportDoc';
+import { blockedLabel, buildDoc, summaryLines, toCsv, whenLabel, type DocModel, type DocSettings } from '../../src/lib/reportDoc';
+import type { ReportPayload } from '../../src/lib/server/reportData';
 
 const KL = 'Asia/Kuala_Lumpur'; // UTC+8, no DST
 const SLOTS: Slot[] = [
@@ -100,7 +101,32 @@ describe('the report', () => {
 	it('leaves out usage that falls in time no slot covers', () => {
 		const gap: Slot[] = [{ name: 'Morning only', from: 540, to: 780 }];
 		expect(uncoveredMinutes(gap)).toBe(1200);
-		expect(report(day, { slots: gap }).accounts[0].slots).toEqual([62]);
+		const r = report(day, { slots: gap });
+		expect(r.accounts[0].slots).toEqual([62]);
+		// ...but says how much that was, and such an account is not "not used"
+		expect(r.outsideSlots).toBe(122);
+		const afternoonOnly = report([s('2026-10-06', '14:00', 0), s('2026-10-06', '14:30', 50), s('2026-10-06', '15:00', 90)], { slots: gap });
+		expect(afternoonOnly.total).toBe(0);
+		expect(afternoonOnly.outsideSlots).toBe(90);
+		expect(afternoonOnly.idle).toEqual([]);
+		expect(report(day).outsideSlots).toBe(0);
+	});
+	it('a reading exactly at the start of a report day is counted once, in the day that just ended', () => {
+		const readings = [s('2026-10-07', '08:55', 10), s('2026-10-07', '09:00', 30), s('2026-10-07', '09:05', 31)];
+		const sixth = report(readings, { date: '2026-10-06' });
+		const seventh = report(readings, { date: '2026-10-07' });
+		expect(sixth.accounts[0].slots).toEqual([0, 0, 0, 20]);
+		expect(seventh.accounts[0].slots).toEqual([1, 0, 0, 0]);
+		expect(report(readings, { period: 'week', date: '2026-10-06' }).total).toBe(sixth.total + seventh.total);
+	});
+	it('a reading with no percentage inside a running session is a missing answer, not a reset', () => {
+		const at = kl('2026-10-06', '14:00');
+		const same = [{ ts: kl('2026-10-06', '10:00'), pct: 60, reset: at }, { ts: kl('2026-10-06', '10:05'), pct: null, reset: null }, { ts: kl('2026-10-06', '10:10'), pct: 62, reset: at }];
+		expect(increments(same)).toEqual([{ ts: kl('2026-10-06', '10:10'), use: 2 }]);
+		// between two different sessions it does mean the window was not active
+		const next = [same[0], same[1], { ts: kl('2026-10-06', '14:30'), pct: 12, reset: at + 5 * 3600 }];
+		expect(increments(next)).toEqual([{ ts: kl('2026-10-06', '14:30'), use: 12 }]);
+		expect(limitHits([{ ...same[0], pct: 100 }, same[1], { ...same[2], pct: 100 }], 100)).toHaveLength(1);
 	});
 	it('week: per-day totals, days used and days with data', () => {
 		const r = report([...day, s('2026-10-08', '10:00', 15), s('2026-10-08', '11:00', 35)], { period: 'week' });
@@ -124,11 +150,149 @@ describe('the report', () => {
 		const r = buildReport({ period: 'day', date: '2026-10-06', slots: SLOTS, timezone: KL, accounts, samples: new Map([['a', day], ['b', [s('2026-10-06', '09:30', 0), s('2026-10-06', '10:30', 0)]]]), limitAt: 100, idleBelow: 1 });
 		expect(r.accounts.map((a) => a.name)).toEqual(['Alpha', 'Beta']);
 		expect(r.idle).toEqual(['Beta']);
+		expect(r.noReadings).toEqual([]);
 	});
+	it('an account with no reading at all is "not known", never "not used"', () => {
+		const accounts: ReportAccount[] = [...ACC, { id: 'b', name: 'Beta', provider: 'claude', current: true }];
+		const r = buildReport({ period: 'day', date: '2026-10-06', slots: SLOTS, timezone: KL, accounts, samples: new Map([['a', day]]), limitAt: 100, idleBelow: 1 });
+		expect(r.idle).toEqual([]);
+		expect(r.noReadings).toEqual(['Beta']);
+	});
+	it('the top account keeps its own total when a removed account shares its name', () => {
+		const accounts: ReportAccount[] = [{ id: 'new', name: 'Ali', provider: 'claude', current: true }, { id: 'old', name: 'Ali', provider: 'claude', current: false }];
+		const samples = new Map([
+			['new', [s('2026-10-06', '09:30', 0), s('2026-10-06', '10:30', 40)]],
+			['old', [s('2026-10-06', '09:30', 0), s('2026-10-06', '10:30', 60)]]
+		]);
+		const r = buildReport({ period: 'day', date: '2026-10-06', slots: SLOTS, timezone: KL, accounts, samples, limitAt: 100, idleBelow: 1 });
+		expect([r.topAccount, r.topTotal]).toEqual(['Ali', 60]);
+	});
+	it('"not used" is judged on the whole percentage the page shows', () => {
+		const r = report([s('2026-10-06', '09:30', 0), s('2026-10-06', '10:30', 0.6)]);
+		expect(r.idle).toEqual([]);
+		expect(report([s('2026-10-06', '09:30', 0), s('2026-10-06', '10:30', 0.4)]).idle).toEqual(['Alpha']);
+	});
+});
+
+describe('limits', () => {
+	const DAY_S = 86_400;
+	/** A reading that carries the weekly window too: `week` % used, resetting `weekResetIn` seconds later. */
+	const sw = (date: string, hhmm: string, pct: number | null, week: number | null, weekResetIn: number | null = null): Sample => {
+		const base = s(date, hhmm, pct);
+		return { ...base, weekPct: week, weekReset: weekResetIn === null ? null : base.ts + weekResetIn };
+	};
+
 	it('lists each time a limit was reached, with how long it stayed blocked', () => {
 		const r = report([s('2026-10-06', '09:00', 80), s('2026-10-06', '09:30', 100, 2 * 3600), s('2026-10-06', '09:35', 100, 2 * 3600 - 300)]);
-		expect(r.hits).toEqual([{ ts: kl('2026-10-06', '09:30'), pct: 100, blockedSeconds: 7200, accountId: 'a', account: 'Alpha' }]);
-		expect(limitHits([{ ts: 1, pct: 100, reset: null }], 100)).toEqual([]);
+		expect(r.hits).toEqual([
+			{ ts: kl('2026-10-06', '09:30'), window: 'session', pct: 100, before: false, until: kl('2026-10-06', '11:30'), blockedSeconds: 7200, accountId: 'a', account: 'Alpha' }
+		]);
+	});
+	it('a session that resets and fills again is two hits', () => {
+		const r = report([s('2026-10-06', '09:00', 80), s('2026-10-06', '09:30', 100, 2 * 3600), s('2026-10-06', '11:32', 5), s('2026-10-06', '12:00', 100, 4 * 3600)]);
+		expect(r.hits.map((h) => [h.ts, h.blockedSeconds])).toEqual([
+			[kl('2026-10-06', '09:30'), 7200],
+			[kl('2026-10-06', '12:00'), 14_400]
+		]);
+	});
+	it('a weekly limit counts even when the hourly session was never touched', () => {
+		const r = report([sw('2026-10-06', '09:00', 0, 96, 2 * DAY_S), sw('2026-10-06', '09:30', 0, 100, 2 * DAY_S - 1800), sw('2026-10-06', '09:35', 0, 100, 2 * DAY_S - 2100)]);
+		expect(r.hits).toEqual([
+			{ ts: kl('2026-10-06', '09:30'), window: 'weekly', pct: 100, before: false, until: kl('2026-10-08', '09:00'), blockedSeconds: 2 * DAY_S - 1800, accountId: 'a', account: 'Alpha' }
+		]);
+		// blocked is not the same as not used
+		expect(r.accounts[0].total).toBe(0);
+		expect(r.idle).toEqual([]);
+	});
+	it('an account already at its limit at the first reading is listed, marked as reached earlier', () => {
+		expect(limitHits([{ ts: 1, pct: 100, reset: null }], 100)).toEqual([{ ts: 1, last: 1, window: 'session', pct: 100, before: true, until: null, blockedSeconds: null }]);
+		const r = report([sw('2026-10-06', '12:22', 0, 100, 2 * DAY_S), sw('2026-10-06', '12:24', 0, 100, 2 * DAY_S - 120)]);
+		expect(r.hits).toMatchObject([{ ts: kl('2026-10-06', '12:22'), window: 'weekly', before: true, until: kl('2026-10-08', '12:22') }]);
+		expect(r.idle).toEqual([]);
+	});
+	it('a limit reached on an earlier day is listed on every day it is still in force, and not after it resets', () => {
+		const readings = [
+			sw('2026-10-05', '09:55', 0, 97, 2 * DAY_S + 300),
+			sw('2026-10-05', '10:00', 0, 100, 2 * DAY_S),
+			sw('2026-10-05', '20:00', 0, 100, 2 * DAY_S - 10 * 3600),
+			sw('2026-10-06', '10:00', 0, 100, DAY_S),
+			sw('2026-10-06', '20:00', 0, 100, DAY_S - 10 * 3600),
+			sw('2026-10-07', '09:58', 0, 100, 120),
+			sw('2026-10-07', '10:02', 0, 0, 7 * DAY_S),
+			sw('2026-10-08', '10:00', 0, 3, 6 * DAY_S)
+		];
+		const reached = kl('2026-10-05', '10:00');
+		for (const date of ['2026-10-05', '2026-10-06', '2026-10-07'])
+			expect(report(readings, { date }).hits, date).toMatchObject([{ ts: reached, window: 'weekly', before: false, until: kl('2026-10-07', '10:00') }]);
+		expect(report(readings, { date: '2026-10-08' }).hits).toEqual([]);
+		// one stretch at the limit is one entry in a week, however many days it covers
+		expect(report(readings, { period: 'week', date: '2026-10-06' }).hits).toHaveLength(1);
+	});
+	it('a silence longer than the window hides when the limit was reached', () => {
+		const hits = limitHits([s('2026-10-06', '09:00', 20), s('2026-10-06', '16:00', 100, 3600)], 100);
+		expect(hits).toMatchObject([{ ts: kl('2026-10-06', '16:00'), before: true }]);
+	});
+	it('only an unused account that could have been used is marked not used', () => {
+		const accounts: ReportAccount[] = [...ACC, { id: 'b', name: 'Beta', provider: 'claude', current: true }];
+		const samples = new Map([
+			['a', [sw('2026-10-06', '09:30', 0, 100, DAY_S), sw('2026-10-06', '10:30', 0, 100, DAY_S - 3600)]],
+			['b', [sw('2026-10-06', '09:30', 0, 10, DAY_S), sw('2026-10-06', '10:30', 0, 10, DAY_S - 3600)]]
+		]);
+		const r = buildReport({ period: 'day', date: '2026-10-06', slots: SLOTS, timezone: KL, accounts, samples, limitAt: 100, idleBelow: 1 });
+		expect(r.idle).toEqual(['Beta']);
+		expect(r.hits.map((h) => h.account)).toEqual(['Alpha']);
+	});
+	it('the limit level from Settings applies to both windows', () => {
+		const r = report([sw('2026-10-06', '09:00', 50, 80, DAY_S), sw('2026-10-06', '09:30', 92, 95, DAY_S - 1800)], { limitAt: 90 });
+		expect(r.hits.map((h) => h.window).sort()).toEqual(['session', 'weekly']);
+	});
+});
+
+describe('the limits in the document', () => {
+	const DOC: DocSettings = { title: 'Usage', company: '', website: '', email: '', footer: '', notice: '', format: 'docx', cover: false, contents: false, logo: false };
+	const payload = (samples: Sample[], limitAt = 100): ReportPayload => ({
+		...report(samples, { limitAt }),
+		today: '2026-10-06',
+		firstDate: '2026-10-06',
+		generatedUnix: kl('2026-10-06', '18:00'),
+		labels: { session: 'Hourly session', weekly: 'Weekly session' },
+		limitAt,
+		idleBelow: 1
+	});
+	const limitsOf = (r: ReportPayload) => buildDoc(r, DOC, 'table', 'admin').sections.find((x) => x.title === 'Limits Reached')!.blocks;
+
+	it('names the limit that ran out and when the account is free again', () => {
+		const r = payload([
+			{ ...s('2026-10-06', '12:22', 0), weekPct: 100, weekReset: kl('2026-10-08', '12:59') },
+			{ ...s('2026-10-06', '12:24', 0), weekPct: 100, weekReset: kl('2026-10-08', '12:59') }
+		]);
+		const table = limitsOf(r).find((b) => b.type === 'table');
+		expect(table).toMatchObject({ head: ['Reached', 'Account', 'Limit', 'Blocked for', 'Blocked until'] });
+		// the date wording comes from the runtime's own formatter, so build it the same way
+		expect((table as { rows: string[][] }).rows).toEqual([
+			['Before ' + whenLabel(kl('2026-10-06', '12:22'), KL), 'Alpha', 'Weekly session', 'at least 2 d 0 h', whenLabel(kl('2026-10-08', '12:59'), KL)]
+		]);
+		expect(whenLabel(kl('2026-10-08', '12:59'), KL)).toMatch(/Thu,? 8 Oct, 12:59/);
+		expect(summaryLines(r)).toContain('An account was blocked by a limit 1 time: Alpha.');
+		expect(summaryLines(r).join(' ')).not.toMatch(/Not used/);
+	});
+	it('says so when no account was blocked', () => {
+		const r = payload([s('2026-10-06', '09:00', 10), s('2026-10-06', '10:00', 30)]);
+		expect(limitsOf(r)).toEqual([{ type: 'p', text: 'No account was blocked by a limit in this period.' }]);
+		expect(summaryLines(r)).toContain('No account was blocked by a limit.');
+	});
+	it('a lower "limit reached" level in Settings never reads as blocked', () => {
+		const r = payload([s('2026-10-06', '09:00', 50, 3 * 3600), s('2026-10-06', '09:30', 92, 3 * 3600 - 1800)], 90);
+		expect(summaryLines(r)).toContain('No account was blocked by a limit.');
+		expect(summaryLines(r)).toContain('An account reached 90% of a limit without being blocked 1 time.');
+		const rows = (limitsOf(r).find((b) => b.type === 'table') as { rows: string[][] }).rows;
+		expect(rows[0].slice(2)).toEqual(['Hourly session', 'not blocked (92%)', '-']);
+	});
+	it('writes a long block in days', () => {
+		expect(blockedLabel(45 * 60)).toBe('45 min');
+		expect(blockedLabel(2 * 3600 + 15 * 60)).toBe('2 h 15 min');
+		expect(blockedLabel(2 * 86_400 + 3 * 3600 + 59 * 60)).toBe('2 d 3 h');
+		expect(blockedLabel(null)).toBe('not known');
 	});
 });
 

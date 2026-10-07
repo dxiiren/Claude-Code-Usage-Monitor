@@ -3,12 +3,15 @@
 // configured time slots when it is opened, which is why slots can change at any time.
 import { slotLength, type Slot } from '../slots';
 
-/** One stored reading of the 5-hour ("hourly session") window. */
+/** One stored reading: the 5-hour ("hourly session") window, and the 7-day one when it was kept. */
 export interface Sample {
 	ts: number;
-	/** % used, or null when the window was not active */
+	/** % of the 5-hour window used, or null when the window was not active */
 	pct: number | null;
 	reset: number | null;
+	/** the 7-day window of the same reading */
+	weekPct?: number | null;
+	weekReset?: number | null;
 }
 
 export interface ReportAccount {
@@ -22,8 +25,9 @@ export interface ReportAccount {
 export type Period = 'day' | 'week' | 'month';
 
 const DAY_MS = 86_400_000;
-/** A reading this long after the previous one cannot belong to the same 5-hour window. */
-const WINDOW_S = 5 * 3600;
+/** A reading this long after the previous one cannot belong to the same window. */
+const WINDOW_S = { session: 5 * 3600, weekly: 7 * 86_400 } as const;
+export type LimitWindow = keyof typeof WINDOW_S;
 /** Jitter allowed in a window's reported reset time before it counts as a new window. */
 const RESET_JITTER_S = 600;
 
@@ -110,6 +114,40 @@ export function rangeOf(dates: string[], slots: Slot[], tz: string): { from: num
 
 // ---------- usage between readings ----------
 
+interface Level {
+	ts: number;
+	pct: number;
+	reset: number | null;
+}
+
+/**
+ * One window of the readings as plain levels. A reading without a percentage means the window was
+ * not active (0), unless the readings on both sides of it carry the same reset time: then the
+ * window never stopped, the reading is only a missing answer, and it is left out.
+ */
+function levels(samples: Sample[], window: LimitWindow): Level[] {
+	const weekly = window === 'weekly';
+	const raw = samples.map((s) => ({ ts: s.ts, pct: (weekly ? s.weekPct : s.pct) ?? null, reset: (weekly ? s.weekReset : s.reset) ?? null }));
+	// for each position, the next reading that has a percentage
+	const next: ((typeof raw)[number] | null)[] = new Array(raw.length).fill(null);
+	for (let i = raw.length - 2; i >= 0; i--) next[i] = raw[i + 1].pct !== null ? raw[i + 1] : next[i + 1];
+	const out: Level[] = [];
+	let known: (typeof raw)[number] | null = null;
+	for (let i = 0; i < raw.length; i++) {
+		const cur = raw[i];
+		if (cur.pct !== null) {
+			out.push({ ts: cur.ts, pct: cur.pct, reset: cur.reset });
+			known = cur;
+			continue;
+		}
+		const before = known?.reset ?? null;
+		const after = next[i]?.reset ?? null;
+		const sameWindow = before !== null && after !== null && Math.abs(after - before) <= RESET_JITTER_S;
+		if (!sameWindow) out.push({ ts: cur.ts, pct: 0, reset: cur.reset });
+	}
+	return out;
+}
+
 export interface Increment {
 	ts: number;
 	use: number;
@@ -122,16 +160,14 @@ export interface Increment {
  */
 export function increments(samples: Sample[]): Increment[] {
 	const out: Increment[] = [];
-	let prev: Sample | null = null;
-	for (const cur of samples) {
+	let prev: Level | null = null;
+	for (const cur of levels(samples, 'session')) {
 		if (prev) {
-			const now = cur.pct ?? 0;
-			const before = prev.pct ?? 0;
 			const reset =
-				now < before - 0.5 ||
+				cur.pct < prev.pct - 0.5 ||
 				(cur.reset !== null && prev.reset !== null && cur.reset > prev.reset + RESET_JITTER_S) ||
-				cur.ts - prev.ts > WINDOW_S;
-			const use = reset ? now : Math.max(0, now - before);
+				cur.ts - prev.ts > WINDOW_S.session;
+			const use = reset ? cur.pct : Math.max(0, cur.pct - prev.pct);
 			if (use > 0) out.push({ ts: cur.ts, use });
 		}
 		prev = cur;
@@ -139,24 +175,52 @@ export function increments(samples: Sample[]): Increment[] {
 	return out;
 }
 
-export interface LimitHit {
+/** One stretch an account spent at or above the limit level in one window. */
+export interface LimitSpell {
+	/** the first reading that saw the account at its limit */
 	ts: number;
-	accountId: string;
-	account: string;
+	/** the last reading that still saw it there */
+	last: number;
+	/** which allowance ran out: the 5-hour session or the 7-day one */
+	window: LimitWindow;
+	/** the highest level seen */
 	pct: number;
-	/** seconds until the window reset, when the reading carried a reset time */
+	/** no reading saw it get there (they start, or resume after a long silence, with it at the limit): reached some time before `ts` */
+	before: boolean;
+	/** when the window resets and the account is free again, when a reading carried it */
+	until: number | null;
+	/** seconds from `ts` to that reset */
 	blockedSeconds: number | null;
 }
 
-/** Each time a level crosses `limitAt` from below. */
-export function limitHits(samples: Sample[], limitAt: number): { ts: number; pct: number; blockedSeconds: number | null }[] {
-	const out: { ts: number; pct: number; blockedSeconds: number | null }[] = [];
-	let prev: Sample | null = null;
-	for (const cur of samples) {
-		const now = cur.pct ?? 0;
-		const sameWindow = prev && !(now < (prev.pct ?? 0) - 0.5) && cur.ts - prev.ts <= WINDOW_S;
-		const wasBelow = !prev || !sameWindow || (prev.pct ?? 0) < limitAt;
-		if (now >= limitAt && wasBelow && prev) out.push({ ts: cur.ts, pct: now, blockedSeconds: cur.reset && cur.reset > cur.ts ? cur.reset - cur.ts : null });
+export interface LimitHit extends Omit<LimitSpell, 'last'> {
+	accountId: string;
+	account: string;
+}
+
+/**
+ * Every stretch at or above `limitAt` in one window, from the first reading that saw the account
+ * there to the last. A stretch already running at the first reading is kept: the account was
+ * blocked, even though no reading saw it get there.
+ */
+export function limitHits(samples: Sample[], limitAt: number, window: LimitWindow = 'session'): LimitSpell[] {
+	const out: LimitSpell[] = [];
+	let open: LimitSpell | null = null;
+	let prev: Level | null = null;
+	for (const cur of levels(samples, window)) {
+		const silent = prev !== null && cur.ts - prev.ts > WINDOW_S[window];
+		// a later reset time means the window turned over, even with the level still at the limit
+		const turned = open !== null && open.until !== null && cur.reset !== null && cur.reset > open.until + RESET_JITTER_S;
+		if (cur.pct < limitAt || silent || turned) open = null;
+		if (cur.pct >= limitAt) {
+			if (!open) out.push((open = { ts: cur.ts, last: cur.ts, window, pct: cur.pct, before: prev === null || silent, until: null, blockedSeconds: null }));
+			open.last = cur.ts;
+			open.pct = Math.max(open.pct, cur.pct);
+			if (cur.reset !== null && cur.reset > cur.ts) {
+				open.until = cur.reset;
+				open.blockedSeconds = cur.reset - open.ts;
+			}
+		}
 		prev = cur;
 	}
 	return out;
@@ -170,7 +234,7 @@ export interface ReportInput {
 	slots: Slot[];
 	timezone: string;
 	accounts: ReportAccount[];
-	/** readings per account id, oldest first, covering rangeOf(...) plus a few hours before it */
+	/** readings per account id, oldest first, covering rangeOf(...) plus a week before it */
 	samples: Map<string, Sample[]>;
 	limitAt: number;
 	idleBelow: number;
@@ -188,10 +252,18 @@ export interface Report {
 	slotTotals: number[];
 	total: number;
 	daysWithData: number;
+	/** every limit in force at some moment of the period, whenever it was reached */
 	hits: LimitHit[];
 	busiestSlot: number | null;
 	topAccount: string | null;
+	/** the top account's own total (a name can repeat once an account was removed and added again) */
+	topTotal: number;
+	/** current accounts that had readings, were never at a limit, and stayed under the "not used" level */
 	idle: string[];
+	/** current accounts without a single reading in the period: nothing is known about their use */
+	noReadings: string[];
+	/** % used at times no slot covers; it is in none of the figures above */
+	outsideSlots: number;
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -209,31 +281,52 @@ export function buildReport(input: ReportInput): Report {
 		const all = input.samples.get(a.id) ?? [];
 		const perSlot = zero();
 		const usedOn = new Set<number>();
-		const inRange = all.filter((s) => s.ts >= range.from && s.ts < range.to);
+		// a reading exactly on a boundary belongs to the slot, and so to the day, that just ended
+		const inRange = all.filter((s) => s.ts > range.from && s.ts <= range.to);
 		for (const s of inRange) {
-			const di = dates.indexOf(reportDateOf(tz, s.ts, slots));
+			const di = dates.indexOf(reportDateOf(tz, s.ts - 1, slots));
 			if (di >= 0) days[di].hasData = true;
 		}
+		let outside = 0;
 		for (const inc of increments(all)) {
-			if (inc.ts < range.from || inc.ts >= range.to) continue;
-			for (let di = 0; di < windows.length; di++) {
-				// a reading exactly on a boundary belongs to the slot that just ended
+			if (inc.ts <= range.from || inc.ts > range.to) continue;
+			let placed = false;
+			for (let di = 0; di < windows.length && !placed; di++) {
 				const si = windows[di].findIndex((w) => inc.ts > w.start && inc.ts <= w.end);
 				if (si < 0) continue;
 				perSlot[si] += inc.use;
 				days[di].slots[si] += inc.use;
 				usedOn.add(di);
-				break;
+				placed = true;
 			}
+			if (!placed) outside += inc.use;
 		}
-		for (const h of limitHits(all, input.limitAt))
-			if (h.ts >= range.from && h.ts < range.to) hits.push({ ...h, accountId: a.id, account: a.name });
+		let limited = false;
+		for (const window of ['session', 'weekly'] as const)
+			for (const { last, ...h } of limitHits(all, input.limitAt, window)) {
+				// in force at some moment of the period, whenever it began
+				if (h.ts > range.to || last <= range.from) continue;
+				hits.push({ ...h, accountId: a.id, account: a.name });
+				limited = true;
+			}
 		const total = perSlot.reduce((x, y) => x + y, 0);
-		return { id: a.id, name: a.name, provider: a.provider, current: a.current, slots: perSlot.map(round1), total: round1(total), daysUsed: usedOn.size, had: inRange.length > 0 };
+		return {
+			id: a.id,
+			name: a.name,
+			provider: a.provider,
+			current: a.current,
+			slots: perSlot.map(round1),
+			total: round1(total),
+			daysUsed: usedOn.size,
+			had: inRange.length > 0,
+			outside,
+			limited
+		};
 	});
 
 	// an account that was removed and has nothing in this period would only be noise
-	const shown = accounts.filter((a) => a.current || a.had).map(({ had: _had, ...a }) => a);
+	const kept = accounts.filter((a) => a.current || a.had);
+	const shown = kept.map(({ had: _had, outside: _outside, limited: _limited, ...a }) => a);
 	for (const d of days) {
 		d.total = round1(d.slots.reduce((x, y) => x + y, 0));
 		d.slots = d.slots.map(round1);
@@ -259,6 +352,10 @@ export function buildReport(input: ReportInput): Report {
 		hits,
 		busiestSlot: hasData && best > 0 ? slotTotals.indexOf(best) : null,
 		topAccount: hasData && top && top.total > 0 ? top.name : null,
-		idle: hasData ? shown.filter((a) => a.current && a.total < input.idleBelow).map((a) => a.name) : []
+		topTotal: hasData && top ? top.total : 0,
+		// judged as the page shows it (whole %), and counting use that fell outside the slots
+		idle: hasData ? kept.filter((a) => a.current && a.had && !a.limited && Math.round(a.total + a.outside) < input.idleBelow).map((a) => a.name) : [],
+		noReadings: hasData ? kept.filter((a) => a.current && !a.had).map((a) => a.name) : [],
+		outsideSlots: round1(kept.reduce((x, a) => x + a.outside, 0))
 	};
 }

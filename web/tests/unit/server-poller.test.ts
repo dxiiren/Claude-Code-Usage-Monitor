@@ -183,8 +183,36 @@ describe('parsers', () => {
 			})
 		).toEqual({
 			session: { available: true, percentage: 7, resets_at_unix: Date.parse('2026-09-24T12:00:00Z') / 1000 },
-			weekly: { available: true, percentage: 30, resets_at_unix: null }
+			weekly: { available: true, percentage: 30, resets_at_unix: null },
+			models: [{ label: 'opus', percentage: 90, resets_at_unix: null }]
 		});
+	});
+	it('per-model limits are kept: an account can be out of one model while both windows have room', () => {
+		const at = '2026-09-28T00:00:00Z';
+		const u = P.usageFromResponse({
+			five_hour: { utilization: 10, resets_at: at },
+			seven_day: { utilization: 60, resets_at: at },
+			seven_day_opus: { utilization: 100, resets_at: at },
+			seven_day_sonnet: null
+		})!;
+		expect(u.weekly.percentage).toBe(60);
+		expect(u.models).toEqual([{ label: 'Opus', percentage: 100, resets_at_unix: Date.parse(at) / 1000 }]);
+		// the array names the model itself and wins over the older field for the same model
+		const both = P.usageFromResponse({
+			seven_day: { utilization: 60 },
+			seven_day_opus: { utilization: 40 },
+			limits: [{ kind: 'weekly_scoped', percent: 100, resets_at: at, scope: { model: { id: 'claude-opus-5', display_name: 'Claude Opus 5' } } }]
+		})!;
+		expect(both.models).toEqual([{ label: 'Claude Opus 5', percentage: 100, resets_at_unix: Date.parse(at) / 1000 }]);
+		// no per-model limit in the answer: the field is left out, as before
+		expect(P.usageFromResponse({ five_hour: { utilization: 1 }, seven_day: { utilization: 2 } })).not.toHaveProperty('models');
+	});
+	it('a window that is present but unreadable fails the answer instead of reading as "no data"', () => {
+		// an absent or null window is fine: some plans have one window only
+		expect(P.usageFromResponse({ five_hour: { utilization: 10, resets_at: null }, seven_day: null })).toMatchObject({ session: { available: true, percentage: 10 }, weekly: { available: false } });
+		// "100" as text would otherwise show the weekly bar as "no data" while the account is blocked
+		expect(P.usageFromResponse({ five_hour: { utilization: 10 }, seven_day: { utilization: '100' } })).toBeNull();
+		expect(P.usageFromResponse({ five_hour: 'soon', seven_day: { utilization: 50 } })).toBeNull();
 	});
 	it('Retry-After: seconds, HTTP date, cap 24 h, junk ignored', () => {
 		const now = Date.parse('2026-09-24T00:00:00Z');
@@ -226,6 +254,17 @@ describe('Poller scheduling', () => {
 		expect(f.calls).toHaveLength(2);
 		expect(saved[1]).toMatchObject({ ok: true });
 		expect(p.cooldownRemaining('x')).toBe(0);
+	});
+	it('pollOne says whether a new reading was saved', async () => {
+		const now = 3_000_000_000_000;
+		const dir = account({ claudeAiOauth: { accessToken: 'tok', expiresAt: now + 3600_000 } });
+		let answer = () => json(okBody);
+		const p = new P.Poller({ targets: () => [], save: () => undefined }, deps(fakeFetch(() => answer()).fn, async () => undefined, () => now), 300, 0, async () => undefined);
+		expect(await p.pollOne({ id: 'z', configDir: dir })).toBe(true);
+		answer = () => json({}, 429, { 'retry-after': '600' });
+		expect(await p.pollOne({ id: 'z', configDir: dir })).toBe(false);
+		// inside the cooldown nothing is asked at all
+		expect(await p.pollOne({ id: 'z', configDir: dir })).toBe(false);
 	});
 	it('429 without Retry-After backs off interval * 2^(n-1), capped at 1 h', async () => {
 		let now = 2_000_000_000_000;

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { level, resetsIn } from '../../src/lib/format';
+import { ago, level, pctText, refreshSummary, resetsIn, windowFull, windowOver } from '../../src/lib/format';
 
 describe('level thresholds (same as the widget)', () => {
 	it('green < 70, amber 70-89, red >= 90, full at 100', () => {
@@ -20,6 +20,37 @@ describe('level thresholds (same as the widget)', () => {
 		expect(resetsIn(s + 125, now, true)).toBe('2m 05s');
 		expect(resetsIn(s - 1, now)).toBe('now');
 		expect(resetsIn(null, now)).toBe('-');
+	});
+	it('only a real 100 reads "100%"', () => {
+		expect([0, 12.4, 99.4, 99.6, 99.99, 100, 100.4, 137].map((p) => pctText(p))).toEqual(['0%', '12%', '99%', '99%', '99%', '100%', '100%', '137%']);
+		expect(pctText(null)).toBe('--');
+	});
+	it('a window stops counting once its reset time has passed', () => {
+		const now = 1_000_000_000_000;
+		const s = now / 1000;
+		expect(windowOver(s - 1, now)).toBe(true);
+		expect(windowOver(s + 60, now)).toBe(false);
+		expect(windowOver(null, now)).toBe(false);
+		expect(windowFull({ percentage: 100, resetsAt: s + 60 }, now)).toBe(true);
+		expect(windowFull({ percentage: 100, resetsAt: null }, now)).toBe(true);
+		// the limit that was reached has reset: the account is free until a new reading says otherwise
+		expect(windowFull({ percentage: 100, resetsAt: s - 60 }, now)).toBe(false);
+		expect(windowFull({ percentage: 99.6, resetsAt: s + 60 }, now)).toBe(false);
+		expect(windowFull(null, now)).toBe(false);
+	});
+	it('says how old a reading is', () => {
+		const now = 1_000_000_000_000;
+		const s = now / 1000;
+		expect([20, 240, 3 * 3600 + 300, 2 * 86400 + 4 * 3600].map((d) => ago(s - d, now))).toEqual(['1m', '4m', '3h 5m', '2d 4h']);
+	});
+	it('"Refresh now" reports what really happened', () => {
+		expect(refreshSummary({ refreshed: 1, failed: 0, pending: 0, skipped: 0 })).toEqual({ ok: true, text: 'Refreshed 1 account.' });
+		expect(refreshSummary({ refreshed: 4, failed: 2, pending: 0, skipped: 0 })).toEqual({ ok: false, text: 'Refreshed 4 accounts. 2 accounts could not be read: the reason is on their row.' });
+		expect(refreshSummary({ refreshed: 0, failed: 6, pending: 0, skipped: 0 }).text).not.toMatch(/Refreshed/);
+		expect(refreshSummary({ refreshed: 5, failed: 0, pending: 1, skipped: 0 })).toMatchObject({ ok: false, text: expect.stringContaining('1 account still being read') });
+		expect(refreshSummary({ refreshed: 2, failed: 0, pending: 0, skipped: 1 })).toEqual({ ok: true, text: 'Refreshed 2 accounts. 1 skipped: the provider asked us to wait.' });
+		expect(refreshSummary({ refreshed: 0, failed: 0, pending: 0, skipped: 3 })).toEqual({ ok: false, text: 'Nothing refreshed: the provider asked us to wait before reading again.' });
+		expect(refreshSummary({ refreshed: 0, failed: 0, pending: 0, skipped: 0 })).toEqual({ ok: false, text: 'Nothing to refresh: no account is switched on.' });
 	});
 });
 

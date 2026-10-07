@@ -148,6 +148,10 @@ a write to any of them never bumps `meta.revision`. `accounts` and `meta` are un
 
 Only enabled accounts, in `sort_order`. `401` for a missing/unknown/revoked token.
 
+`usage` is always the last good reading. `status` is `error` whenever that reading is not current:
+the last poll failed, or no poll has failed but the reading is older than three poll intervals
+(10 minutes at least), so the widget marks it stale instead of showing it as fresh.
+
 ### Widget remote mode
 
 `settings.json` keys `remote_server_url` + `remote_server_token` (both non-empty) switch the

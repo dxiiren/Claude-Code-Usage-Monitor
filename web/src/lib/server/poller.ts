@@ -37,9 +37,17 @@ export interface WindowUsage {
 	percentage: number;
 	resets_at_unix: number | null;
 }
+/** A limit that covers one model only, such as a weekly Opus allowance (src/poller/claude/limits.rs). */
+export interface ModelLimit {
+	label: string;
+	percentage: number;
+	resets_at_unix: number | null;
+}
 export interface Usage {
 	session: WindowUsage;
 	weekly: WindowUsage;
+	/** Present only when the answer carried per-model limits: an account can be out of one model while both windows have room. */
+	models?: ModelLimit[];
 }
 
 export type PollResult =
@@ -111,22 +119,44 @@ export function usageFromResponse(body: unknown): Usage | null {
 		if (typeof x.utilization !== 'number') return null;
 		return { available: true, percentage: x.utilization, resets_at_unix: isoToUnix(x.resets_at) };
 	};
+	// A window that is present but unreadable fails the whole answer, as it does in the widget:
+	// showing it as "no data" would hide a window that may be at its limit.
+	for (const b of [r.five_hour, r.seven_day]) if (b !== undefined && b !== null && !bucket(b)) return null;
 	u.session = bucket(r.five_hour) ?? u.session;
 	u.weekly = bucket(r.seven_day) ?? u.weekly;
 	let anyLimit = false;
+	// Per-model limits by model name (lower case); the fullest one wins when a model is listed twice.
+	const models = new Map<string, ModelLimit>();
+	const model = (label: string, percentage: number, resets: unknown) => {
+		const key = label.toLowerCase();
+		const have = models.get(key);
+		if (!have || have.percentage < percentage) models.set(key, { label, percentage, resets_at_unix: isoToUnix(resets) });
+	};
+	const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 	// New-format responses may omit the legacy fields; only scope-less limits fill them.
 	if (Array.isArray(r.limits)) {
 		for (const l of r.limits as Record<string, unknown>[]) {
 			const pct = typeof l?.percent === 'number' ? l.percent : typeof l?.utilization === 'number' ? l.utilization : NaN;
 			if (typeof l?.kind !== 'string' || !l.kind.trim() || !Number.isFinite(pct) || pct < 0) continue;
 			anyLimit = true;
-			if (l.scope !== undefined && l.scope !== null) continue;
+			if (l.scope !== undefined && l.scope !== null) {
+				const m = (l.scope as { model?: { display_name?: unknown; id?: unknown } }).model;
+				const name = text(m?.display_name) ?? text(m?.id);
+				if (name) model(name, pct, l.resets_at);
+				continue;
+			}
 			const w = { available: true, percentage: pct, resets_at_unix: isoToUnix(l.resets_at) };
 			if (l.kind === 'session' && !u.session.available) u.session = w;
 			if (l.kind === 'weekly_all' && !u.weekly.available) u.weekly = w;
 		}
 	}
+	// The older per-model fields; the array is authoritative when it names the same model.
+	for (const [field, name] of [['seven_day_opus', 'Opus'], ['seven_day_sonnet', 'Sonnet']] as const) {
+		const b = bucket(r[field]);
+		if (b && ![...models.keys()].some((k) => k.includes(name.toLowerCase()))) model(name, b.percentage, (r[field] as { resets_at?: unknown }).resets_at);
+	}
 	if (!u.session.available && !u.weekly.available && !anyLimit) return null;
+	if (models.size) u.models = [...models.values()];
 	return u;
 }
 
@@ -413,7 +443,7 @@ export class Poller {
 	private strikes = new Map<string, number>();
 	private timer: NodeJS.Timeout | null = null;
 	private running: Promise<void> | null = null;
-	private inFlight = new Map<string, Promise<void>>();
+	private inFlight = new Map<string, Promise<boolean>>();
 	private stopped = false;
 
 	constructor(
@@ -424,20 +454,25 @@ export class Poller {
 		private sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))
 	) {}
 
-	/** Poll one account now (after a login, or from a cycle); concurrent calls for one id share the run. */
-	pollOne(t: PollTarget, force = false): Promise<void> {
+	/**
+	 * Poll one account now (after a login, or from a cycle); concurrent calls for one id share the run.
+	 * Resolves true when a new reading was saved, false when the poll failed or was skipped.
+	 */
+	pollOne(t: PollTarget, force = false): Promise<boolean> {
 		const existing = this.inFlight.get(t.id);
 		if (existing) return existing;
 		const now = this.deps.nowMs();
-		if (!force && (this.cooldownUntil.get(t.id) ?? 0) > now) return Promise.resolve();
+		if (!force && (this.cooldownUntil.get(t.id) ?? 0) > now) return Promise.resolve(false);
 		const p = (async () => {
 			try {
 				const r = t.provider === 'codex' ? await pollCodexAccount(t.configDir, this.deps) : await pollAccount(t.configDir, this.deps);
 				const at = this.deps.nowMs();
 				this.applyBackoff(t.id, r, at);
 				this.store.save(t.id, r, at);
+				return r.ok;
 			} catch (e) {
 				console.error('[account-manager] poll failed:', (e as Error).message);
+				return false;
 			} finally {
 				this.inFlight.delete(t.id);
 			}

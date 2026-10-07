@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { expect, test, type Page } from '@playwright/test';
 
 // Server mode against the built server (start.js), a temp data dir, the fake CLI and a fake usage
@@ -135,6 +136,31 @@ test('usage: the two windows carry their names; Refresh now reads straight away,
 	// every reading was kept for the reports
 	const kept = await page.request.get('/api/report?period=day');
 	expect((await kept.json()).accounts.map((a: { name: string }) => a.name)).toContain('alpha');
+});
+
+test('usage: numbers nobody has refreshed are shown as old and never picked as the best account', async ({ page }) => {
+	await signIn(page);
+	// the reader went quiet an hour ago: no poll failed, the stored numbers are simply old
+	const d = new DatabaseSync(path.join(data, 'accounts.db'));
+	d.exec('PRAGMA busy_timeout = 5000');
+	d.prepare("UPDATE account_usage SET ok_unix = ?, polled_unix = ? WHERE account_id = 'alpha'").run(Math.floor(Date.now() / 1000) - 3700, Math.floor(Date.now() / 1000) - 3700);
+	d.close();
+	await page.goto('/usage');
+	const row = page.locator('li[data-account="alpha"]');
+	await expect(row.getByTestId('old-reading')).toContainText('Last read 1h 1m ago');
+	await expect(page.getByTestId('best')).toContainText('No current reading');
+	await expect(page.getByTestId('best')).not.toContainText('Best to use now');
+	await expect(page.locator('.updated')).toContainText('ago');
+	await page.screenshot({ path: path.join(shots, 'usage-old-reading.png'), fullPage: true });
+	await page.goto('/');
+	await expect(page.locator('li.acc').filter({ hasText: 'alpha@example.com' }).getByTestId('old-reading')).toContainText('Last read 1h');
+
+	// a fresh reading puts it back
+	await page.goto('/usage');
+	await page.getByTestId('refresh-all').click();
+	await expect(page.getByTestId('refresh-notice')).toHaveText('Refreshed 1 account.');
+	await expect(row.getByTestId('old-reading')).toHaveCount(0);
+	await expect(page.getByTestId('best')).toContainText('alpha');
 });
 
 test('an account whose token the usage endpoint rejects shows as expired', async ({ page }) => {

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import UsageBar from '$lib/UsageBar.svelte';
-	import { needsLogin, pctText, post, resetsIn } from '$lib/format';
+	import { ago, needsLogin, pctText, post, refreshSummary, resetsIn, windowFull } from '$lib/format';
 	import type { Snapshot } from '$lib/server/api';
 
 	let { data } = $props();
@@ -45,12 +45,10 @@
 		refreshing = true;
 		notice = null;
 		try {
-			const out = await post<{ refreshed: number; skipped: number; snap: Snapshot }>('/api/usage/refresh');
+			const out = await post<{ refreshed: number; failed: number; pending: number; skipped: number; snap: Snapshot }>('/api/usage/refresh');
 			snap = out.snap;
 			stale = false;
-			notice = out.refreshed
-				? { ok: true, text: `Refreshed ${out.refreshed} ${out.refreshed === 1 ? 'account' : 'accounts'}.${out.skipped ? ` ${out.skipped} skipped: the provider asked us to wait.` : ''}` }
-				: { ok: false, text: 'Nothing refreshed: the provider asked us to wait before reading again.' };
+			notice = refreshSummary(out);
 			waitUntil = Date.now() + ui.refreshWaitSeconds * 1000;
 		} catch (e) {
 			const err = e as Error & { data?: { retryAfter?: number } };
@@ -66,29 +64,38 @@
 	const needing = $derived(snap.accounts.filter((a) => needsLogin(a.status.state)));
 	const badgeText = (state: string) => (state === 'expired' ? 'Expired — log in again' : 'Not logged in');
 
-	/** Most room right now: lowest 5h % among accounts whose weekly is under 100 and 5h under 100. */
+	type Acc = Snapshot['accounts'][number];
+	/** At a limit right now in either window (a window that has reset since no longer counts). */
+	const isBlocked = (a: Acc) => windowFull(a.usage?.session, now) || windowFull(a.usage?.weekly, now);
+	/** The last good reading is too old to describe the account (server mode; see staleAfterSeconds). */
+	const isOld = (a: Acc) => snap.staleAfterSeconds !== null && a.usageReadUnix !== null && now / 1000 - a.usageReadUnix > snap.staleAfterSeconds;
+	/**
+	 * Accounts whose numbers describe right now: a recent reading with at least one window (a plan
+	 * can come with one only). Age alone decides: one failed poll does not make a two-minute-old
+	 * reading wrong, while a hidden account, which is not read, drops out once its numbers are old.
+	 */
+	const current = $derived(loggedIn.filter((a) => !isOld(a) && (a.usage?.session || a.usage?.weekly)));
+
+	/** Most room right now: lowest 5h % among the current accounts that are not at a limit. */
 	const best = $derived.by(() => {
-		const usable = loggedIn.filter(
-			(a) =>
-				a.usage?.session && a.usage?.weekly && a.usage.weekly.percentage < 100 && a.usage.session.percentage < 100
-		);
-		usable.sort((x, y) => x.usage!.session!.percentage - y.usage!.session!.percentage);
-		return usable[0] ?? null;
+		const used = (a: Acc) => a.usage?.session?.percentage ?? 0;
+		return current.filter((a) => !isBlocked(a)).sort((x, y) => used(x) - used(y))[0] ?? null;
 	});
+	const allBlocked = $derived(current.length > 0 && !best);
 
 	/** When nothing is usable: the soonest moment any blocked account frees up. */
 	const nextFree = $derived.by(() => {
 		let soonest: number | null = null;
-		for (const a of loggedIn) {
-			const u = a.usage;
-			if (!u) continue;
-			const blockers = [u.session, u.weekly].filter((w) => w && w.percentage >= 100 && w.resetsAt);
+		for (const a of current) {
+			const blockers = [a.usage?.session, a.usage?.weekly].filter((w) => windowFull(w, now) && w!.resetsAt);
 			if (!blockers.length) continue;
 			const freeAt = Math.max(...blockers.map((w) => w!.resetsAt!));
 			if (soonest === null || freeAt < soonest) soonest = freeAt;
 		}
 		return soonest;
 	});
+	/** Some account has numbers, but none of them can be trusted for "now". */
+	const onlyOld = $derived(!current.length && loggedIn.some((a) => a.usage?.session || a.usage?.weekly));
 
 	const hasCodex = $derived(snap.accounts.some((a) => a.provider === 'codex'));
 	const hasClaude = $derived(snap.accounts.some((a) => a.provider !== 'codex'));
@@ -124,9 +131,12 @@
 			<span class="muted">
 				&middot; {ui.hourlyLabel} {pctText(best.usage?.session?.percentage)} used, {ui.weeklyLabel.toLowerCase()} {pctText(best.usage?.weekly?.percentage)}
 			</span>
-		{:else if nextFree}
+		{:else if allBlocked}
 			<span class="tag full">All at their limit</span>
-			<span class="muted">next account frees up in {resetsIn(nextFree, now, true)}</span>
+			{#if nextFree}<span class="muted">next account frees up in {resetsIn(nextFree, now, true)}</span>{/if}
+		{:else if onlyOld}
+			<span class="tag none">No current reading</span>
+			<span class="muted">the last readings failed or are out of date</span>
 		{:else}
 			<span class="tag none">No usage data yet</span>
 			<span class="muted">{snap.mode === 'server' ? 'the server has not polled these accounts yet' : 'the widget has not polled these accounts'}</span>
@@ -138,7 +148,7 @@
 			<p class="title">{cardTitle}</p>
 			<div class="headright">
 				<p class="updated" class:stale>
-					{#if updated}updated {updated.toLocaleTimeString()}{:else}{snap.mode === 'server' ? 'not polled yet' : 'no widget data yet'}{/if}
+					{#if updated}updated {updated.toLocaleTimeString()}{#if now - updated.getTime() > 600_000}&nbsp;({ago(snap.usageUpdatedUnix!, now)} ago){/if}{:else}{snap.mode === 'server' ? 'not polled yet' : 'no widget data yet'}{/if}
 					{#if stale}&middot; server unreachable{/if}
 				</p>
 				{#if snap.mode === 'server'}
@@ -152,7 +162,8 @@
 		<ul>
 			{#each snap.accounts as a (a.id)}
 				{@const login = needsLogin(a.status.state)}
-				{@const blocked = !login && ((a.usage?.session?.percentage ?? 0) >= 100 || (a.usage?.weekly?.percentage ?? 0) >= 100)}
+				{@const blocked = !login && isBlocked(a)}
+				{@const old = !login && isOld(a)}
 				<li class:off={!a.enabled} class:blocked class:login class:best={best?.id === a.id} data-account={a.id}>
 					<div class="who">
 						<span class="name">{a.name}</span>
@@ -168,12 +179,17 @@
 							<span class="small">{a.email ? 'Last known usage hidden: it may be out of date.' : a.status.message}</span>
 						</div>
 					{:else if a.email}
-						<div class="bars">
+						<!-- a hidden row is dimmed as a whole already -->
+						<div class="bars" class:old={old && a.enabled}>
 							<UsageBar label={ui.hourlyLabel} title="{ui.hourlyLabel} (5-hour window)" pct={a.usage?.session?.percentage} resetsAt={a.usage?.session?.resetsAt} {now} seconds warnAt={ui.warnAt} highAt={ui.highAt} />
 							<UsageBar label={ui.weeklyLabel} title="{ui.weeklyLabel} (7-day window)" pct={a.usage?.weekly?.percentage} resetsAt={a.usage?.weekly?.resetsAt} {now} seconds warnAt={ui.warnAt} highAt={ui.highAt} />
 						</div>
 
+						{#each (a.usage?.models ?? []).filter((m) => windowFull(m, now)) as m (m.label)}
+							<p class="error full" data-testid="model-limit">{m.label} limit reached{m.resetsAt ? `, resets in ${resetsIn(m.resetsAt, now)}` : ''}. Other models still work.</p>
+						{/each}
 						{#if a.status.state === 'error'}<p class="error" data-testid="status-error">{a.status.message}</p>{/if}
+						{#if old}<p class="error" data-testid="old-reading">Last read {ago(a.usageReadUnix!, now)} ago{a.enabled ? '' : ' (hidden accounts are not read)'}. These numbers may be out of date.</p>{/if}
 					{/if}
 				</li>
 			{/each}
@@ -351,6 +367,13 @@
 		display: grid;
 		gap: 0.3rem;
 		min-width: 0;
+	}
+	.bars.old {
+		opacity: 0.55;
+	}
+	.error.full {
+		color: var(--card-red);
+		font-weight: 600;
 	}
 	.error {
 		grid-column: 1 / -1;
