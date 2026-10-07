@@ -498,8 +498,9 @@ export class Poller {
 
 	/**
 	 * Leave an account alone until `untilMs`: it was read a moment ago by the previous run of the
-	 * server. A second reading inside the interval is answered with 429, which would put "rate
-	 * limited" on the row after every restart.
+	 * server, so reading it again at start-up adds nothing. An extra reading is sometimes answered
+	 * with 429 (three were, about a minute after their previous reading, on a restart that read
+	 * everything at once); that puts "rate limited" on the row and costs the account its next reading.
 	 */
 	hold(id: string, untilMs: number): void {
 		if (untilMs > (this.cooldownUntil.get(id) ?? 0)) this.cooldownUntil.set(id, untilMs);
