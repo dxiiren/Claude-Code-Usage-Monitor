@@ -213,6 +213,8 @@ test('report: an empty history says so; kept readings are cut into the saved slo
 	const date = seedHistory();
 	await page.goto(`/report?period=day&date=${date}`);
 	await expect(page.getByTestId('kpis')).toContainText('45%'); // 10 -> 30 -> 55
+	// the page states the exact span of the period: a report day does not start at midnight
+	await expect(page.getByTestId('report-span')).toContainText(/Covers .+ to .+/);
 	await expect(page.getByTestId('kpis')).toContainText('Legacy team');
 	const table = page.getByTestId('slot-table');
 	await expect(table).toContainText('Break'); // the slot renamed in Settings

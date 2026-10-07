@@ -116,7 +116,7 @@ export async function downloadDocx(m: DocModel): Promise<void> {
 		});
 	const body: (InstanceType<typeof d.Paragraph> | InstanceType<typeof d.Table>)[] = [];
 	m.sections.forEach((s, i) => {
-		body.push(new d.Paragraph({ heading: d.HeadingLevel.HEADING_1, spacing: { before: 280, after: 140 }, children: [run(`${i + 1} ${s.title}`, { bold: true, size: 16 })] }));
+		body.push(new d.Paragraph({ heading: d.HeadingLevel.HEADING_1, keepNext: true, spacing: { before: 280, after: 140 }, children: [run(`${i + 1} ${s.title}`, { bold: true, size: 16 })] }));
 		for (const b of s.blocks) {
 			if (b.type === 'p') body.push(para(b.text, { align: 'both' }));
 			else if (b.type === 'bullets') for (const item of b.items) body.push(new d.Paragraph({ bullet: { level: 0 }, spacing: { after: 60 }, children: [run(item)] }));
@@ -125,6 +125,8 @@ export async function downloadDocx(m: DocModel): Promise<void> {
 				body.push(
 					new d.Paragraph({
 						alignment: d.AlignmentType.CENTER,
+						// stays on the page of its caption
+						keepNext: true,
 						spacing: { before: 120, after: 60 },
 						children: [new d.ImageRun({ type: 'png', data: dataUrlBytes(pngs.get(b)!), transformation: { width: w, height: Math.round((w * b.chart.height) / b.chart.width) } })]
 					})
@@ -136,9 +138,9 @@ export async function downloadDocx(m: DocModel): Promise<void> {
 						width: { size: 100, type: d.WidthType.PERCENTAGE },
 						borders: { top: line, bottom: line, left: line, right: line, insideHorizontal: line, insideVertical: line },
 						rows: [
-							new d.TableRow({ tableHeader: true, children: b.head.map((h) => cell(h, { bold: true, align: 'center' })) }),
+							new d.TableRow({ tableHeader: true, cantSplit: true, children: b.head.map((h) => cell(h, { bold: true, align: 'center' })) }),
 							...b.rows.map(
-								(r, ri) => new d.TableRow({ children: r.map((v, ci) => cell(v, { bold: !!b.totalRow && ri === b.rows.length - 1, align: ci === 0 ? 'left' : 'right' })) })
+								(r, ri) => new d.TableRow({ cantSplit: true, children: r.map((v, ci) => cell(v, { bold: !!b.totalRow && ri === b.rows.length - 1, align: ci === 0 ? 'left' : 'right' })) })
 							)
 						]
 					})
@@ -223,6 +225,8 @@ export async function downloadPdf(m: DocModel): Promise<void> {
 	const logo = logoRaw ? bytesDataUrl(logoRaw) : null;
 	const contentWidth = 595.28 - 72 - 36;
 	const rule = (y: number) => ({ canvas: [{ type: 'line', x1: 0, y1: y, x2: contentWidth, y2: y, lineWidth: 0.6 }] });
+	/** Marks a node of the page header or footer (see pageBreakBefore below). */
+	const furniture = <T extends object>(node: T) => ({ ...node, style: 'furniture' });
 	const content: unknown[] = [];
 	const contact = m.contact.map((t, i) => ({ text: t, bold: i === 0 && t === m.company, alignment: 'center' }));
 
@@ -252,17 +256,18 @@ export async function downloadPdf(m: DocModel): Promise<void> {
 		);
 	}
 	m.sections.forEach((s, i) => {
-		content.push({ text: `${i + 1}    ${s.title}`, style: 'h1', tocItem: m.contents, margin: [0, i ? 16 : 0, 0, 8] });
+		content.push({ text: `${i + 1}    ${s.title}`, style: 'h1', headlineLevel: 1, tocItem: m.contents, margin: [0, i ? 16 : 0, 0, 8] });
 		for (const b of s.blocks) {
 			if (b.type === 'p') content.push({ text: b.text, alignment: 'justify', margin: [0, 0, 0, 6] });
 			else if (b.type === 'bullets') content.push({ ul: b.items, margin: [0, 0, 0, 6] });
 			else if (b.type === 'figure')
-				content.push({ image: pngs.get(b), width: contentWidth, alignment: 'center', margin: [0, 6, 0, 3] }, { text: b.caption, style: 'cap', margin: [0, 0, 0, 10] });
+				content.push({ image: pngs.get(b), width: contentWidth, alignment: 'center', headlineLevel: 2, margin: [0, 6, 0, 3] }, { text: b.caption, style: 'cap', margin: [0, 0, 0, 10] });
 			else
 				content.push(
 					{
 						table: {
 							headerRows: 1,
+							dontBreakRows: true,
 							widths: b.head.map((_, ci) => (ci === 0 ? '*' : 'auto')),
 							body: [
 								b.head.map((h) => ({ text: h, bold: true, alignment: 'center', fontSize: 9 })),
@@ -278,6 +283,11 @@ export async function downloadPdf(m: DocModel): Promise<void> {
 
 	const def = {
 		pageSize: 'A4',
+		// A section heading (level 1) or a figure (level 2) never ends a page on its own: it moves
+		// to the next page together with what follows it. The page header and footer are laid out
+		// after the content and so always "follow" it; they are told apart by their style.
+		pageBreakBefore: (node: { headlineLevel?: number }, on: { getFollowingNodesOnPage: () => { style?: unknown }[] }) =>
+			(node.headlineLevel === 1 || node.headlineLevel === 2) && on.getFollowingNodesOnPage().every((n) => n.style === 'furniture'),
 		pageMargins: [72, 62, 36, 50],
 		info: { title: m.title, author: m.preparedBy, subject: m.period },
 		defaultStyle: { fontSize: 11, lineHeight: 1.2 },
@@ -287,38 +297,41 @@ export async function downloadPdf(m: DocModel): Promise<void> {
 			ctitle: { fontSize: 26, bold: true, alignment: 'center' },
 			chead: { fontSize: 14, bold: true },
 			h1: { fontSize: 14, bold: true },
-			cap: { fontSize: 10, bold: true, alignment: 'center' }
+			cap: { fontSize: 10, bold: true, alignment: 'center' },
+			// changes nothing in the look: it only marks the nodes of the page header and footer
+			furniture: {}
 		},
 		header: (page: number) =>
 			m.cover && page === 1
 				? null
-				: {
+				: furniture({
 						margin: [72, 24, 36, 0],
 						stack: [
-							{
+							furniture({
 								columns: [
-									logo ? { image: logo, width: 62 } : { text: '' },
-									{ text: m.title, alignment: 'center', fontSize: 9, margin: [0, 2, 0, 0] },
-									{ text: 'Internal', alignment: 'right', fontSize: 9, margin: [0, 2, 0, 0] }
+									furniture(logo ? { image: logo, width: 62 } : { text: '' }),
+									furniture({ text: m.title, alignment: 'center', fontSize: 9, margin: [0, 2, 0, 0] }),
+									furniture({ text: 'Internal', alignment: 'right', fontSize: 9, margin: [0, 2, 0, 0] })
 								]
-							},
-							rule(4)
+							}),
+							furniture(rule(4))
 						]
-					},
-		footer: (page: number, pages: number) => ({
-			margin: [72, 8, 36, 0],
-			stack: [
-				rule(0),
-				{
-					margin: [0, 4, 0, 0],
-					columns: [
-						{ text: m.monthYear, fontSize: 7 },
-						{ text: m.footer, alignment: 'center', fontSize: 7 },
-						{ text: `Page ${page} of ${pages}`, alignment: 'right', fontSize: 7 }
-					]
-				}
-			]
-		}),
+					}),
+		footer: (page: number, pages: number) =>
+			furniture({
+				margin: [72, 8, 36, 0],
+				stack: [
+					furniture(rule(0)),
+					furniture({
+						margin: [0, 4, 0, 0],
+						columns: [
+							furniture({ text: m.monthYear, fontSize: 7 }),
+							furniture({ text: m.footer, alignment: 'center', fontSize: 7 }),
+							furniture({ text: `Page ${page} of ${pages}`, alignment: 'right', fontSize: 7 })
+						]
+					})
+				]
+			}),
 		content
 	};
 	const pdf = pm.createPdf(def);

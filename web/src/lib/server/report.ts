@@ -253,6 +253,9 @@ export interface Report {
 	slotTotals: number[];
 	total: number;
 	daysWithData: number;
+	/** when the period really starts and ends (unix seconds): report days run from the first slot */
+	from: number;
+	to: number;
 	/** every limit in force at some moment of the period, whenever it was reached */
 	hits: LimitHit[];
 	busiestSlot: number | null;
@@ -351,6 +354,8 @@ export function buildReport(input: ReportInput): Report {
 		slotTotals,
 		total,
 		daysWithData: days.filter((d) => d.hasData).length,
+		from: range.from,
+		to: range.to,
 		hits,
 		busiestSlot: hasData && best > 0 ? slotTotals.indexOf(best) : null,
 		topAccount: hasData && top && top.total > 0 ? top.name : null,

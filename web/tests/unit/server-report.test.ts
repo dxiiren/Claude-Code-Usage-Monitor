@@ -84,6 +84,10 @@ describe('the report', () => {
 		expect(r.busiestSlot).toBe(2);
 		expect(r.topAccount).toBe('Alpha');
 		expect(r.hasData).toBe(true);
+		// the day runs from the first slot's start, not from midnight, and the report says so
+		expect([r.from, r.to]).toEqual([kl('2026-10-06', '09:00'), kl('2026-10-07', '09:00')]);
+		const week = report(day, { period: 'week' });
+		expect([week.from, week.to]).toEqual([kl('2026-10-05', '09:00'), kl('2026-10-12', '09:00')]);
 	});
 	it('a reading exactly on a boundary belongs to the slot that just ended', () => {
 		const r = report([s('2026-10-06', '09:00', 0), s('2026-10-06', '13:00', 40)]);

@@ -4,7 +4,7 @@
 	import { BRAND } from '$lib/brand';
 	import { PAGE_PALETTE } from '$lib/chart';
 	import { getJson } from '$lib/format';
-	import { buildDoc, dayChart, dayLabel, hitState, pct, periodLabel, reachedLabel, slotChart, type View } from '$lib/reportDoc';
+	import { buildDoc, dayChart, dayLabel, hitState, pct, periodLabel, reachedLabel, slotChart, whenLabel, type View } from '$lib/reportDoc';
 	import { clock, slotName, slotRange } from '$lib/slots';
 
 	let { data } = $props();
@@ -199,6 +199,11 @@
 		</div>
 	</div>
 
+	<!-- a report day starts at the first time slot, not at midnight: say exactly what the period covers -->
+	<p class="k-small k-muted span" data-testid="report-span">
+		Covers {whenLabel(r.from, r.timezone)} to {whenLabel(r.to, r.timezone)}{#if r.generatedUnix < r.to && r.generatedUnix >= r.from}&nbsp;&middot; still running, figures so far{:else if r.generatedUnix < r.from}&nbsp;&middot; not started yet{/if}
+	</p>
+
 	{#if layout === 'web'}
 		{#if !r.hasData}
 			<div class="k-card" data-testid="no-data">
@@ -279,7 +284,7 @@
 					{#if showT}
 						<div class="days">
 							{#each r.days as d (d.date)}
-								<button class="kv daybtn" type="button" disabled={!d.hasData} onclick={() => open('day', d.date)}><span>{dayLabel(d.date)}</span><span class="k-num">{#if d.hasData}<b>{pct(d.total)}</b>{:else}<span class="k-muted">no data</span>{/if}</span></button>
+								<button class="kv daybtn" type="button" disabled={!d.hasData} onclick={() => open('day', d.date)}><span>{dayLabel(d.date)}</span><span class="k-num">{#if d.hasData}<b>{pct(d.total)}</b>{:else}<span class="k-muted">{d.date > r.today ? 'not yet' : 'no data'}</span>{/if}</span></button>
 							{/each}
 						</div>
 					{/if}
@@ -438,6 +443,9 @@
 	}
 	.calnote {
 		margin: 0.5rem 0 0;
+	}
+	.span {
+		margin: -0.35rem 0 0;
 	}
 	.kpis {
 		display: grid;
