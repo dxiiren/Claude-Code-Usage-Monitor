@@ -215,9 +215,10 @@ export async function pollAccountSoon(a: Pick<Account, 'id' | 'config_dir'> & { 
 let lastManualMs = 0;
 
 /**
- * A good reading this recent is current already. The provider refuses a second reading of an
- * account soon after the first (HTTP 429: seen 66-68 s after, never 120 s after), and the refusal
- * then costs the next scheduled reading as well, so asking again would make the numbers older.
+ * A good reading this recent is current already, so "Refresh now" does not ask for it again.
+ * An extra reading is sometimes refused (HTTP 429), and a refusal costs the account its next
+ * scheduled reading as well. What the provider allows is not known: three accounts were refused
+ * 66-68 s after their previous reading, while two readings 3 s apart were accepted another time.
  */
 const FRESH_SECONDS = 120;
 

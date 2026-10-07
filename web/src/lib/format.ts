@@ -79,7 +79,7 @@ export function refreshSummary(r: { refreshed: number; failed?: number; pending?
 	if (r.refreshed) parts.push(`Refreshed ${n(r.refreshed)}.`);
 	if (failed) parts.push(`${n(failed)} could not be read: the reason is on ${failed === 1 ? 'its' : 'their'} row.`);
 	if (pending) parts.push(`${n(pending)} still being read: the numbers change when that finishes.`);
-	// a reading that recent is current; asking the provider again so soon is refused
+	// a reading that recent is current, and an extra one is sometimes refused by the provider
 	if (fresh) parts.push(tried || r.skipped ? `${n(fresh)} already up to date (read in the last ${window}).` : `Already up to date: every account was read in the last ${window}.`);
 	if (r.skipped) parts.push(tried || fresh ? `${r.skipped} skipped: the provider asked us to wait.` : 'Nothing refreshed: the provider asked us to wait before reading again.');
 	if (!parts.length) parts.push('Nothing to refresh: no account is switched on.');
