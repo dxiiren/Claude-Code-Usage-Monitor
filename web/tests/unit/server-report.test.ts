@@ -337,12 +337,14 @@ describe('spreadsheet download', () => {
 		const model = {
 			title: '=HYPERLINK("http://evil.example")',
 			period: 'Tuesday, 6 October 2026',
-			sections: [{ title: 'Usage', blocks: [{ type: 'table', head: ['Account', 'Total'], rows: [['+cmd, inc', '45%'], ['@home', '-3'], ['plain', '10%']], caption: 'Table 1. Usage' }] }]
+			sections: [{ title: 'Usage', blocks: [{ type: 'table', head: ['Account', 'Total'], rows: [['+cmd, inc', '45%'], ['@home', '-3'], ['plain', '10%'], ['Mon 5 Oct', '-']], caption: 'Table 1. Usage' }] }]
 		} as unknown as DocModel;
 		const lines = toCsv(model).replace(/^\uFEFF/, '').split('\r\n');
 		expect(lines[0]).toBe(`"'=HYPERLINK(""http://evil.example"")"`);
 		expect(lines).toContain(`"'+cmd, inc",45%`);
 		expect(lines).toContain(`'@home,'-3`);
 		expect(lines).toContain('plain,10%');
+		// a dash on its own marks a day with no data: it is not a formula and is kept as typed
+		expect(lines).toContain('Mon 5 Oct,-');
 	});
 });

@@ -326,6 +326,14 @@ test('report: the download menu closes on an outside click; Word, PDF and CSV fi
 	await expect(preview.locator('article')).toHaveCount(2);
 	await expect(preview).toContainText('Figure 1.');
 	await expect(preview).toContainText('Table 1.');
+	// every table fits its page: no column (the totals are last) hides behind a sideways scroll
+	for (const width of [1280, 1024, 768]) {
+		await page.setViewportSize({ width, height: 800 });
+		const hidden = await preview.locator('.scroll').evaluateAll((boxes) => boxes.map((b) => b.scrollWidth - b.clientWidth));
+		expect(hidden.length, `tables at ${width}px`).toBeGreaterThan(1);
+		expect(Math.max(...hidden), `widest hidden part of a table at ${width}px`).toBeLessThanOrEqual(1);
+	}
+	await page.setViewportSize({ width: 1280, height: 720 });
 	await page.screenshot({ path: path.join(shots, 'report-preview.png'), fullPage: true });
 
 	const grab = async (item: string) => {

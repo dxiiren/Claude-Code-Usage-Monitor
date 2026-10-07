@@ -344,7 +344,10 @@
 				<div class="pfoot"><span>{model.monthYear}</span><span>{model.footer}</span><span>Page</span></div>
 			</article>
 		</div>
-		<p class="k-note">This is what the Word and PDF downloads contain. Page numbers and the contents page numbers are filled in by the file itself. The spreadsheet download carries the tables only.</p>
+		<p class="k-note">
+			This is what the Word and PDF downloads contain. Page numbers and the contents page numbers are filled in by the file itself. The spreadsheet download carries the tables only.
+			<span class="k-only-narrow">On a narrow screen, swipe a table or chart sideways to see all of it.</span>
+		</p>
 	{/if}
 </div>
 
@@ -736,6 +739,8 @@
 	}
 	.doc th {
 		text-align: center;
+		/* a heading may wrap so the table fits the page, as it does in the Word and PDF files */
+		white-space: normal;
 	}
 	.doc td.r {
 		text-align: right;
@@ -758,6 +763,10 @@
 		}
 		.item {
 			height: 2.5rem;
+		}
+		/* a phone has no room for every column: there a table keeps its width and scrolls sideways */
+		.doc th {
+			white-space: nowrap;
 		}
 	}
 </style>
