@@ -22,7 +22,10 @@ export interface Sample {
 	weekReset?: number | null;
 	/** paid extra usage left at this reading, kept only while a window was spent; null = none in force */
 	extraLeft?: number | null;
-	/** per-model limits of this reading; null or absent = the reading carried none */
+	/**
+	 * The limits next to the two windows that this reading carried; an empty list = it carried none.
+	 * null or absent = not known: the reading is from before these were kept.
+	 */
 	models?: ModelLevel[] | null;
 }
 
@@ -230,11 +233,12 @@ export interface LimitHit extends Omit<LimitSpell, 'last'> {
 
 /**
  * The readings as one series per limit next to the two windows, in the shape limitHits reads as a
- * weekly window. Only readings that carried such limits are used, so history from before they
- * were kept does not read as "the model was free until now".
+ * weekly window. Readings from before these limits were kept (models = null) are left out, so that
+ * history does not read as "the model was free until now"; a reading that is known to have carried
+ * none counts as the limit not being there.
  */
 function modelSeries(samples: Sample[]): Map<string, { label: string; other: boolean; samples: Sample[] }> {
-	const withModels = samples.filter((s) => s.models?.length);
+	const withModels = samples.filter((s) => s.models !== null && s.models !== undefined);
 	const out = new Map<string, { label: string; other: boolean; samples: Sample[] }>();
 	for (const s of withModels) for (const m of s.models!) if (!out.has(m.label.toLowerCase())) out.set(m.label.toLowerCase(), { label: m.label, other: !!m.other, samples: [] });
 	for (const [key, series] of out)
@@ -264,6 +268,12 @@ export function limitHits(samples: Sample[], limitAt: number, window: LimitWindo
 		const silent = prev !== null && cur.ts - prev.ts > WINDOW_S[window];
 		// a later reset time means the window turned over, even with the level still at the limit
 		const turned = open !== null && open.until !== null && cur.reset !== null && cur.reset > open.until + RESET_JITTER_S;
+		// A reading under the limit before the reset it was waiting for: the limit was lifted early (a raised
+		// allowance, a plan change). It held until this reading, not until the reset it once announced.
+		if (open && cur.pct < limitAt && !silent && open.until !== null && cur.ts < open.until) {
+			open.until = cur.ts;
+			open.blockedSeconds = blockedIn(cur.ts);
+		}
 		if (cur.pct < limitAt || silent || turned) open = null;
 		if (cur.pct >= limitAt) {
 			if (!open) {
@@ -336,6 +346,11 @@ export interface Report {
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
+/**
+ * How a figure reads on the page: nothing, under 1%, or a whole percent. Two figures tie only when
+ * they read the same AND something was used: an unused account is never "tied" with a barely used one.
+ */
+const shownAs = (v: number) => (v <= 0 ? 'none' : v < 0.5 ? 'under1' : String(Math.round(v)));
 
 export function buildReport(input: ReportInput): Report {
 	const { slots, timezone: tz } = input;
@@ -426,9 +441,9 @@ export function buildReport(input: ReportInput): Report {
 		to: range.to,
 		hits,
 		busiestSlot: hasData && best > 0 ? slotTotals.indexOf(best) : null,
-		busiestSlots: hasData && best > 0 ? slotTotals.flatMap((t, i) => (Math.round(t) === Math.round(best) ? [i] : [])) : [],
+		busiestSlots: hasData && best > 0 ? slotTotals.flatMap((t, i) => (shownAs(t) === shownAs(best) ? [i] : [])) : [],
 		topAccount: hasData && top && top.total > 0 ? top.name : null,
-		topAccounts: hasData && top && top.total > 0 ? shown.filter((a) => Math.round(a.total) === Math.round(top.total)).map((a) => a.name) : [],
+		topAccounts: hasData && top && top.total > 0 ? shown.filter((a) => shownAs(a.total) === shownAs(top.total)).map((a) => `${a.name}${a.current ? '' : ' (removed)'}`) : [],
 		topTotal: hasData && top ? top.total : 0,
 		// judged as the page shows it (whole %), and counting use that fell outside the slots
 		idle: hasData ? kept.filter((a) => a.current && a.had && !a.limited && Math.round(a.total + a.outside) < input.idleBelow).map((a) => a.name) : [],

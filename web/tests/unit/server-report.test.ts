@@ -262,6 +262,14 @@ describe('limits', () => {
 		const onTheLine = [sw('2026-10-07', '08:40', 0, 95, 70 * 60), sw('2026-10-07', '09:00', 0, 100, 50 * 60)];
 		expect(report(onTheLine, { date: '2026-10-07' }).hits).toHaveLength(1);
 	});
+	it('a limit lifted before its reset held until the reading that saw it gone, not until the reset', () => {
+		// at its limit with the reset announced for 14:00, but at 11:00 the level reads 30% in the same window
+		const lifted = [s('2026-10-06', '09:30', 80, 4.5 * 3600), s('2026-10-06', '10:00', 100, 4 * 3600), s('2026-10-06', '11:00', 30, 3 * 3600)];
+		expect(limitHits(lifted, 100)).toMatchObject([{ ts: kl('2026-10-06', '10:00'), until: kl('2026-10-06', '11:00'), blockedSeconds: 3600 }]);
+		// a normal reset (the level falls after the reset time) keeps the reset as the end
+		const normal = [s('2026-10-06', '09:30', 80, 4.5 * 3600), s('2026-10-06', '10:00', 100, 4 * 3600), s('2026-10-06', '14:05', 2, 5 * 3600)];
+		expect(limitHits(normal, 100)).toMatchObject([{ until: kl('2026-10-06', '14:00'), blockedSeconds: 4 * 3600 }]);
+	});
 	it('blocked time never runs past the reset, even when a later reading still shows the limit', () => {
 		// the second reading comes half an hour after the reset and carries no reset time of its own
 		const late = [s('2026-10-06', '09:00', 80), s('2026-10-06', '10:00', 100, 3600), s('2026-10-06', '11:30', 100), s('2026-10-06', '11:31', 50)];
@@ -320,6 +328,14 @@ describe('limits', () => {
 		it('history from before per-model limits were kept does not date the limit', () => {
 			const r = report([m('2026-10-06', '09:00', null), m('2026-10-06', '10:00', { Opus: 100 }), m('2026-10-06', '11:00', { Opus: 100 })]);
 			expect(r.hits).toMatchObject([{ ts: kl('2026-10-06', '10:00'), model: 'Opus', before: true }]);
+		});
+		it('a reading that carried no limits at all shows the model free: the limit began after it, not "before"', () => {
+			const none: Sample = { ...sw('2026-10-06', '09:00', 20, 40, 3 * DAY_S), models: [] };
+			const r = report([none, m('2026-10-06', '10:00', { Opus: 100 }), m('2026-10-06', '11:00', { Opus: 100 })]);
+			expect(r.hits).toMatchObject([{ ts: kl('2026-10-06', '10:00'), model: 'Opus', before: false }]);
+			// and an answer without it after the limit, before the reset, ends the stretch there
+			const gone = report([m('2026-10-06', '09:00', { Opus: 100 }), { ...sw('2026-10-06', '10:00', 20, 40, 3 * DAY_S), models: [] }]);
+			expect(gone.hits).toMatchObject([{ model: 'Opus', until: kl('2026-10-06', '10:00') }]);
 		});
 		it('a reading without per-model limits in the middle does not split the stretch', () => {
 			const r = report([m('2026-10-06', '09:00', { Opus: 100 }), m('2026-10-06', '10:00', null), m('2026-10-06', '11:00', { Opus: 100 })]);
@@ -401,6 +417,20 @@ describe('figures that must not mislead', () => {
 		const one = full(new Map([['a', rise(10, 30)], ['b', rise(0, 5)]]));
 		expect(one.topAccounts).toEqual(['Alpha']);
 		expect(summaryLines(one)).toContain('The most used account was Alpha with 20%.');
+	});
+	it('a barely used account is not "tied" with unused ones, and is not called "not used at all"', () => {
+		const three: ReportAccount[] = [...two, { id: 'c', name: 'Gamma', provider: 'claude', current: true }];
+		const flat = [s('2026-10-06', '09:30', 0), s('2026-10-06', '10:30', 0)];
+		const r: ReportPayload = { ...full(new Map()), ...report([], { accounts: three, samples: new Map([['a', rise(0, 0.3)], ['c', flat]]) }) };
+		expect(r.topAccounts).toEqual(['Alpha']);
+		expect(r.busiestSlots).toEqual([0]);
+		expect(summaryLines(r)).toContain('The most used account was Alpha with <1%.');
+		expect(summaryLines(r)).toContain('The busiest time slot was Morning (9am – 1pm) with <1%.');
+		// Alpha's row reads "<1%", so the list it is on cannot say "not used at all"
+		expect(r.idle).toEqual(['Alpha', 'Gamma']);
+		expect(summaryLines(r)).toContain('Used less than 1%: Alpha, Gamma.');
+		const none: ReportPayload = { ...full(new Map()), ...report([], { accounts: three, samples: new Map([['a', flat], ['c', flat]]) }) };
+		expect(summaryLines(none)).toContain('Not used at all: Alpha, Gamma.');
 	});
 	it('the prose uses the window name from Settings, like the limit rows do', () => {
 		const r = full(new Map([['a', rise(10, 30)]]), { labels: { session: 'Focus block', weekly: 'Week' } });

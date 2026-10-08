@@ -157,7 +157,7 @@ export function usageFromResponse(body: unknown): Usage | null {
 	let anyLimit = false;
 	// Every limit next to the two windows, as the widget keeps them (limits.rs parse). `key` tells two
 	// limits apart: the kind plus the model or scope it covers.
-	const found: { key: string; kind: string; label: string; model: boolean; active: boolean; percentage: number; resets: unknown }[] = [];
+	const found: { key: string; kind: string; label: string; model: boolean; active: boolean; percentage: number; resets: unknown; scope?: unknown }[] = [];
 	const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 	const slug = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, '_');
 	const words = (v: string) => v.replace(/_/g, ' ').trim();
@@ -184,13 +184,15 @@ export function usageFromResponse(body: unknown): Usage | null {
 				model: !!name,
 				active: l.is_active === true,
 				percentage: pct,
-				resets: l.resets_at
+				resets: l.resets_at,
+				scope
 			});
 		}
 	}
 	// The older top-level buckets, known and future ones: any object with a numeric utilization.
 	for (const [field, value] of Object.entries(r)) {
-		if (['five_hour', 'seven_day', 'limits', 'spend'].includes(field) || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+		// extra_usage describes the paid extra usage (it carries a utilization too): that is `extra`, not a limit
+		if (['five_hour', 'seven_day', 'limits', 'spend', 'extra_usage'].includes(field) || !value || typeof value !== 'object' || Array.isArray(value)) continue;
 		const b = value as { utilization?: unknown; resets_at?: unknown; is_active?: unknown };
 		if (typeof b.utilization !== 'number' || !Number.isFinite(b.utilization) || b.utilization < 0) continue;
 		const name = field === 'seven_day_opus' ? 'Opus' : field === 'seven_day_sonnet' ? 'Sonnet' : null;
@@ -216,8 +218,26 @@ export function usageFromResponse(body: unknown): Usage | null {
 		const kept = found.filter((f, i) => i === 0 || found[i - 1].key !== f.key);
 		// two limits of one model (weekly and daily, say) must not look like one
 		const twice = (f: (typeof kept)[number]) => kept.filter((x) => x.label.toLowerCase() === f.label.toLowerCase()).length > 1;
-		u.models = kept.map((f) => ({
-			label: twice(f) && words(f.kind).toLowerCase() !== f.label.toLowerCase() ? `${f.label} (${words(f.kind)})` : f.label,
+		// what a non-model scope names, e.g. {team: "design"} -> "design"
+		const scopeText = (f: (typeof kept)[number]) =>
+			f.scope && typeof f.scope === 'object' && !f.model
+				? Object.values(f.scope as Record<string, unknown>)
+						.filter((v): v is string | number => typeof v === 'string' || typeof v === 'number')
+						.join(' ')
+						.trim()
+				: '';
+		const named = kept.map((f) => {
+			if (!twice(f)) return f.label;
+			if (words(f.kind).toLowerCase() !== f.label.toLowerCase()) return `${f.label} (${words(f.kind)})`;
+			return scopeText(f) ? `${f.label} (${scopeText(f)})` : f.label;
+		});
+		// whatever is still the same after that is numbered, so no two rows carry one name
+		const labels = named.map((n, i) => {
+			const same = named.reduce<number[]>((acc, x, j) => (x.toLowerCase() === n.toLowerCase() ? [...acc, j] : acc), []);
+			return same.length > 1 ? `${n} ${same.indexOf(i) + 1}` : n;
+		});
+		u.models = kept.map((f, i) => ({
+			label: labels[i],
 			percentage: f.percentage,
 			resets_at_unix: isoToUnix(f.resets),
 			...(f.model ? {} : { other: true as const })

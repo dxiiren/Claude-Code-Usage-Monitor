@@ -4,7 +4,7 @@
 	import { BRAND } from '$lib/brand';
 	import { PAGE_PALETTE, isOutlined } from '$lib/chart';
 	import { getJson } from '$lib/format';
-	import { buildDoc, dayChart, dayLabel, hitAccount, hitState, isBlocked, limitName, pct, startsLate, windowName, periodLabel, reachedLabel, slotChart, whenLabel, type View } from '$lib/reportDoc';
+	import { buildDoc, dayChart, dayLabel, hitAccount, hitState, idleWording, isBlocked, limitName, pct, startsLate, windowName, periodLabel, reachedLabel, slotChart, whenLabel, type View } from '$lib/reportDoc';
 	import { clock, slotName, slotRange } from '$lib/slots';
 
 	let { data } = $props();
@@ -75,7 +75,9 @@
 		calMonth = month;
 		dots = [];
 		try {
-			dots = (await getJson<{ days: string[] }>(`/api/report/days?month=${month}`)).days;
+			const days = (await getJson<{ days: string[] }>(`/api/report/days?month=${month}`)).days;
+			// a slower answer for a month left since must not mark the month now shown
+			if (calMonth === month) dots = days;
 		} catch {
 			/* the calendar still works without dots */
 		}
@@ -234,7 +236,7 @@
 				<div class="kpi"><div class="k-label">Busiest slot</div><div class="v">{r.busiestSlot === null ? '-' : slotName(r.slots[r.busiestSlot])}</div><div class="s">{r.busiestSlot === null ? 'nothing used' : `${slotRange(r.slots[r.busiestSlot])} · ${pct(r.slotTotals[r.busiestSlot])}${r.busiestSlots.length > 1 ? ` · tied with ${r.busiestSlots.length - 1} other` : ''}`}</div></div>
 				<div class="kpi"><div class="k-label">Top account</div><div class="v">{r.topAccounts.length ? r.topAccounts.join(', ') : '-'}</div><div class="s">{r.topAccount ? `${pct(r.topTotal)}${r.topAccounts.length > 1 ? ' each' : ''}` : 'nothing used'}</div></div>
 				<div class="kpi"><div class="k-label">Limits reached</div><div class="v">{r.hits.length}</div><div class="s">{r.hits.length ? `${blockedHits} blocked · listed below` : 'none in this period'}</div></div>
-				<div class="kpi"><div class="k-label">Not used</div><div class="v">{r.idle.length}</div><div class="s">{r.idle.length ? r.idle.join(', ') : r.idleBelow === 0 ? 'not counted (Settings)' : r.noReadings.length || r.hits.length ? 'none' : 'all accounts active'}</div></div>
+				<div class="kpi"><div class="k-label">{r.idle.length && idleWording(r) !== 'Not used at all' ? idleWording(r) : 'Not used'}</div><div class="v">{r.idle.length}</div><div class="s">{r.idle.length ? r.idle.join(', ') : r.idleBelow === 0 ? 'not counted (Settings)' : r.noReadings.length || r.hits.length ? 'none' : 'all accounts active'}</div></div>
 			</div>
 			{#if r.noReadings.length || r.outsideSlots >= 0.5 || startsLate(r)}
 				<p class="k-note" data-testid="report-gaps">
@@ -256,7 +258,7 @@
 							<div class="grp">
 								<div class="grphead"><b>{slotName(s)}</b><span class="k-small k-muted">{s.name.trim() ? `${slotRange(s)} · ` : ''}{pct(r.slotTotals[si])}</span></div>
 								{#each r.accounts as a, i (a.id)}
-									<div class="hb"><span>{a.name}</span><div class="track"><div class:alt={isOutlined(i)} style:width="{Math.min(100, (a.slots[si] / maxSlot) * 100)}%" style:--c="var(--series-{(i % 6) + 1})"></div></div><span class="k-num">{pct(a.slots[si])}</span></div>
+									<div class="hb"><span title={a.name}>{a.name}</span><div class="track"><div class:alt={isOutlined(i)} style:width="{Math.min(100, (a.slots[si] / maxSlot) * 100)}%" style:--c="var(--series-{(i % 6) + 1})"></div></div><span class="k-num">{a.had ? pct(a.slots[si]) : 'no readings'}</span></div>
 								{/each}
 							</div>
 						{/each}
@@ -313,7 +315,7 @@
 		<p class="k-note">
 			Figures are a percentage of one {windowName(r)} per account. In an account's own row, over 100% means its {windowName(r)} reset and was used again; totals pass 100% simply by adding accounts or days.
 			Figures are rounded to whole percent, so a total can differ by 1% from the sum of its parts.
-			A report day runs for 24 hours from {clock(r.slots[0].from)}. Times are in {r.timezone}.
+			A report day runs from {clock(r.slots[0].from)} to {clock(r.slots[0].from)} the next day. Times are in {r.timezone}.
 			Download gives the same figures as a Word or PDF document, or as a spreadsheet.
 		</p>
 	{:else}

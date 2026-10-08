@@ -226,6 +226,15 @@ describe('settings', () => {
 	});
 });
 
+describe('settings that would make screens ambiguous', () => {
+	it('the two usage windows cannot carry the same name', () => {
+		const before = settings.getSettings();
+		expect(() => settings.saveSettings({ hourlyLabel: 'Session', weeklyLabel: 'session ' })).toThrow(/different names/);
+		expect(() => settings.saveSettings({ weeklyLabel: before.hourlyLabel })).toThrow(/different names/);
+		expect(settings.getSettings()).toMatchObject({ hourlyLabel: before.hourlyLabel, weeklyLabel: before.weeklyLabel });
+	});
+});
+
 describe('reading history', () => {
 	const kl = (date: string, hhmm: string) => Date.parse(`${date}T${hhmm}:00+08:00`);
 	const reading = (pct: number) => ({ ok: true as const, usage: { session: { available: true, percentage: pct, resets_at_unix: null }, weekly: { available: true, percentage: 5, resets_at_unix: null } } });
@@ -275,7 +284,15 @@ describe('reading history', () => {
 		usage.saveResult(other, { ok: false, error: 'network_error' }, kl('2026-10-04', '10:30'));
 		usage.saveResult(other, full(400), kl('2026-10-04', '11:00'));
 		expect(stored()).toMatchObject({ extra: { percentage: 20, remaining: 16, total: 20 }, credits: { balance: 400, baseline: 500 } });
-		expect(rows<{ extra_left: number | null }>(`SELECT extra_left FROM usage_samples WHERE account_id = '${other}' ORDER BY ts_unix`).map((r) => r.extra_left)).toEqual([null, 16]);
+		// an answer without a balance keeps what was learned: the next one is still measured against 500
+		const bare = full(0);
+		delete (bare.usage as { credits?: unknown }).credits;
+		usage.saveResult(other, bare, kl('2026-10-04', '11:30'));
+		expect(stored()).toMatchObject({ credits: { balance: 400, baseline: 500, live: false } });
+		expect(stored().extra).toBeUndefined();
+		usage.saveResult(other, full(300), kl('2026-10-04', '12:00'));
+		expect(stored()).toMatchObject({ extra: { percentage: 40, remaining: 12, total: 20 } });
+		expect(rows<{ extra_left: number | null }>(`SELECT extra_left FROM usage_samples WHERE account_id = '${other}' ORDER BY ts_unix`).map((r) => r.extra_left)).toEqual([null, 16, null, 12]);
 		db.removeAccount(other);
 		db.database().prepare('DELETE FROM usage_samples WHERE account_id = ?').run(other);
 		db.database().prepare('DELETE FROM report_accounts WHERE account_id = ?').run(other);
@@ -304,7 +321,10 @@ describe('reading history', () => {
 		const onLine = Date.parse('2026-11-08T09:00:00+05:30'); // exactly on the line: belongs to the day that just ended
 		usage.saveResult(other, reading(10), at);
 		usage.saveResult(other, reading(12), onLine);
+		// a reading of an account the report does not know (no account, no name on record) marks no day
+		db.database().prepare("INSERT INTO usage_samples (account_id, ts_unix, s_pct, w_pct) VALUES ('orphan', ?, 5, 5)").run(Date.parse('2026-11-20T12:00:00+05:30') / 1000);
 		expect(reportData.daysWithData('2026-11')).toEqual(['2026-11-05', '2026-11-07']);
+		db.database().prepare("DELETE FROM usage_samples WHERE account_id = 'orphan'").run();
 		for (const [date, has] of [['2026-11-05', true], ['2026-11-06', false], ['2026-11-07', true], ['2026-11-08', false]] as const)
 			expect(reportData.loadReport('day', date, onLine + 3_600_000).hasData, date).toBe(has);
 		settings.saveSettings({ timezone: before.timezone });

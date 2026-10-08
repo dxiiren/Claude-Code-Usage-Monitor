@@ -152,6 +152,15 @@ export function dayChart(r: ReportPayload, palette = PRINT_PALETTE): Drawn {
 	});
 }
 
+/**
+ * What the "not used" list really says. With the level at 1% an account that used a little (its row
+ * reads "<1%") is on it too, and "not used at all" would contradict that row.
+ */
+export function idleWording(r: ReportPayload): string {
+	const touched = r.accounts.some((a) => r.idle.includes(a.name) && a.total > 0);
+	return r.idleBelow > 1 || touched ? `Used less than ${Math.max(1, r.idleBelow)}%` : 'Not used at all';
+}
+
 /** The 5-hour window by its name from Settings, in running text ("hourly session"). */
 export const windowName = (r: Pick<ReportPayload, 'labels'>) => r.labels.session.trim().toLowerCase() || 'hourly session';
 /**
@@ -188,7 +197,7 @@ export function summaryLines(r: ReportPayload): string[] {
 	if (others.length) out.push(`Another limit was reached ${times(others.length)}: ${[...new Set(others.map((h) => `${hitAccount(h)} (${h.model})`))].join(', ')}.`);
 	const near = r.hits.length - blocked.length - paid.length - models.length - others.length;
 	if (near) out.push(`An account reached ${r.limitAt}% of a limit without being blocked ${times(near)}.`);
-	if (r.idle.length) out.push(`${r.idleBelow > 1 ? `Used less than ${r.idleBelow}%` : 'Not used at all'}: ${r.idle.join(', ')}.`);
+	if (r.idle.length) out.push(`${idleWording(r)}: ${r.idle.join(', ')}.`);
 	if (r.noReadings.length) out.push(`No readings were saved for: ${r.noReadings.join(', ')}. Their use in this period is not known.`);
 	if (r.outsideSlots >= 0.5) out.push(`${pct(r.outsideSlots)} was used at times no time slot covers and is in none of these figures.`);
 	const uncovered = startsLate(r);
@@ -281,7 +290,7 @@ export function buildDoc(r: ReportPayload, doc: DocSettings, view: View, prepare
 		blocks: [
 			{
 				type: 'p',
-				text: `Figures are a percentage of one ${windowName(r)} allowance per account. In an account's own row, a value above 100% means its ${windowName(r)} reset and was used again within the period; rows that add up accounts or days pass 100% simply by adding. Figures are rounded to whole percent, so a total can differ by 1% from the sum of the figures shown under it. Each report day runs for 24 hours from ${slotRange(r.slots[0]).split(' – ')[0]}, so a slot that runs past midnight belongs to the day it starts on. Times are in the ${r.timezone} time zone.`
+				text: `Figures are a percentage of one ${windowName(r)} allowance per account. In an account's own row, a value above 100% means its ${windowName(r)} reset and was used again within the period; rows that add up accounts or days pass 100% simply by adding. Figures are rounded to whole percent, so a total can differ by 1% from the sum of the figures shown under it. Each report day runs from ${slotRange(r.slots[0]).split(' – ')[0]} to the same time the next day, so a slot that runs past midnight belongs to the day it starts on. Times are in the ${r.timezone} time zone.`
 			}
 		]
 	});

@@ -18,6 +18,14 @@ function surface(t: Record<string, unknown>) {
 /** Round-trips through JSON text exactly as it is written to disk. */
 const roundTrip = (t: unknown) => JSON.parse(JSON.stringify(t, null, 2));
 
+describe('account names on the card', () => {
+	it('a name with braces is shown as typed, never read as an expression', () => {
+		const a = { ...acc(1)[0], name: 'A{b}c {accounts.claude.x.session.percentage}' };
+		const names = surface(buildTheme([a], 'dark')).kids.filter((k) => k.id.startsWith('name-'));
+		expect(names.map((k) => (k as unknown as { content: { template: string } }).content.template)).toEqual(['A{{b}c {{accounts.claude.x.session.percentage}']);
+	});
+});
+
 describe('buildTheme - dark (kit parity)', () => {
 	it('0 accounts: valid small card that says no accounts yet', () => {
 		const t = roundTrip(buildTheme([], 'dark'));
@@ -26,7 +34,7 @@ describe('buildTheme - dark (kit parity)', () => {
 		expect(t.schema_version).toBe(1);
 		expect(`${s.width}x${s.height}`).toBe('237x53');
 		expect(kids.map((k) => k.id)).toEqual(['title', 'close-btn', 'no-accounts']);
-		expect(kids[2].content.template).toBe('No accounts yet');
+		expect(kids[2].content.template).toBe('No accounts on the widget');
 	});
 
 	it('1 account: exactly the kit layer list, close button wired, bar expressions', () => {
@@ -134,7 +142,7 @@ describe('buildTheme - login_required (expired login)', () => {
 				// one red "Expired" text per variant, rendered only when login_required
 				const exp = kids.filter((k) => k.id.startsWith(`expired-${id}`));
 				expect(exp.map((k) => [k.id, k.render, k.content.color!.color, k.content.template])).toEqual(
-					variants.map((v) => [`expired-${id}${v.suffix}`, mul(L(id), v.render), v.alert, 'Expired · re-login'])
+					variants.map((v) => [`expired-${id}${v.suffix}`, mul(L(id), v.render), v.alert, 'Login needed'])
 				);
 				// name, title and dividers stay visible either way
 				expect(kids.filter((k) => k.id.startsWith(`name-${id}`)).every((k) => !k.render.includes('login_required'))).toBe(true);

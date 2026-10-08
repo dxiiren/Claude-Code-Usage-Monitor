@@ -7,7 +7,7 @@ and OpenAI **Codex** (ChatGPT sign-in) accounts side by side.
 ## The three pieces
 
 1. **Widget** (`src/`, Rust, Windows) — a small card on the desktop: per account, a 5-hour and a
-   weekly bar with reset countdown; turns red at 90%, shows "Expired · re-login" when a login
+   weekly bar with reset countdown; turns red at 90%, shows "Login needed" when a login
    lapses. It reads its account list from `accounts.db` (reloading within ~5 s of any change), or
    from a server in **remote mode**.
 2. **Account Manager** (`web/`, SvelteKit + Node's built-in `node:sqlite`) — the page where you add,

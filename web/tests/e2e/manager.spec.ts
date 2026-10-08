@@ -55,7 +55,7 @@ test('add account -> login started -> good code -> email shown', async ({ page }
 	const panel = page.getByTestId('login-panel');
 	await expect(panel).toContainText('Log in "alpha"');
 	await expect(panel).toContainText('Edge was not found'); // EDGE_EXE=none -> fallback path
-	await panel.getByText("Edge window didn't open?").click();
+	// Edge was not found, so the link the text points at is already open below (no click needed)
 	const href = await panel.getByRole('link', { name: 'Open link' }).getAttribute('href');
 	expect(href).toMatch(/^https:\/\/claude\.com\/cai\/oauth\/authorize\?code=true/);
 	await panel.getByLabel('Authentication code').fill('good');
@@ -74,7 +74,6 @@ test('local mode offers the paste-a-code link, and a CLI that finished by itself
 	await page.getByRole('button', { name: 'Start', exact: true }).click();
 	const panel = page.getByTestId('login-panel');
 	await expect(panel).toContainText('Log in "autologin"');
-	await panel.getByText("Edge window didn't open?").click();
 	const href = (await panel.getByRole('link', { name: 'Open link' }).getAttribute('href')) ?? '';
 	// Not the localhost callback the CLI hands to BROWSER: that completes the login behind the
 	// page's back (the real bug: "already stopped: Login successful").
@@ -421,7 +420,6 @@ test('codex: provider choice on Add account; the local login completes by itself
 test('codex: fallback paste of the localhost:1455 callback address (strict validation)', async ({ page }) => {
 	const panel = await startCodex(page, 'cxpaste');
 	await expect(panel.getByTestId('codex-waiting')).toBeVisible();
-	await panel.getByText("Edge window didn't open, or the sign-in is stuck?").click();
 	const href = (await panel.getByRole('link', { name: 'Open link' }).getAttribute('href')) ?? '';
 	expect(new URL(href).origin).toBe('https://auth.openai.com');
 	expect(new URL(href).searchParams.get('redirect_uri')).toBe('http://localhost:1455/auth/callback');

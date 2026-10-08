@@ -49,5 +49,9 @@ describe('reading history from before paid extra usage and per-model limits were
 		usage.saveResult(id, { ok: true, usage: { session: full, weekly: { ...full, percentage: 40 }, extra: { percentage: 20, remaining: 40, total: 50 }, models: [{ label: 'Opus', percentage: 100, resets_at_unix: 9000 }] } }, 2_000_000);
 		expect(usage.samplesBetween(0, 3000).get(id)).toMatchObject([{ ts: 2000, pct: 100, extraLeft: 40, models: [{ label: 'Opus', pct: 100, reset: 9000 }] }]);
 		expect(columns()).toHaveLength(8);
+		// a reading that carried no such limit says so ("[]"), unlike the old rows, where nothing is known (NULL)
+		usage.saveResult(id, { ok: true, usage: { session: full, weekly: { ...full, percentage: 40 } } }, 2_060_000);
+		expect(usage.samplesBetween(2060, 2060).get(id)).toMatchObject([{ models: [] }]);
+		expect(usage.samplesBetween(0, 1000).get('old')).toMatchObject([{ models: null }]);
 	});
 });

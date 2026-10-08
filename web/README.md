@@ -84,7 +84,7 @@ Each account's status comes from two sources: the widget's last poll error in `u
   The page shows the message but does not ask you to log in again.
 
 `expired` and `logged_out` accounts get a red badge and a **Re-login** button on both pages. The Usage page lists
-them at the top and leaves them out of "Best to use now". On the desktop card they show "Expired · re-login" in place
+them at the top and leaves them out of "Best to use now". On the desktop card they show "Login needed" in place
 of their bars (`accounts.claude.<id>.login_required`).
 
 ## Safety

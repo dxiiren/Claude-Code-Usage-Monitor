@@ -226,7 +226,7 @@ function write<T>(fn: (d: DatabaseSync) => T): T {
 export function validateName(raw: unknown): string {
 	const name = typeof raw === 'string' ? raw.trim() : '';
 	if (!name) throw new UserError('Give the account a name.');
-	if (name.length > 24) throw new UserError('Keep the name to 24 characters or fewer (it has to fit on the card).');
+	if (name.length > 24) throw new UserError('Keep the name to 24 characters or fewer.');
 	if (/[\u0000-\u001f]/.test(name)) throw new UserError('The name contains invalid characters.');
 	return name;
 }

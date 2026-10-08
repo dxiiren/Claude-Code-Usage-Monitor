@@ -45,8 +45,19 @@
 
 	// Codex: the CLI finishes the sign-in on its own localhost:1455 callback (locally the isolated Edge
 	// window gets there by itself), so poll the session instead of waiting for a pasted code.
+	/** A Claude login the server no longer holds: it lasts 15 minutes (claude.ts SESSION_TTL_MS). */
+	const CLAUDE_LOGIN_MS = 15 * 60_000;
+
 	onMount(() => {
-		if (login.provider !== 'codex') return;
+		if (login.provider !== 'codex') {
+			// nothing tells this panel when the server drops the login, so it keeps the same clock
+			const t = setTimeout(() => {
+				if (phase !== 'waiting') return;
+				error = 'This sign-in link has expired (it works for 15 minutes). Start again for a new one.';
+				phase = 'failed';
+			}, CLAUDE_LOGIN_MS);
+			return () => clearTimeout(t);
+		}
 		let stopped = false;
 		// A function, not an inline test: TS would keep the narrowing across the await below.
 		const over = () => stopped || phase === 'done' || phase === 'failed';
@@ -54,6 +65,13 @@
 			if (over()) return;
 			try {
 				const res = await fetch(`/api/login/status?sessionId=${encodeURIComponent(login.sessionId)}`);
+				// signed out of the dashboard meanwhile, or no longer allowed here: waiting would never end
+				if (res.status === 401) return void location.assign('/login');
+				if (res.status === 403) {
+					error = 'You can no longer open this screen, so this sign-in cannot be followed here.';
+					phase = 'failed';
+					return;
+				}
 				const r = await res.json();
 				if (over()) return;
 				if (r.state === 'done') {
@@ -120,7 +138,10 @@
 			phase = 'done';
 		} catch (err) {
 			error = (err as Error).message;
-			phase = 'failed';
+			// 400 / 409 = the code was refused before it reached Claude Code, or one is being checked right
+			// now: the login is still alive, so let the user paste again instead of starting over.
+			const status = (err as { status?: number }).status;
+			phase = status === 400 || status === 409 ? 'waiting' : 'failed';
 		}
 		onchanged();
 	}
@@ -202,7 +223,7 @@
 		{#if server}
 			{@render pasteForm()}
 		{:else}
-			<details class="fallback">
+			<details class="fallback" open={!login.edgeOpened}>
 				<summary>Edge window didn't open, or the sign-in is stuck?</summary>
 				<p class="hint">
 					Open this link in a private window that is signed in to nothing. If the browser ends on a
@@ -231,7 +252,7 @@
 					</div>
 				</li>
 				<li>Sign in as <strong>{login.accountName}</strong>, click <em>Authorize</em>, copy the code.</li>
-				<li>Paste it here.</li>
+				<li>Paste it here. The link works for 15 minutes.</li>
 			</ol>
 		{:else}
 		<ol class="steps">
@@ -267,7 +288,7 @@
 		</form>
 
 		{#if !server}
-		<details class="fallback">
+		<details class="fallback" open={!login.edgeOpened}>
 			<summary>Edge window didn't open?</summary>
 			<p class="hint">
 				Open this link in a private window that is signed in to nothing. A normal window that is already

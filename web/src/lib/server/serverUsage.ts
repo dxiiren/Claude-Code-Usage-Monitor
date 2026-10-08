@@ -25,11 +25,12 @@ export function saveResult(id: string, r: PollResult, nowMs: number): void {
 		// The account may have been removed while its poll was running.
 		if (!d.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)) return;
 		if (r.ok) {
-			if (r.usage.credits) {
-				// Codex credits have no ceiling in the answer: measure them against the balance kept with the last good reading
-				const had = d.prepare('SELECT usage_json FROM account_usage WHERE account_id = ?').get(id) as { usage_json: string | null } | undefined;
-				codexExtra(r.usage, parse<Usage>(had?.usage_json ?? null)?.credits);
-			}
+			// Codex credits have no ceiling in the answer: measure them against the balance kept with the last good reading
+			const had = d.prepare('SELECT usage_json FROM account_usage WHERE account_id = ?').get(id) as { usage_json: string | null } | undefined;
+			const kept = parse<Usage>(had?.usage_json ?? null)?.credits;
+			if (r.usage.credits) codexExtra(r.usage, kept);
+			// an answer without the balance says nothing about it: what was learned so far stays for the next one
+			else if (kept) r.usage.credits = { ...kept, live: false };
 			d.prepare(
 				`INSERT INTO account_usage (account_id, usage_json, error_json, polled_at, polled_unix, ok_unix) VALUES (?, ?, NULL, ?, ?, ?)
 				 ON CONFLICT(account_id) DO UPDATE SET usage_json = excluded.usage_json, error_json = NULL, polled_at = excluded.polled_at,
@@ -65,7 +66,8 @@ function recordSample(id: string, usage: Usage, unix: number): void {
 		w.pct,
 		w.reset,
 		usage.extra ? usage.extra.remaining : null,
-		usage.models?.length ? JSON.stringify(usage.models.map((m) => ({ label: m.label, pct: m.percentage, reset: m.resets_at_unix, ...(m.other ? { other: true } : {}) }))) : null
+		// "[]" = this reading carried no such limit, which is not the same as a reading from before they were kept (NULL)
+		JSON.stringify((usage.models ?? []).map((m) => ({ label: m.label, pct: m.percentage, reset: m.resets_at_unix, ...(m.other ? { other: true } : {}) })))
 	);
 	// The account's current name, so a report can still name it after it is removed.
 	d.prepare(
@@ -84,7 +86,7 @@ export function pruneSamples(nowUnix: number, days = getSettings().historyDays):
 	return Number(database().prepare('DELETE FROM usage_samples WHERE ts_unix < ?').run(nowUnix - days * 86_400).changes);
 }
 
-/** The per-model limits kept with a reading; null when it carried none (or the text is not what we wrote). */
+/** The limits kept with a reading: a list (empty = the reading carried none), or null when nothing usable was saved. */
 function modelsOf(json: string | null): ModelLevel[] | null {
 	if (!json) return null;
 	try {
@@ -97,7 +99,7 @@ function modelsOf(json: string | null): ModelLevel[] | null {
 			const reset = typeof m.reset === 'number' && Number.isSafeInteger(Math.round(m.reset)) && m.reset > 0 && m.reset < 1e11 ? Math.round(m.reset) : null;
 			out.push({ label: m.label.trim(), pct: m.pct, reset, ...(m.other === true ? { other: true } : {}) });
 		}
-		return out.length ? out : null;
+		return out.length || !list.length ? out : null;
 	} catch {
 		return null;
 	}
@@ -130,7 +132,13 @@ export function samplesBetween(from: number, to: number): Map<string, Sample[]> 
 
 /** True when any reading falls in from < ts <= to (the rule a report day uses). */
 export function hasSampleBetween(from: number, to: number): boolean {
-	return !!database().prepare('SELECT 1 FROM usage_samples WHERE ts_unix > ? AND ts_unix <= ? LIMIT 1').get(from, to);
+	// readings of accounts the report knows (current, or removed with a name on record): the same set buildReport is given
+	return !!database()
+		.prepare(
+			`SELECT 1 FROM usage_samples WHERE ts_unix > ? AND ts_unix <= ?
+			   AND (account_id IN (SELECT id FROM accounts) OR account_id IN (SELECT account_id FROM report_accounts)) LIMIT 1`
+		)
+		.get(from, to);
 }
 
 /** Oldest reading kept, or null when there is no history yet. */

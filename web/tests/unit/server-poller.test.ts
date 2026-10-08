@@ -244,6 +244,19 @@ describe('parsers', () => {
 			{ label: 'monthly', percentage: 55, resets_at_unix: null, other: true },
 			{ label: 'seven day cowork', percentage: 100, resets_at_unix: Date.parse(at) / 1000, other: true }
 		]);
+		// two limits of one kind for different scopes are told apart by what the scope names, or numbered
+		const teams = P.usageFromResponse({
+			seven_day: { utilization: 20 },
+			extra_usage: { is_enabled: true, utilization: 3 },
+			limits: [
+				{ kind: 'team', percent: 9, scope: { team: 'a' } },
+				{ kind: 'team', percent: 3, scope: { team: 'b' } },
+				{ kind: 'pool', percent: 1, scope: { id: [1] } },
+				{ kind: 'pool', percent: 2, scope: { id: [2] } }
+			]
+		})!;
+		// extra_usage is the paid-usage switch, not an allowance
+		expect(teams.models!.map((m) => m.label).sort()).toEqual(['pool 1', 'pool 2', 'team (a)', 'team (b)']);
 		// an answer made only of such a bucket is still an answer
 		expect(P.usageFromResponse({ seven_day_cowork: { utilization: 5 } })).toMatchObject({ models: [{ label: 'seven day cowork', other: true }] });
 		// no per-model limit in the answer: the field is left out, as before

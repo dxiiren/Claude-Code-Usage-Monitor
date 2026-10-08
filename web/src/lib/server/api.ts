@@ -129,3 +129,14 @@ export async function snapshot() {
 }
 
 export type Snapshot = Awaited<ReturnType<typeof snapshot>>;
+
+/**
+ * The snapshot as one user may see it. The Usage screen needs the accounts' usage, but not what only
+ * managing accounts needs: where an account's folder is, and which accounts share an email. No user
+ * (local mode) or a user with the Accounts screen gets all of it.
+ */
+export async function snapshotFor(user: { screens: string[] } | undefined): Promise<Snapshot> {
+	const snap = await snapshot();
+	if (user && !user.screens.includes('accounts')) for (const a of snap.accounts) Object.assign(a, { configDir: '', sameEmailAs: [] });
+	return snap;
+}

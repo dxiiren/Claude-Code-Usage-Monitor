@@ -1,9 +1,10 @@
 import { json } from '@sveltejs/kit';
 import { createAccount } from '$lib/server/db';
 import { LoginError } from '$lib/server/claude';
-import { body, handle, snapshot, startLoginFor } from '$lib/server/api';
+import { body, handle, snapshotFor, startLoginFor } from '$lib/server/api';
 
-export const GET = () => handle(async () => json(await snapshot()));
+/** The Usage screen reads this too: see snapshotFor for what a user without the Accounts screen is given. */
+export const GET = ({ locals }) => handle(async () => json(await snapshotFor(locals.user)));
 
 /** Add account: create the row (provider claude | codex), then start that CLI's login. */
 export const POST = ({ request }) =>

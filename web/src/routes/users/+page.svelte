@@ -19,8 +19,10 @@
 
 	function generate() {
 		const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
-		const pick = crypto.getRandomValues(new Uint32Array(12));
-		newPassword = [0, 4, 8].map((o) => Array.from(pick.slice(o, o + 4), (n) => chars[n % chars.length]).join('')).join('-');
+		// groups of four, as many as "Shortest password allowed" needs (three at least)
+		const groups = Math.max(3, Math.ceil((data.minPassword + 1) / 5));
+		const pick = crypto.getRandomValues(new Uint32Array(groups * 4));
+		newPassword = Array.from({ length: groups }, (_, g) => Array.from(pick.slice(g * 4, g * 4 + 4), (n) => chars[n % chars.length]).join('')).join('-');
 	}
 
 	async function run(key: string, fn: () => Promise<void>) {

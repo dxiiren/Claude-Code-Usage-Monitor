@@ -239,9 +239,10 @@ pub struct RemoteUsage {
     /// shape this widget does not know cannot fail the whole payload.
     #[serde(default)]
     pub credits: Option<serde_json::Value>,
-    /// Limits next to the two windows, one entry each; raw for the same reason.
-    #[serde(default, deserialize_with = "null_as_default")]
-    pub limits: Vec<serde_json::Value>,
+    /// Limits next to the two windows, one entry each; raw for the same reason
+    /// (a value that is not a list reads as no limits).
+    #[serde(default)]
+    pub limits: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -346,7 +347,10 @@ pub fn usage_data(usage: &RemoteUsage) -> UsageData {
         });
     let limits = usage
         .limits
-        .iter()
+        .as_ref()
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
         .filter_map(|value| serde_json::from_value::<RemoteLimit>(value.clone()).ok())
         .filter(|limit| {
             !limit.label.trim().is_empty()
@@ -1094,7 +1098,10 @@ mod tests {
                   ] } },
               { "id": "kv", "name": "kv", "status": "ok", "usage": {
                   "session": { "available": true, "percentage": 1.0, "resets_at_unix": null },
-                  "credits": { "percentage": "a lot" }, "limits": null } }
+                  "credits": { "percentage": "a lot" }, "limits": null } },
+              { "id": "ai", "name": "ai", "status": "ok", "usage": {
+                  "session": { "available": true, "percentage": 2.0, "resets_at_unix": null },
+                  "credits": [1, 2], "limits": { "not": "a list" } } }
             ] }"#,
         )
         .unwrap();
@@ -1131,6 +1138,10 @@ mod tests {
         assert_eq!(plain.credits, None);
         assert!(plain.limits.is_empty());
         assert_eq!(plain.session.percentage, 1.0);
+        let odd = usage_data(account(&payload, "ai").usage.as_ref().unwrap());
+        assert_eq!(odd.credits, None);
+        assert!(odd.limits.is_empty());
+        assert_eq!(odd.session.percentage, 2.0);
     }
 
     fn account<'a>(payload: &'a Payload, id: &str) -> &'a RemoteAccount {

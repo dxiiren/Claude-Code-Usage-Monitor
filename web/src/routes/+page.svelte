@@ -80,6 +80,8 @@
 	async function relogin(id: string) {
 		const acc = snap.accounts.find((a) => a.id === id);
 		rowError = { ...rowError, [id]: '' };
+		// a login left open for another account would keep its CLI (and its browser window) waiting
+		if (login && login.accountId !== id) await post('/api/login/cancel', { sessionId: login.sessionId }).catch(() => undefined);
 		login = null;
 		starting = true;
 		try {
@@ -251,6 +253,7 @@
 							<span class="name">{a.name}</span>
 							{#if a.provider === 'codex'}<span class="ptag" data-testid="codex-tag">Codex</span>{/if}
 							{#if a.plan}<span class="plan">{a.plan}</span>{/if}
+							{#if a.loginPending && login?.accountId !== a.id}<span class="badge" data-testid="login-waiting">sign-in waiting &mdash; Re-login to continue</span>{/if}
 							{#if a.status.state === 'expired'}<span class="badge" data-testid="status-badge">{a.status.refused ? 'Login refused' : 'Expired'} &mdash; log in again</span>
 							{:else if a.status.state === 'logged_out' && a.email}<span class="badge" data-testid="status-badge">Not logged in</span>{/if}
 							<span class="email">{a.email ?? 'Not logged in'}</span>
