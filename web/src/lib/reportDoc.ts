@@ -157,8 +157,7 @@ export function dayChart(r: ReportPayload, palette = PRINT_PALETTE): Drawn {
  * reads "<1%") is on it too, and "not used at all" would contradict that row.
  */
 export function idleWording(r: ReportPayload): string {
-	const touched = r.accounts.some((a) => r.idle.includes(a.name) && a.total > 0);
-	return r.idleBelow > 1 || touched ? `Used less than ${Math.max(1, r.idleBelow)}%` : 'Not used at all';
+	return r.idleBelow > 1 || r.idleUsed ? `Used less than ${Math.max(1, r.idleBelow)}%` : 'Not used at all';
 }
 
 /** The 5-hour window by its name from Settings, in running text ("hourly session"). */

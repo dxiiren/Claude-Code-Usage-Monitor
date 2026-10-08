@@ -27,6 +27,8 @@ export interface Sample {
 	 * null or absent = not known: the reading is from before these were kept.
 	 */
 	models?: ModelLevel[] | null;
+	/** Set on a reading without a figure when it is KNOWN that the limit was not there (not just missing from the answer's data). */
+	absent?: boolean;
 }
 
 export interface ReportAccount {
@@ -43,6 +45,8 @@ const DAY_MS = 86_400_000;
 /** A reading this long after the previous one cannot belong to the same window. */
 const WINDOW_S = { session: 5 * 3600, weekly: 7 * 86_400 } as const;
 export type LimitWindow = keyof typeof WINDOW_S;
+/** A level seen under the limit at least this long before the reset means the limit was lifted early. */
+const EARLY_LIFT_S = 120;
 /** Jitter allowed in a window's reported reset time before it counts as a new window. */
 const RESET_JITTER_S = 600;
 
@@ -135,6 +139,8 @@ interface Level {
 	reset: number | null;
 	/** the account still worked on paid extra usage at this reading */
 	extra: boolean;
+	/** false = the reading carried no figure for this window and is counted as zero */
+	real: boolean;
 }
 
 /**
@@ -148,7 +154,8 @@ function levels(samples: Sample[], window: LimitWindow): Level[] {
 		ts: s.ts,
 		pct: (weekly ? s.weekPct : s.pct) ?? null,
 		reset: (weekly ? s.weekReset : s.reset) ?? null,
-		extra: (s.extraLeft ?? 0) > 0
+		extra: (s.extraLeft ?? 0) > 0,
+		absent: !!s.absent
 	}));
 	// for each position, the next reading that has a percentage
 	const next: ((typeof raw)[number] | null)[] = new Array(raw.length).fill(null);
@@ -158,14 +165,14 @@ function levels(samples: Sample[], window: LimitWindow): Level[] {
 	for (let i = 0; i < raw.length; i++) {
 		const cur = raw[i];
 		if (cur.pct !== null) {
-			out.push({ ts: cur.ts, pct: cur.pct, reset: cur.reset, extra: cur.extra });
+			out.push({ ts: cur.ts, pct: cur.pct, reset: cur.reset, extra: cur.extra, real: true });
 			known = cur;
 			continue;
 		}
 		const before = known?.reset ?? null;
 		const after = next[i]?.reset ?? null;
 		const sameWindow = before !== null && after !== null && Math.abs(after - before) <= RESET_JITTER_S;
-		if (!sameWindow) out.push({ ts: cur.ts, pct: 0, reset: cur.reset, extra: false });
+		if (!sameWindow) out.push({ ts: cur.ts, pct: 0, reset: cur.reset, extra: false, real: cur.absent });
 	}
 	return out;
 }
@@ -244,7 +251,8 @@ function modelSeries(samples: Sample[]): Map<string, { label: string; other: boo
 	for (const [key, series] of out)
 		for (const s of withModels) {
 			const m = s.models!.find((x) => x.label.toLowerCase() === key);
-			series.samples.push({ ts: s.ts, pct: null, reset: null, weekPct: m?.pct ?? null, weekReset: m?.reset ?? null });
+			// the answer listed its limits and this one was not among them: it was not there
+			series.samples.push({ ts: s.ts, pct: null, reset: null, weekPct: m?.pct ?? null, weekReset: m?.reset ?? null, absent: !m });
 		}
 	return out;
 }
@@ -270,7 +278,9 @@ export function limitHits(samples: Sample[], limitAt: number, window: LimitWindo
 		const turned = open !== null && open.until !== null && cur.reset !== null && cur.reset > open.until + RESET_JITTER_S;
 		// A reading under the limit before the reset it was waiting for: the limit was lifted early (a raised
 		// allowance, a plan change). It held until this reading, not until the reset it once announced.
-		if (open && cur.pct < limitAt && !silent && open.until !== null && cur.ts < open.until) {
+		// Only a reading with a real figure counts, and only clearly before the reset: the reset is kept to
+		// the minute, so a reading in the seconds around it is the normal reset, not an early lift.
+		if (open && cur.real && cur.pct < limitAt && !silent && open.until !== null && cur.ts < open.until - EARLY_LIFT_S) {
 			open.until = cur.ts;
 			open.blockedSeconds = blockedIn(cur.ts);
 		}
@@ -339,6 +349,8 @@ export interface Report {
 	topTotal: number;
 	/** current accounts that had readings, were never at a limit, and stayed under the "not used" level */
 	idle: string[];
+	/** one of them did use something (inside a slot or outside): "not used at all" would be untrue for the list */
+	idleUsed: boolean;
 	/** current accounts without a single reading in the period: nothing is known about their use */
 	noReadings: string[];
 	/** % used at times no slot covers; it is in none of the figures above */
@@ -419,6 +431,7 @@ export function buildReport(input: ReportInput): Report {
 		d.total = round1(d.slots.reduce((x, y) => x + y, 0));
 		d.slots = d.slots.map(round1);
 	}
+	const idle = kept.filter((a) => a.current && a.had && !a.limited && Math.round(a.total + a.outside) < input.idleBelow);
 	const slotTotals = slots.map((_, i) => round1(shown.reduce((x, a) => x + a.slots[i], 0)));
 	const total = round1(slotTotals.reduce((x, y) => x + y, 0));
 	const hasData = days.some((d) => d.hasData);
@@ -446,7 +459,8 @@ export function buildReport(input: ReportInput): Report {
 		topAccounts: hasData && top && top.total > 0 ? shown.filter((a) => shownAs(a.total) === shownAs(top.total)).map((a) => `${a.name}${a.current ? '' : ' (removed)'}`) : [],
 		topTotal: hasData && top ? top.total : 0,
 		// judged as the page shows it (whole %), and counting use that fell outside the slots
-		idle: hasData ? kept.filter((a) => a.current && a.had && !a.limited && Math.round(a.total + a.outside) < input.idleBelow).map((a) => a.name) : [],
+		idle: hasData ? idle.map((a) => a.name) : [],
+		idleUsed: hasData && idle.some((a) => a.slots.some((v) => v > 0) || a.total > 0 || a.outside > 0),
 		noReadings: hasData ? kept.filter((a) => a.current && !a.had).map((a) => a.name) : [],
 		outsideSlots: round1(kept.reduce((x, a) => x + a.outside, 0))
 	};

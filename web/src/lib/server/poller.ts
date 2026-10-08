@@ -232,9 +232,15 @@ export function usageFromResponse(body: unknown): Usage | null {
 			return scopeText(f) ? `${f.label} (${scopeText(f)})` : f.label;
 		});
 		// whatever is still the same after that is numbered, so no two rows carry one name
-		const labels = named.map((n, i) => {
-			const same = named.reduce<number[]>((acc, x, j) => (x.toLowerCase() === n.toLowerCase() ? [...acc, j] : acc), []);
-			return same.length > 1 ? `${n} ${same.indexOf(i) + 1}` : n;
+		const labels: string[] = [];
+		const taken = new Set<string>();
+		named.forEach((n, i) => {
+			const clash = named.some((x, j) => j !== i && x.toLowerCase() === n.toLowerCase());
+			let label = n;
+			// a number is added on a clash, and moved on while that name is in use as well (a kind may itself end in " 1")
+			for (let k = 1; (clash && k === 1) || taken.has(label.toLowerCase()) || (label !== n && named.some((x) => x.toLowerCase() === label.toLowerCase())); k++) label = `${n} ${k}`;
+			taken.add(label.toLowerCase());
+			labels.push(label);
 		});
 		u.models = kept.map((f, i) => ({
 			label: labels[i],

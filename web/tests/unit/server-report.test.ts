@@ -266,6 +266,15 @@ describe('limits', () => {
 		// at its limit with the reset announced for 14:00, but at 11:00 the level reads 30% in the same window
 		const lifted = [s('2026-10-06', '09:30', 80, 4.5 * 3600), s('2026-10-06', '10:00', 100, 4 * 3600), s('2026-10-06', '11:00', 30, 3 * 3600)];
 		expect(limitHits(lifted, 100)).toMatchObject([{ ts: kl('2026-10-06', '10:00'), until: kl('2026-10-06', '11:00'), blockedSeconds: 3600 }]);
+		// a reading without a figure for the window is no evidence that the limit is gone
+		const blank = [s('2026-10-06', '09:30', 80, 4.5 * 3600), s('2026-10-06', '10:00', 100, 4 * 3600), s('2026-10-06', '11:00', null)];
+		expect(limitHits(blank, 100)).toMatchObject([{ until: kl('2026-10-06', '14:00'), blockedSeconds: 4 * 3600 }]);
+		// nor is a reading in the seconds around the reset, which is kept to the minute
+		const edge: Sample[] = [
+			{ ts: kl('2026-10-06', '10:00'), pct: 100, reset: kl('2026-10-06', '14:00') + 40 },
+			{ ts: kl('2026-10-06', '14:00') + 50, pct: 0, reset: kl('2026-10-06', '19:00') }
+		];
+		expect(limitHits(edge, 100)).toMatchObject([{ until: kl('2026-10-06', '14:01'), blockedSeconds: 4 * 3600 + 60 }]);
 		// a normal reset (the level falls after the reset time) keeps the reset as the end
 		const normal = [s('2026-10-06', '09:30', 80, 4.5 * 3600), s('2026-10-06', '10:00', 100, 4 * 3600), s('2026-10-06', '14:05', 2, 5 * 3600)];
 		expect(limitHits(normal, 100)).toMatchObject([{ until: kl('2026-10-06', '14:00'), blockedSeconds: 4 * 3600 }]);
@@ -431,6 +440,12 @@ describe('figures that must not mislead', () => {
 		expect(summaryLines(r)).toContain('Used less than 1%: Alpha, Gamma.');
 		const none: ReportPayload = { ...full(new Map()), ...report([], { accounts: three, samples: new Map([['a', flat], ['c', flat]]) }) };
 		expect(summaryLines(none)).toContain('Not used at all: Alpha, Gamma.');
+		// use that fell outside every slot is use too: the account's row is 0%, yet it was not "not used at all"
+		const morning = [{ name: 'Morning', from: 540, to: 780 }];
+		const late = [s('2026-10-06', '20:00', 0), s('2026-10-06', '21:00', 0.3)];
+		const out: ReportPayload = { ...full(new Map()), ...report([], { accounts: three, slots: morning, samples: new Map([['a', late], ['c', [s('2026-10-06', '09:30', 0), s('2026-10-06', '10:30', 50)]]]) }) };
+		expect(out.idle).toEqual(['Alpha']);
+		expect(summaryLines(out)).toContain('Used less than 1%: Alpha.');
 	});
 	it('the prose uses the window name from Settings, like the limit rows do', () => {
 		const r = full(new Map([['a', rise(10, 30)]]), { labels: { session: 'Focus block', weekly: 'Week' } });

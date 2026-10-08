@@ -217,7 +217,8 @@ export function saveSettings(patch: Record<string, unknown>, admin = true): Sett
 	}
 	const next = { ...getSettings(), ...Object.fromEntries(clean) } as Settings;
 	if (next.warnAt >= next.highAt) throw new UserError('The amber level must be lower than the red level.');
-	if (next.hourlyLabel.trim().toLowerCase() === next.weeklyLabel.trim().toLowerCase())
+	// only when a name is being saved: names that were already equal must not block every other setting
+	if (('hourlyLabel' in patch || 'weeklyLabel' in patch) && next.hourlyLabel.trim().toLowerCase() === next.weeklyLabel.trim().toLowerCase())
 		throw new UserError('The two usage windows need different names, or their bars and limits cannot be told apart.');
 	const d = database();
 	d.exec('BEGIN IMMEDIATE');

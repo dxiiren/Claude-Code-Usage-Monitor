@@ -233,6 +233,19 @@ describe('settings that would make screens ambiguous', () => {
 		expect(() => settings.saveSettings({ weeklyLabel: before.hourlyLabel })).toThrow(/different names/);
 		expect(settings.getSettings()).toMatchObject({ hourlyLabel: before.hourlyLabel, weeklyLabel: before.weeklyLabel });
 	});
+	it('names that were already equal (saved by an older version) do not block other settings', () => {
+		const before = settings.getSettings();
+		const d = db.database();
+		const put = d.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+		put.run('hourlyLabel', JSON.stringify('Same'));
+		put.run('weeklyLabel', JSON.stringify('same'));
+		settings.resetSettingsCache();
+		expect(settings.saveSettings({ idleBelow: before.idleBelow }).hourlyLabel).toBe('Same');
+		expect(() => settings.saveSettings({ hourlyLabel: 'same' })).toThrow(/different names/);
+		settings.saveSettings({ hourlyLabel: before.hourlyLabel });
+		settings.saveSettings({ weeklyLabel: before.weeklyLabel });
+		expect(settings.getSettings()).toMatchObject({ hourlyLabel: before.hourlyLabel, weeklyLabel: before.weeklyLabel });
+	});
 });
 
 describe('reading history', () => {

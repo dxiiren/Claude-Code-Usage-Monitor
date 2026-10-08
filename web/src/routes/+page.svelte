@@ -62,6 +62,9 @@
 		addError = '';
 		notice = '';
 		starting = true;
+		// a login left open for another account would keep its CLI (and its browser window) waiting
+		if (login) await post('/api/login/cancel', { sessionId: login.sessionId }).catch(() => undefined);
+		login = null;
 		try {
 			const r = await post<{ account: { id: string; name: string }; login: Omit<LoginInfo, 'accountId' | 'accountName'> }>(
 				'/api/accounts',

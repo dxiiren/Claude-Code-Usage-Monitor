@@ -257,6 +257,20 @@ describe('parsers', () => {
 		})!;
 		// extra_usage is the paid-usage switch, not an allowance
 		expect(teams.models!.map((m) => m.label).sort()).toEqual(['pool 1', 'pool 2', 'team (a)', 'team (b)']);
+		// ... also when the provider's own names already look numbered
+		const odd = P.usageFromResponse({
+			seven_day: { utilization: 20 },
+			limits: [
+				{ kind: 'foo', percent: 1, scope: { t: 'x' } },
+				{ kind: 'foo', percent: 2, scope: { g: 'x' } },
+				{ kind: 'foo (x) 1', percent: 3 },
+				{ kind: 'bar', percent: 4 },
+				{ kind: 'bar', percent: 5, scope: { a: [1] } },
+				{ kind: 'bar 1', percent: 6 }
+			]
+		})!;
+		const names = odd.models!.map((m) => m.label.toLowerCase());
+		expect(new Set(names).size).toBe(names.length);
 		// an answer made only of such a bucket is still an answer
 		expect(P.usageFromResponse({ seven_day_cowork: { utilization: 5 } })).toMatchObject({ models: [{ label: 'seven day cowork', other: true }] });
 		// no per-model limit in the answer: the field is left out, as before
