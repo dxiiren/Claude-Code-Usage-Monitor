@@ -23,7 +23,8 @@ export const PRINT_PALETTE: Palette = {
 	text: '#1c1917',
 	muted: '#57534e',
 	grid: '#d6d3d1',
-	series: ['#7e57c8', '#2f7fd0', '#1b8a7c', '#c8741f', '#bf3989', '#5c6b7a'],
+	// the same six as --series-1..6 in app.css (light theme)
+	series: ['#4a3aa7', '#eb6834', '#2a78d6', '#1baf7a', '#eda100', '#e87ba4'],
 	font: 'Arial, Helvetica, sans-serif'
 };
 

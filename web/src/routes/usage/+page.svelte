@@ -66,11 +66,17 @@
 	const needing = $derived(snap.accounts.filter((a) => a.enabled && needsLogin(a.status.state)));
 	/** Signing an account in again happens on the Accounts screen: only users who have it get the links. */
 	const canManage = $derived(data.menu.some((m) => m.id === 'accounts'));
-	const badgeText = (state: string) => (state === 'expired' ? 'Expired — log in again' : 'Not logged in');
+	const badgeText = (st: { state: string; refused?: boolean }) =>
+		st.state !== 'expired' ? 'Not logged in' : st.refused ? 'Login refused — log in again' : 'Expired — log in again';
 
 	type Acc = Snapshot['accounts'][number];
 	/** At a limit right now in either window (a window that has reset since no longer counts). */
-	const isBlocked = (a: Acc) => windowFull(a.usage?.session, now) || windowFull(a.usage?.weekly, now);
+	const atLimit = (a: Acc) => windowFull(a.usage?.session, now) || windowFull(a.usage?.weekly, now);
+	/** Past its limit but still working, on paid extra usage that has not run out. */
+	const onExtra = (a: Acc) => atLimit(a) && !!a.usage?.extra && a.usage.extra.remaining > 0;
+	/** At a limit with nothing to carry it further: it cannot be used until the limit resets. */
+	const isBlocked = (a: Acc) => atLimit(a) && !onExtra(a);
+	const money = (n: number) => n.toFixed(2);
 	/** The last good reading is too old to describe the account (server mode; see staleAfterSeconds). */
 	const isOld = (a: Acc) => snap.staleAfterSeconds !== null && a.usageReadUnix !== null && now / 1000 - a.usageReadUnix > snap.staleAfterSeconds;
 	/**
@@ -87,7 +93,7 @@
 	const best = $derived.by(() => {
 		// a session that has reset since it was read is empty again, whatever the old number says
 		const used = (a: Acc) => (over(a.usage?.session) ? 0 : (a.usage?.session?.percentage ?? 0));
-		return current.filter((a) => !isBlocked(a)).sort((x, y) => used(x) - used(y))[0] ?? null;
+		return current.filter((a) => !atLimit(a)).sort((x, y) => used(x) - used(y))[0] ?? null;
 	});
 	const allBlocked = $derived(current.length > 0 && !best);
 
@@ -142,7 +148,8 @@
 			</span>
 		{:else if allBlocked}
 			<span class="tag full">All at their limit</span>
-			{#if nextFree}<span class="muted">next account frees up in {resetsIn(nextFree, now, true)}</span>{/if}
+			{#if current.some(onExtra)}<span class="muted">{current.filter(onExtra).map((a) => a.name).join(', ')} still {current.filter(onExtra).length === 1 ? 'works' : 'work'} on paid extra usage</span>
+			{:else if nextFree}<span class="muted">next account frees up in {resetsIn(nextFree, now, true)}</span>{/if}
 		{:else if onlyOld}
 			<span class="tag none">No current reading</span>
 			<span class="muted">the last readings failed or are out of date</span>
@@ -177,8 +184,9 @@
 					<div class="who">
 						<span class="name">{a.name}</span>
 						{#if a.provider === 'codex'}<span class="ptag" data-testid="codex-tag">Codex</span>{/if}
-						{#if login}<span class="pill" data-testid="status-badge">{badgeText(a.status.state)}</span>{/if}
+						{#if login}<span class="pill" data-testid="status-badge">{badgeText(a.status)}</span>{/if}
 						{#if blocked}<span class="pill">blocked</span>{/if}
+						{#if !login && onExtra(a)}<span class="pill extra" data-testid="extra-usage">extra usage</span>{/if}
 						{#if !a.enabled}<span class="pill dim">hidden on widget</span>{/if}
 						<span class="email">{a.email ?? 'not logged in'}</span>
 					</div>
@@ -197,6 +205,12 @@
 						{#each (a.usage?.models ?? []).filter((m) => windowFull(m, now)) as m (m.label)}
 							<p class="error full" data-testid="model-limit">{m.label} limit reached{m.resetsAt ? `, resets in ${resetsIn(m.resetsAt, now)}` : ''}. Other models still work.</p>
 						{/each}
+						{#if a.usage?.extra && atLimit(a)}
+							<p class="error" data-testid="extra-line">
+								{#if a.usage.extra.remaining > 0}Past its limit and still working on paid extra usage: {money(a.usage.extra.total - a.usage.extra.remaining)} of {money(a.usage.extra.total)} used.
+								{:else}Its paid extra usage is used up as well ({money(a.usage.extra.total)}).{/if}
+							</p>
+						{/if}
 						{#if a.status.state === 'error'}<p class="error" data-testid="status-error">{a.status.message}</p>{/if}
 						{#if old}<p class="error" data-testid="old-reading">Last read {ago(a.usageReadUnix!, now)} ago{a.enabled ? '' : ' (hidden accounts are not read)'}. These numbers may be out of date.</p>{/if}
 					{/if}
@@ -363,6 +377,9 @@
 		background: var(--codex-bg);
 		color: var(--codex-text);
 		border: 1px solid var(--codex-border);
+	}
+	.pill.extra {
+		background: var(--card-amber);
 	}
 	.pill.dim {
 		background: var(--card-track);

@@ -211,6 +211,54 @@ test('usage: a limit whose reset time has passed no longer blocks and is not quo
 	await expect(best).toContainText('Hourly session 12% used, weekly session 44%');
 });
 
+test('usage: past its limit on paid extra usage is not "blocked"; a refused login is not "expired"', async ({ page }) => {
+	await signIn(page);
+	const now = Math.floor(Date.now() / 1000);
+	const usage = {
+		session: { available: true, percentage: 20, resets_at_unix: now + 3600 },
+		weekly: { available: true, percentage: 100, resets_at_unix: now + 86400 },
+		extra: { percentage: 25, remaining: 37.5, total: 50 }
+	};
+	const store = (usageJson: object, error: object | null) => {
+		const d = new DatabaseSync(path.join(data, 'accounts.db'));
+		d.exec('PRAGMA busy_timeout = 5000');
+		d.prepare("UPDATE account_usage SET usage_json = ?, error_json = ?, ok_unix = ?, polled_unix = ? WHERE account_id = 'alpha'").run(JSON.stringify(usageJson), error ? JSON.stringify(error) : null, now - 200, now - 200);
+		d.close();
+	};
+	store(usage, null);
+	await page.goto('/usage');
+	const row = page.locator('li[data-account="alpha"]');
+	// the weekly limit is reached, yet the account still works: it is paying its way
+	await expect(row.getByTestId('extra-usage')).toHaveText('extra usage');
+	await expect(row.getByText('blocked', { exact: true })).toHaveCount(0);
+	await expect(row.getByTestId('extra-line')).toContainText('12.50 of 50.00 used');
+	await expect(page.getByTestId('best')).toContainText('All at their limit');
+	await expect(page.getByTestId('best')).toContainText('alpha still works on paid extra usage');
+	await page.screenshot({ path: path.join(shots, 'usage-extra-usage.png'), fullPage: true });
+
+	// the paid amount is gone as well: now it is blocked
+	store({ ...usage, extra: { percentage: 100, remaining: 0, total: 50 } }, null);
+	await page.reload();
+	await expect(row.getByText('blocked', { exact: true })).toBeVisible();
+	await expect(row.getByTestId('extra-usage')).toHaveCount(0);
+	await expect(row.getByTestId('extra-line')).toContainText('used up as well');
+
+	// HTTP 403: the login was refused, which is not the same as expired
+	store(usage, { http_status: 403 });
+	await page.reload();
+	await expect(row.getByTestId('status-badge')).toHaveText('Login refused — log in again');
+	await page.goto('/');
+	const acc = page.locator('li.acc').filter({ hasText: 'alpha@example.com' });
+	await expect(acc.getByTestId('status-badge')).toContainText('Login refused');
+	await expect(acc).toContainText('Claude refused this login (HTTP 403)');
+
+	// the next good reading clears all of it
+	await page.goto('/usage');
+	await page.getByTestId('refresh-all').click();
+	await expect(page.getByTestId('refresh-notice')).toHaveText('Refreshed 1 account.');
+	await expect(page.getByTestId('best')).toContainText('Hourly session 12% used, weekly session 44%');
+});
+
 test('an account whose token the usage endpoint rejects shows as expired', async ({ page }) => {
 	await signIn(page);
 	await page.getByLabel('Add an account').fill('beta');

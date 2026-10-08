@@ -248,7 +248,7 @@
 							<span class="name">{a.name}</span>
 							{#if a.provider === 'codex'}<span class="ptag" data-testid="codex-tag">Codex</span>{/if}
 							{#if a.plan}<span class="plan">{a.plan}</span>{/if}
-							{#if a.status.state === 'expired'}<span class="badge" data-testid="status-badge">Expired &mdash; log in again</span>
+							{#if a.status.state === 'expired'}<span class="badge" data-testid="status-badge">{a.status.refused ? 'Login refused' : 'Expired'} &mdash; log in again</span>
 							{:else if a.status.state === 'logged_out' && a.email}<span class="badge" data-testid="status-badge">Not logged in</span>{/if}
 							<span class="email">{a.email ?? 'Not logged in'}</span>
 						</div>
@@ -259,7 +259,7 @@
 							checked={a.enabled}
 							onchange={(e) => act(a.id, { action: 'enable', enabled: e.currentTarget.checked })}
 						/>
-						<span>{a.enabled ? 'On widget' : 'Hidden'}</span>
+						<span>On widget</span>
 					</label>
 				</div>
 
@@ -282,6 +282,12 @@
 					{#each (a.usage?.models ?? []).filter((m) => windowFull(m, now)) as m (m.label)}
 						<p class="transient" data-testid="model-limit">{m.label} limit reached{m.resetsAt ? `, resets in ${resetsIn(m.resetsAt, now)}` : ''}. Other models still work.</p>
 					{/each}
+				{/if}
+				{#if a.email && !needsLogin(a.status.state) && a.usage?.extra && (windowFull(a.usage.session, now) || windowFull(a.usage.weekly, now))}
+					<p class="transient" data-testid="extra-line">
+						{#if a.usage.extra.remaining > 0}Past its limit and still working on paid extra usage: {(a.usage.extra.total - a.usage.extra.remaining).toFixed(2)} of {a.usage.extra.total.toFixed(2)} used.
+						{:else}Its paid extra usage is used up as well ({a.usage.extra.total.toFixed(2)}).{/if}
+					</p>
 				{/if}
 				{#if a.email && !needsLogin(a.status.state) && isOld(a)}
 					<p class="transient" data-testid="old-reading">Last read {ago(a.usageReadUnix!, now)} ago{a.enabled ? '' : ' (hidden accounts are not read)'}. These numbers may be out of date.</p>
@@ -465,10 +471,10 @@
 		justify-content: space-between;
 		align-items: flex-start;
 		gap: 0.75rem;
-		flex-wrap: wrap;
 	}
 	.who {
 		display: flex;
+		flex: 1;
 		flex-wrap: wrap;
 		align-items: baseline;
 		gap: 0.25rem 0.6rem;
@@ -525,6 +531,8 @@
 		overflow-wrap: anywhere;
 	}
 	.toggle {
+		flex: none;
+		white-space: nowrap;
 		display: flex;
 		align-items: center;
 		gap: 0.35rem;
@@ -568,6 +576,17 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.4rem;
+	}
+	@media (max-width: 520px) {
+		/* the five controls share one line on a phone instead of leaving "Remove" on a line of its own */
+		.tools {
+			display: grid;
+			grid-template-columns: auto auto 1fr 1fr 1fr;
+		}
+		.tools button {
+			min-width: 0;
+			padding-inline: 0.35rem;
+		}
 	}
 	.rename {
 		display: flex;

@@ -148,7 +148,11 @@ test('rename, reorder, enable toggle', async ({ page }) => {
 	await expect(page.locator('li.acc .name')).toHaveText(['alpha', 'gamma2', 'beta']);
 	const box = row(page, 'gamma2').getByRole('checkbox');
 	await box.uncheck();
-	await expect(row(page, 'gamma2')).toContainText('Hidden');
+	// the label names the box and stays the same; the tick is what says whether it is on the widget
+	await expect(box).not.toBeChecked();
+	await expect(row(page, 'gamma2').locator('label.toggle')).toHaveText('On widget');
+	// the row is dimmed only once the server has saved the change (and rewritten the widget's theme)
+	await expect(row(page, 'gamma2')).toHaveClass(/(^| )off( |$)/);
 	const theme = JSON.parse(fs.readFileSync(path.join(appDir, 'themes', 'multi-claude-accounts.json'), 'utf8'));
 	const ids: string[] = theme.surfaces[0].children.map((c: { id: string }) => c.id);
 	expect(ids.some((i) => i.startsWith('name-gamma'))).toBe(false);

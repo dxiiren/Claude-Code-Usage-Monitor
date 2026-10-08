@@ -43,9 +43,17 @@ export interface ModelLimit {
 	percentage: number;
 	resets_at_unix: number | null;
 }
+/** Paid extra usage that carries an account past a spent window (claude.rs claude_credits). Amounts are in the account's own currency. */
+export interface ExtraUsage {
+	percentage: number;
+	remaining: number;
+	total: number;
+}
 export interface Usage {
 	session: WindowUsage;
 	weekly: WindowUsage;
+	/** Present only while a window is spent and paid extra usage has started covering the overflow. */
+	extra?: ExtraUsage;
 	/** Present only when the answer carried per-model limits: an account can be out of one model while both windows have room. */
 	models?: ModelLimit[];
 }
@@ -157,7 +165,27 @@ export function usageFromResponse(body: unknown): Usage | null {
 	}
 	if (!u.session.available && !u.weekly.available && !anyLimit) return null;
 	if (models.size) u.models = [...models.values()];
+	const extra = extraUsage(r.spend, u);
+	if (extra) u.extra = extra;
 	return u;
+}
+
+/** claude.rs claude_credits: `spend` = { enabled, used: { amount_minor, exponent }, limit: { ... } }. */
+function extraUsage(spend: unknown, u: Usage): ExtraUsage | null {
+	if (!spend || typeof spend !== 'object') return null;
+	const s = spend as { enabled?: unknown; used?: unknown; limit?: unknown };
+	const major = (a: unknown): number | null => {
+		const x = a as { amount_minor?: unknown; exponent?: unknown } | null;
+		if (!x || typeof x.amount_minor !== 'number') return null;
+		return x.amount_minor / 10 ** (typeof x.exponent === 'number' ? x.exponent : 0);
+	};
+	const used = major(s.used);
+	const total = major(s.limit);
+	if (s.enabled !== true || used === null || total === null || !Number.isFinite(total) || total <= 0) return null;
+	// it only matters once a window is spent and the paid amount has started to be used
+	const reached = u.session.percentage >= 100 || u.weekly.percentage >= 100;
+	if (!reached || used <= 0) return null;
+	return { percentage: Math.min(100, Math.max(0, (used / total) * 100)), remaining: Math.max(0, total - used), total };
 }
 
 const hNum = (h: Headers, n: string) => {

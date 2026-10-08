@@ -112,7 +112,7 @@ export async function snapshot() {
 							.map((o) => o.name)
 					: [],
 				status: loginStatus({ pollError: stale ? null : u?.pollError, auth: auths[i], everLoggedIn: !!a.email, provider: a.provider }),
-				usage: u ? { session: u.session, weekly: u.weekly, models: u.models } : null,
+				usage: u ? { session: u.session, weekly: u.weekly, models: u.models, extra: u.extra } : null,
 				usageReadUnix: u?.readUnix ?? null
 			};
 		})

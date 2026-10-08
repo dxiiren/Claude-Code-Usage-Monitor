@@ -14,6 +14,8 @@ export interface UsageWindow {
 export interface AccountUsage {
 	session: UsageWindow | null;
 	weekly: UsageWindow | null;
+	/** Paid extra usage in force past a spent window (server mode); null when there is none. */
+	extra: { percentage: number; remaining: number; total: number } | null;
 	/** Limits that cover one model only (server mode, when the provider reports them). */
 	models: (UsageWindow & { label: string })[];
 	/** The widget's PollError as serialized (e.g. "token_expired", {"http_status":401}); null when the last poll was fine. */
@@ -61,6 +63,7 @@ export function readUsage(accounts: UsageAccount[]): UsageSnapshot {
 			session: win(u.session),
 			weekly: win(u.weekly),
 			models: [],
+			extra: null,
 			pollError: e.error ?? null,
 			readUnix: null
 		};
