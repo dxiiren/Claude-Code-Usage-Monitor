@@ -12,6 +12,8 @@ export interface Sample {
 	/** the 7-day window of the same reading */
 	weekPct?: number | null;
 	weekReset?: number | null;
+	/** paid extra usage left at this reading, kept only while a window was spent; null = none in force */
+	extraLeft?: number | null;
 }
 
 export interface ReportAccount {
@@ -118,6 +120,8 @@ interface Level {
 	ts: number;
 	pct: number;
 	reset: number | null;
+	/** the account still worked on paid extra usage at this reading */
+	extra: boolean;
 }
 
 /**
@@ -127,7 +131,12 @@ interface Level {
  */
 function levels(samples: Sample[], window: LimitWindow): Level[] {
 	const weekly = window === 'weekly';
-	const raw = samples.map((s) => ({ ts: s.ts, pct: (weekly ? s.weekPct : s.pct) ?? null, reset: (weekly ? s.weekReset : s.reset) ?? null }));
+	const raw = samples.map((s) => ({
+		ts: s.ts,
+		pct: (weekly ? s.weekPct : s.pct) ?? null,
+		reset: (weekly ? s.weekReset : s.reset) ?? null,
+		extra: (s.extraLeft ?? 0) > 0
+	}));
 	// for each position, the next reading that has a percentage
 	const next: ((typeof raw)[number] | null)[] = new Array(raw.length).fill(null);
 	for (let i = raw.length - 2; i >= 0; i--) next[i] = raw[i + 1].pct !== null ? raw[i + 1] : next[i + 1];
@@ -136,14 +145,14 @@ function levels(samples: Sample[], window: LimitWindow): Level[] {
 	for (let i = 0; i < raw.length; i++) {
 		const cur = raw[i];
 		if (cur.pct !== null) {
-			out.push({ ts: cur.ts, pct: cur.pct, reset: cur.reset });
+			out.push({ ts: cur.ts, pct: cur.pct, reset: cur.reset, extra: cur.extra });
 			known = cur;
 			continue;
 		}
 		const before = known?.reset ?? null;
 		const after = next[i]?.reset ?? null;
 		const sameWindow = before !== null && after !== null && Math.abs(after - before) <= RESET_JITTER_S;
-		if (!sameWindow) out.push({ ts: cur.ts, pct: 0, reset: cur.reset });
+		if (!sameWindow) out.push({ ts: cur.ts, pct: 0, reset: cur.reset, extra: false });
 	}
 	return out;
 }
@@ -189,8 +198,10 @@ export interface LimitSpell {
 	before: boolean;
 	/** when the window resets and the account is free again, when a reading carried it */
 	until: number | null;
-	/** seconds from `ts` to that reset */
+	/** seconds the account could not be used: at 100% and not on paid extra usage, up to that reset */
 	blockedSeconds: number | null;
+	/** paid extra usage kept the account working past 100%: for the whole stretch, for part of it, or not at all */
+	extra: 'all' | 'part' | 'none';
 }
 
 export interface LimitHit extends Omit<LimitSpell, 'last'> {
@@ -201,26 +212,39 @@ export interface LimitHit extends Omit<LimitSpell, 'last'> {
 /**
  * Every stretch at or above `limitAt` in one window, from the first reading that saw the account
  * there to the last. A stretch already running at the first reading is kept: the account was
- * blocked, even though no reading saw it get there.
+ * blocked, even though no reading saw it get there. Each reading's state holds until the next
+ * one, and the last one's until the reset: only time at 100% without paid extra usage is blocked.
  */
 export function limitHits(samples: Sample[], limitAt: number, window: LimitWindow = 'session'): LimitSpell[] {
 	const out: LimitSpell[] = [];
 	let open: LimitSpell | null = null;
 	let prev: Level | null = null;
+	// the open stretch as runs of one state, each from the reading that began it: blocked, or not (paid extra usage, or under 100%)
+	let runs: { ts: number; blocked: boolean }[] = [];
+	let sawExtra = false;
+	/** Blocked seconds of the open stretch: its blocked runs, none of them past the reset. */
+	const blockedIn = (until: number) => runs.reduce((sum, r, i) => (r.blocked ? sum + Math.max(0, Math.min(runs[i + 1]?.ts ?? until, until) - r.ts) : sum), 0);
 	for (const cur of levels(samples, window)) {
 		const silent = prev !== null && cur.ts - prev.ts > WINDOW_S[window];
 		// a later reset time means the window turned over, even with the level still at the limit
 		const turned = open !== null && open.until !== null && cur.reset !== null && cur.reset > open.until + RESET_JITTER_S;
 		if (cur.pct < limitAt || silent || turned) open = null;
 		if (cur.pct >= limitAt) {
-			if (!open) out.push((open = { ts: cur.ts, last: cur.ts, window, pct: cur.pct, before: prev === null || silent, until: null, blockedSeconds: null }));
+			if (!open) {
+				out.push((open = { ts: cur.ts, last: cur.ts, window, pct: cur.pct, before: prev === null || silent, until: null, blockedSeconds: null, extra: 'none' }));
+				runs = [];
+				sawExtra = false;
+			}
+			const full = cur.pct >= 100;
+			const blocked = full && !cur.extra;
+			if (runs.at(-1)?.blocked !== blocked) runs.push({ ts: cur.ts, blocked });
+			sawExtra ||= full && cur.extra;
+			open.extra = !sawExtra ? 'none' : runs.some((r) => r.blocked) ? 'part' : 'all';
 			open.last = cur.ts;
 			open.pct = Math.max(open.pct, cur.pct);
-			if (cur.reset !== null && cur.reset > cur.ts) {
-				// to the minute: the provider reports the same reset a second early or late from reading to reading
-				open.until = Math.round(cur.reset / 60) * 60;
-				open.blockedSeconds = open.until - open.ts;
-			}
+			// to the minute: the provider reports the same reset a second early or late from reading to reading
+			if (cur.reset !== null && cur.reset > cur.ts) open.until = Math.round(cur.reset / 60) * 60;
+			if (open.until !== null) open.blockedSeconds = blockedIn(open.until);
 		}
 		prev = cur;
 	}

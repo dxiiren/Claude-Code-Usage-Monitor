@@ -78,17 +78,23 @@ type Hit = ReportPayload['hits'][number];
 
 /** When a limit was reached; "Before ..." when no reading saw the account get there. */
 export const reachedLabel = (h: Hit, timezone: string) => `${h.before ? 'Before ' : ''}${whenLabel(h.ts, timezone)}`;
-/** Only 100% blocks an account; Settings can count a lower level as "limit reached". */
-export const isBlocked = (h: Hit) => h.pct >= 100;
+/** Past 100% on paid extra usage the whole time: the account kept working. */
+export const onExtra = (h: Hit) => h.pct >= 100 && h.extra === 'all';
+/** Only 100% blocks an account, and not while paid extra usage covers it; Settings can count a lower level as "limit reached". */
+export const isBlocked = (h: Hit) => h.pct >= 100 && h.extra !== 'all';
 /** "2 h 15 min"; "at least ..." when it was reached before the first reading that saw it. */
 export function blockedFor(h: Hit): string {
+	if (onExtra(h)) return 'not blocked (paid extra usage)';
 	if (!isBlocked(h)) return `not blocked (${pct(h.pct)})`;
-	return `${h.before && h.blockedSeconds !== null ? 'at least ' : ''}${blockedLabel(h.blockedSeconds)}`;
+	return `${h.before && h.blockedSeconds !== null ? 'at least ' : ''}${blockedLabel(h.blockedSeconds)}${h.extra === 'part' ? ' (the rest on paid extra usage)' : ''}`;
 }
 /** A limit's row on the page: "blocked 2 h 0 min · until Tue, 6 Oct, 11:30". */
 export function hitState(h: Hit, timezone: string): string {
-	if (!isBlocked(h)) return `reached ${pct(h.pct)}${h.until === null ? '' : ` · resets ${whenLabel(h.until, timezone)}`}`;
-	return h.until === null ? 'blocked' : `blocked ${blockedFor(h)} · until ${whenLabel(h.until, timezone)}`;
+	const resets = h.until === null ? '' : ` · resets ${whenLabel(h.until, timezone)}`;
+	if (onExtra(h)) return `not blocked: on paid extra usage${resets}`;
+	if (!isBlocked(h)) return `reached ${pct(h.pct)}${resets}`;
+	if (h.until === null) return h.extra === 'part' ? 'blocked (part of the time on paid extra usage)' : 'blocked';
+	return `blocked ${blockedFor(h)} · until ${whenLabel(h.until, timezone)}`;
 }
 
 const times = (n: number) => `${n} ${n === 1 ? 'time' : 'times'}`;
@@ -132,7 +138,9 @@ export function summaryLines(r: ReportPayload): string[] {
 	if (r.topAccount) out.push(`The most used account was ${r.topAccount} with ${pct(r.topTotal)}.`);
 	const blocked = r.hits.filter(isBlocked);
 	out.push(blocked.length ? `An account was blocked by a limit ${times(blocked.length)}: ${[...new Set(blocked.map((h) => h.account))].join(', ')}.` : 'No account was blocked by a limit.');
-	const near = r.hits.length - blocked.length;
+	const paid = r.hits.filter(onExtra);
+	if (paid.length) out.push(`An account went past a limit and kept working on paid extra usage ${times(paid.length)}: ${[...new Set(paid.map((h) => h.account))].join(', ')}.`);
+	const near = r.hits.length - blocked.length - paid.length;
 	if (near) out.push(`An account reached ${r.limitAt}% of a limit without being blocked ${times(near)}.`);
 	if (r.idle.length) out.push(`${r.idleBelow > 1 ? `Used less than ${r.idleBelow}%` : 'Not used at all'}: ${r.idle.join(', ')}.`);
 	if (r.noReadings.length) out.push(`No readings were saved for: ${r.noReadings.join(', ')}. Their use in this period is not known.`);
@@ -154,7 +162,7 @@ export function buildDoc(r: ReportPayload, doc: DocSettings, view: View, prepare
 			? [
 					{
 						type: 'p',
-						text: `Each time an account was at a limit and could not be used until that limit reset. A limit reached before the period and still in force during it is listed too.${r.limitAt < 100 ? ` Settings counts ${r.limitAt}% as a limit reached; an account is only blocked at 100%.` : ''}`
+						text: `Each time an account was at a limit and could not be used until that limit reset. A limit reached before the period and still in force during it is listed too.${r.hits.some((h) => h.extra !== 'none') ? ' An account with paid extra usage kept working past its limit for as long as that lasted; that time is not counted as blocked.' : ''}${r.limitAt < 100 ? ` Settings counts ${r.limitAt}% as a limit reached; an account is only blocked at 100%.` : ''}`
 					},
 					{
 						type: 'table',

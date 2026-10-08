@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS usage_samples (
   s_reset_unix  INTEGER,
   w_pct         REAL,                      -- weekly (7-day) % used
   w_reset_unix  INTEGER,
+  extra_left    REAL,                      -- paid extra usage left while a window was spent; NULL = none in force
   PRIMARY KEY (account_id, ts_unix)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS usage_samples_ts ON usage_samples (ts_unix);
@@ -138,6 +139,9 @@ CREATE TABLE IF NOT EXISTS meta (
 			const sc = (d.prepare('PRAGMA table_info(admin_sessions)').all() as unknown as { name: string }[]).map((c) => c.name);
 			if (!sc.includes('user_id')) d.exec('ALTER TABLE admin_sessions ADD COLUMN user_id TEXT');
 			d.exec('DELETE FROM admin_sessions WHERE user_id IS NULL');
+			// Readings from before paid extra usage was kept: add the column; NULL on old rows = none known.
+			const uc = (d.prepare('PRAGMA table_info(usage_samples)').all() as unknown as { name: string }[]).map((c) => c.name);
+			if (!uc.includes('extra_left')) d.exec('ALTER TABLE usage_samples ADD COLUMN extra_left REAL');
 		}
 		// Schema 1 DB (no provider column): add it; every existing row is Claude (the DEFAULT).
 		const cols = (d.prepare('PRAGMA table_info(accounts)').all() as unknown as { name: string }[]).map((c) => c.name);

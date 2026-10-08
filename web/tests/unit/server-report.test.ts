@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildReport, increments, limitHits, periodDates, reportDateOf, slotWindows, wallToUnix, type ReportAccount, type Sample } from '../../src/lib/server/report';
 import { slotsProblem, uncoveredMinutes, type Slot } from '../../src/lib/slots';
 import { PRINT_PALETTE, groupedBars, isOutlined } from '../../src/lib/chart';
-import { blockedLabel, buildDoc, summaryLines, toCsv, whenLabel, type DocModel, type DocSettings } from '../../src/lib/reportDoc';
+import { blockedLabel, buildDoc, hitState, isBlocked, summaryLines, toCsv, whenLabel, type DocModel, type DocSettings } from '../../src/lib/reportDoc';
 import type { ReportPayload } from '../../src/lib/server/reportData';
 
 const KL = 'Asia/Kuala_Lumpur'; // UTC+8, no DST
@@ -190,7 +190,7 @@ describe('limits', () => {
 	it('lists each time a limit was reached, with how long it stayed blocked', () => {
 		const r = report([s('2026-10-06', '09:00', 80), s('2026-10-06', '09:30', 100, 2 * 3600), s('2026-10-06', '09:35', 100, 2 * 3600 - 300)]);
 		expect(r.hits).toEqual([
-			{ ts: kl('2026-10-06', '09:30'), window: 'session', pct: 100, before: false, until: kl('2026-10-06', '11:30'), blockedSeconds: 7200, accountId: 'a', account: 'Alpha' }
+			{ ts: kl('2026-10-06', '09:30'), window: 'session', pct: 100, before: false, until: kl('2026-10-06', '11:30'), blockedSeconds: 7200, extra: 'none', accountId: 'a', account: 'Alpha' }
 		]);
 	});
 	it('a session that resets and fills again is two hits', () => {
@@ -203,14 +203,14 @@ describe('limits', () => {
 	it('a weekly limit counts even when the hourly session was never touched', () => {
 		const r = report([sw('2026-10-06', '09:00', 0, 96, 2 * DAY_S), sw('2026-10-06', '09:30', 0, 100, 2 * DAY_S - 1800), sw('2026-10-06', '09:35', 0, 100, 2 * DAY_S - 2100)]);
 		expect(r.hits).toEqual([
-			{ ts: kl('2026-10-06', '09:30'), window: 'weekly', pct: 100, before: false, until: kl('2026-10-08', '09:00'), blockedSeconds: 2 * DAY_S - 1800, accountId: 'a', account: 'Alpha' }
+			{ ts: kl('2026-10-06', '09:30'), window: 'weekly', pct: 100, before: false, until: kl('2026-10-08', '09:00'), blockedSeconds: 2 * DAY_S - 1800, extra: 'none', accountId: 'a', account: 'Alpha' }
 		]);
 		// blocked is not the same as not used
 		expect(r.accounts[0].total).toBe(0);
 		expect(r.idle).toEqual([]);
 	});
 	it('an account already at its limit at the first reading is listed, marked as reached earlier', () => {
-		expect(limitHits([{ ts: 1, pct: 100, reset: null }], 100)).toEqual([{ ts: 1, last: 1, window: 'session', pct: 100, before: true, until: null, blockedSeconds: null }]);
+		expect(limitHits([{ ts: 1, pct: 100, reset: null }], 100)).toEqual([{ ts: 1, last: 1, window: 'session', pct: 100, before: true, until: null, blockedSeconds: null, extra: 'none' }]);
 		const r = report([sw('2026-10-06', '12:22', 0, 100, 2 * DAY_S), sw('2026-10-06', '12:24', 0, 100, 2 * DAY_S - 120)]);
 		expect(r.hits).toMatchObject([{ ts: kl('2026-10-06', '12:22'), window: 'weekly', before: true, until: kl('2026-10-08', '12:22') }]);
 		expect(r.idle).toEqual([]);
@@ -262,6 +262,48 @@ describe('limits', () => {
 		const onTheLine = [sw('2026-10-07', '08:40', 0, 95, 70 * 60), sw('2026-10-07', '09:00', 0, 100, 50 * 60)];
 		expect(report(onTheLine, { date: '2026-10-07' }).hits).toHaveLength(1);
 	});
+	it('blocked time never runs past the reset, even when a later reading still shows the limit', () => {
+		// the second reading comes half an hour after the reset and carries no reset time of its own
+		const late = [s('2026-10-06', '09:00', 80), s('2026-10-06', '10:00', 100, 3600), s('2026-10-06', '11:30', 100), s('2026-10-06', '11:31', 50)];
+		expect(limitHits(late, 100)).toMatchObject([{ until: kl('2026-10-06', '11:00'), blockedSeconds: 3600 }]);
+	});
+	describe('paid extra usage', () => {
+		/** A reading at `pct` of the session, resetting at 14:00, with `left` of paid extra usage (null = none in force). */
+		const e = (hhmm: string, pct: number, left: number | null): Sample => ({ ts: kl('2026-10-06', hhmm), pct, reset: kl('2026-10-06', '14:00'), extraLeft: left });
+		it('an account that worked on it the whole time was never blocked', () => {
+			const hits = limitHits([e('09:00', 80, null), e('10:00', 100, 40), e('11:00', 100, 25), e('12:00', 100, 10)], 100);
+			expect(hits).toMatchObject([{ ts: kl('2026-10-06', '10:00'), pct: 100, extra: 'all', blockedSeconds: 0, until: kl('2026-10-06', '14:00') }]);
+		});
+		it('once it runs out the account is blocked from that reading to the reset', () => {
+			const hits = limitHits([e('09:00', 80, null), e('10:00', 100, 40), e('11:00', 100, 0), e('12:00', 100, 0)], 100);
+			expect(hits).toMatchObject([{ ts: kl('2026-10-06', '10:00'), extra: 'part', blockedSeconds: 3 * 3600 }]);
+		});
+		it('switched on while blocked, only the time before it counts', () => {
+			const hits = limitHits([e('09:00', 80, null), e('10:00', 100, null), e('10:30', 100, 50), e('12:00', 100, 20)], 100);
+			expect(hits).toMatchObject([{ extra: 'part', blockedSeconds: 1800 }]);
+		});
+		it('used up from the first reading is plain blocked', () => {
+			const hits = limitHits([e('10:00', 100, 0), e('11:00', 100, 0)], 100);
+			expect(hits).toMatchObject([{ extra: 'none', before: true, blockedSeconds: 4 * 3600 }]);
+		});
+		it('a new window starts clean: extra usage in one stretch says nothing about the next', () => {
+			const next: Sample = { ts: kl('2026-10-06', '15:00'), pct: 100, reset: kl('2026-10-06', '19:00'), extraLeft: null };
+			const hits = limitHits([e('10:00', 100, 40), { ts: kl('2026-10-06', '14:05'), pct: 3, reset: kl('2026-10-06', '19:00') }, next], 100);
+			expect(hits.map((h) => [h.extra, h.blockedSeconds])).toEqual([
+				['all', 0],
+				['none', 4 * 3600]
+			]);
+		});
+		it('with a lower "limit reached" level, the time under 100% is not blocked time', () => {
+			const hits = limitHits([e('09:00', 92, null), e('10:00', 100, null), e('11:00', 100, null)], 90);
+			expect(hits).toMatchObject([{ ts: kl('2026-10-06', '09:00'), extra: 'none', blockedSeconds: 4 * 3600 }]);
+		});
+		it('is judged per window: extra usage for a spent session does not mark a weekly level under 100%', () => {
+			const both: Sample[] = [e('10:00', 100, 40), e('11:00', 100, 30)].map((x) => ({ ...x, weekPct: 93, weekReset: kl('2026-10-09', '09:00') }));
+			expect(limitHits(both, 90, 'weekly')).toMatchObject([{ pct: 93, extra: 'none' }]);
+			expect(limitHits(both, 90, 'session')).toMatchObject([{ pct: 100, extra: 'all' }]);
+		});
+	});
 	it('reads one reset time, whichever second the provider reports it at', () => {
 		const at = kl('2026-10-08', '13:00');
 		const wobble = [at - 1, at, at - 1].map((weekReset, i) => ({ ...s('2026-10-06', `12:2${2 + i * 2}`, 0), weekPct: 100, weekReset }));
@@ -296,6 +338,27 @@ describe('the limits in the document', () => {
 		expect(whenLabel(kl('2026-10-08', '12:59'), KL)).toMatch(/Thu,? 8 Oct, 12:59/);
 		expect(summaryLines(r)).toContain('An account was blocked by a limit 1 time: Alpha.');
 		expect(summaryLines(r).join(' ')).not.toMatch(/Not used/);
+	});
+	it('an account on paid extra usage is listed as past its limit, not as blocked', () => {
+		const at = (hhmm: string, pct: number, left: number | null): Sample => ({ ts: kl('2026-10-06', hhmm), pct, reset: kl('2026-10-06', '14:00'), extraLeft: left });
+		const r = payload([at('09:00', 80, null), at('10:00', 100, 40), at('11:00', 100, 25)]);
+		const blocks = limitsOf(r);
+		expect((blocks[0] as { text: string }).text).toContain('that time is not counted as blocked');
+		expect((blocks.find((b) => b.type === 'table') as { rows: string[][] }).rows[0].slice(2)).toEqual(['Hourly session', 'not blocked (paid extra usage)', '-']);
+		expect(summaryLines(r)).toContain('No account was blocked by a limit.');
+		expect(summaryLines(r)).toContain('An account went past a limit and kept working on paid extra usage 1 time: Alpha.');
+		expect(summaryLines(r).join(' ')).not.toMatch(/without being blocked/);
+		expect(hitState(r.hits[0], KL)).toBe(`not blocked: on paid extra usage · resets ${whenLabel(kl('2026-10-06', '14:00'), KL)}`);
+		expect(isBlocked(r.hits[0])).toBe(false);
+
+		// the paid amount ran out at 11:00: blocked for the three hours left, and the document says what the rest was
+		const out = payload([at('09:00', 80, null), at('10:00', 100, 40), at('11:00', 100, 0)]);
+		expect((limitsOf(out).find((b) => b.type === 'table') as { rows: string[][] }).rows[0].slice(3)).toEqual([
+			'3 h 0 min (the rest on paid extra usage)',
+			whenLabel(kl('2026-10-06', '14:00'), KL)
+		]);
+		expect(summaryLines(out)).toContain('An account was blocked by a limit 1 time: Alpha.');
+		expect(hitState(out.hits[0], KL)).toBe(`blocked 3 h 0 min (the rest on paid extra usage) · until ${whenLabel(kl('2026-10-06', '14:00'), KL)}`);
 	});
 	it('says so when no account was blocked', () => {
 		const r = payload([s('2026-10-06', '09:00', 10), s('2026-10-06', '10:00', 30)]);
