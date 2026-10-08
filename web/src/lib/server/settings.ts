@@ -246,7 +246,7 @@ const LABELS: Record<keyof Settings, string> = {
 	weeklyLabel: 'Name of the 7-day window',
 	warnAt: 'Turn amber at',
 	highAt: 'Turn red at',
-	autoRefreshSeconds: 'Page refreshes itself every',
+	autoRefreshSeconds: 'Usage page refreshes itself every',
 	refreshWaitSeconds: 'Wait between manual refreshes',
 	reportView: 'Open the report showing',
 	reportPeriod: 'Default period',

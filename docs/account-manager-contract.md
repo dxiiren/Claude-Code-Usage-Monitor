@@ -139,12 +139,20 @@ a write to any of them never bumps `meta.revision`. `accounts` and `meta` are un
       "status_message": "",
       "usage": {                      // null when never fetched
         "session": { "available": true, "percentage": 12.0, "resets_at_unix": 1790248799 },
-        "weekly":  { "available": true, "percentage": 44.0, "resets_at_unix": 1790456399 }
+        "weekly":  { "available": true, "percentage": 44.0, "resets_at_unix": 1790456399 },
+        "credits": { "percentage": 25.0, "remaining": 37.5, "total": 50.0 },   // optional
+        "limits":  [ { "label": "Opus", "percentage": 100.0, "resets_at_unix": 1790456399, "model": true } ]  // optional
       }
     }
   ]
 }
 ```
+
+`usage.credits` is present only while paid extra usage carries the account past a spent window
+(amounts in the account's currency). `usage.limits` lists the limits next to the two windows when
+the provider reports any: `model: true` is one model's own allowance (the other models keep
+working), `model: false` another allowance (a feature or team quota). Both fields are optional;
+widgets from before them ignore them.
 
 Only enabled accounts, in `sort_order`. `401` for a missing/unknown/revoked token.
 

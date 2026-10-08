@@ -37,7 +37,7 @@
 		<strong>{over ? '--' : pctText(pct)}</strong>
 		{#if lv === 'full'}<span class="blocked">limit reached</span>{/if}
 		<span class="reset">
-			{#if none}no data{:else if over}has reset, new reading due{:else}resets in {resetsIn(resetsAt, now, seconds)}{/if}
+			{#if none}no data{:else if over}has reset, new reading due{:else if !resetsAt}reset time not known{:else if resetsAt * 1000 <= now}not in use{:else}resets in {resetsIn(resetsAt, now, seconds)}{/if}
 		</span>
 	</span>
 </div>

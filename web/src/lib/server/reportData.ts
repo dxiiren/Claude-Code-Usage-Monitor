@@ -2,7 +2,7 @@
 import { UserError } from './db';
 import { SERVER } from './paths';
 import { buildReport, formatDate, parseDate, periodDates, rangeOf, reportDateOf, type Period, type Report } from './report';
-import { firstSampleUnix, reportAccounts, sampleHours, samplesBetween } from './serverUsage';
+import { firstSampleUnix, hasSampleBetween, reportAccounts, samplesBetween } from './serverUsage';
 import { getSettings } from './settings';
 
 const PERIODS: Period[] = ['day', 'week', 'month'];
@@ -32,6 +32,8 @@ export interface ReportPayload extends Report {
 	today: string;
 	/** first report day that has any reading, or null when history has not started */
 	firstDate: string | null;
+	/** the oldest reading kept (unix seconds): before it nothing is known, whether never saved or pruned since */
+	firstUnix: number | null;
 	generatedUnix: number;
 	/** the two windows' names from Settings, as the Usage page shows them */
 	labels: { session: string; weekly: string };
@@ -60,6 +62,7 @@ export function loadReport(rawPeriod: unknown, rawDate: unknown, nowMs = Date.no
 		}),
 		today: todayDate(nowMs),
 		firstDate: first === null ? null : reportDateOf(s.timezone, first, s.slots),
+		firstUnix: first,
 		generatedUnix: Math.floor(nowMs / 1000),
 		labels: { session: s.hourlyLabel, weekly: s.weeklyLabel },
 		limitAt: s.limitAt,
@@ -74,14 +77,10 @@ export function daysWithData(rawMonth: unknown): string[] {
 	if (!m || +m[2] < 1 || +m[2] > 12) throw new UserError('That month is not valid. Use the form 2026-10.');
 	const s = getSettings();
 	const dates = periodDates('month', formatDate(Date.UTC(+m[1], +m[2] - 1, 1)));
-	const range = rangeOf(dates, s.slots, s.timezone);
-	const have = new Set<string>();
-	// Hour buckets start on the UTC hour; probing inside the hour covers zones offset by 30 or 45 minutes too.
-	for (const h of sampleHours(range.from - 3600, range.to)) {
-		for (const t of [h, h + 1799, h + 3599]) {
-			if (t < range.from || t >= range.to) continue;
-			have.add(reportDateOf(s.timezone, t, s.slots));
-		}
-	}
-	return dates.filter((d) => have.has(d));
+	// Asked day by day with the report's own rule (after the day's start, up to and including its end),
+	// so a dot never marks a day whose report then says "no usage data", whatever the zone's offset.
+	return dates.filter((d) => {
+		const day = rangeOf([d], s.slots, s.timezone);
+		return hasSampleBetween(day.from, day.to);
+	});
 }

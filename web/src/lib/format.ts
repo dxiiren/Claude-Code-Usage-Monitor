@@ -24,7 +24,7 @@ export function resetsIn(unix: number | null | undefined, nowMs: number, withSec
 	if (d > 0) return `${d}d ${h}h`;
 	if (h > 0) return `${h}h ${m}m`;
 	if (withSeconds) return `${m}m ${String(sec).padStart(2, '0')}s`;
-	return `${m}m`;
+	return m ? `${m}m` : 'under 1m';
 }
 
 /** Whole percent. Only a real 100 reads "100%": 99.6 is not a reached limit and must not look like one. */

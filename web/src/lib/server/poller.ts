@@ -37,11 +37,16 @@ export interface WindowUsage {
 	percentage: number;
 	resets_at_unix: number | null;
 }
-/** A limit that covers one model only, such as a weekly Opus allowance (src/poller/claude/limits.rs). */
+/**
+ * A limit next to the two windows (src/poller/claude/limits.rs): usually one model's own allowance,
+ * such as a weekly Opus limit.
+ */
 export interface ModelLimit {
 	label: string;
 	percentage: number;
 	resets_at_unix: number | null;
+	/** Set when the limit is NOT one model's: a feature, team or other allowance. What it stops is not known. */
+	other?: true;
 }
 /** Paid extra usage that carries an account past a spent window (claude.rs claude_credits). Amounts are in the account's own currency. */
 export interface ExtraUsage {
@@ -49,9 +54,26 @@ export interface ExtraUsage {
 	remaining: number;
 	total: number;
 }
+/**
+ * A Codex credit balance as one answer gave it, in raw credits (codex.rs CodexCredits). Codex reports
+ * no ceiling, so `baseline` (the balance at the last top-up) is learned from reading to reading by
+ * codexExtra; a fresh answer carries its own balance there.
+ */
+export interface CodexCredits {
+	/** the ChatGPT account the balance belongs to */
+	account: string | null;
+	balance: number;
+	baseline: number;
+	/** credits can carry the account right now: it has some, they are not unlimited, and an allowance is spent */
+	live: boolean;
+	/** the provider says the credit spending limit is reached as well */
+	capped: boolean;
+}
 export interface Usage {
 	session: WindowUsage;
 	weekly: WindowUsage;
+	/** Codex only: the credit balance behind `extra`, kept with the reading so the next one can be measured against it. */
+	credits?: CodexCredits;
 	/** Present only while a window is spent and paid extra usage has started covering the overflow. */
 	extra?: ExtraUsage;
 	/** Present only when the answer carried per-model limits: an account can be out of one model while both windows have room. */
@@ -133,38 +155,74 @@ export function usageFromResponse(body: unknown): Usage | null {
 	u.session = bucket(r.five_hour) ?? u.session;
 	u.weekly = bucket(r.seven_day) ?? u.weekly;
 	let anyLimit = false;
-	// Per-model limits by model name (lower case); the fullest one wins when a model is listed twice.
-	const models = new Map<string, ModelLimit>();
-	const model = (label: string, percentage: number, resets: unknown) => {
-		const key = label.toLowerCase();
-		const have = models.get(key);
-		if (!have || have.percentage < percentage) models.set(key, { label, percentage, resets_at_unix: isoToUnix(resets) });
-	};
+	// Every limit next to the two windows, as the widget keeps them (limits.rs parse). `key` tells two
+	// limits apart: the kind plus the model or scope it covers.
+	const found: { key: string; kind: string; label: string; model: boolean; active: boolean; percentage: number; resets: unknown }[] = [];
 	const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+	const slug = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+	const words = (v: string) => v.replace(/_/g, ' ').trim();
 	// New-format responses may omit the legacy fields; only scope-less limits fill them.
 	if (Array.isArray(r.limits)) {
 		for (const l of r.limits as Record<string, unknown>[]) {
 			const pct = typeof l?.percent === 'number' ? l.percent : typeof l?.utilization === 'number' ? l.utilization : NaN;
 			if (typeof l?.kind !== 'string' || !l.kind.trim() || !Number.isFinite(pct) || pct < 0) continue;
 			anyLimit = true;
-			if (l.scope !== undefined && l.scope !== null) {
-				const m = (l.scope as { model?: { display_name?: unknown; id?: unknown } }).model;
-				const name = text(m?.display_name) ?? text(m?.id);
-				if (name) model(name, pct, l.resets_at);
+			const scope = l.scope !== undefined && l.scope !== null ? l.scope : null;
+			if (scope === null && (l.kind === 'session' || l.kind === 'weekly_all')) {
+				// the two windows themselves
+				const w = { available: true, percentage: pct, resets_at_unix: isoToUnix(l.resets_at) };
+				if (l.kind === 'session' && !u.session.available) u.session = w;
+				if (l.kind === 'weekly_all' && !u.weekly.available) u.weekly = w;
 				continue;
 			}
-			const w = { available: true, percentage: pct, resets_at_unix: isoToUnix(l.resets_at) };
-			if (l.kind === 'session' && !u.session.available) u.session = w;
-			if (l.kind === 'weekly_all' && !u.weekly.available) u.weekly = w;
+			const m = (scope as { model?: { display_name?: unknown; id?: unknown } } | null)?.model;
+			const name = text(m?.display_name) ?? text(m?.id);
+			found.push({
+				key: `${slug(l.kind)}_${name ? slug(name) : scope === null ? '' : JSON.stringify(scope)}`,
+				kind: l.kind,
+				label: name ?? words(l.kind),
+				model: !!name,
+				active: l.is_active === true,
+				percentage: pct,
+				resets: l.resets_at
+			});
 		}
 	}
-	// The older per-model fields; the array is authoritative when it names the same model.
-	for (const [field, name] of [['seven_day_opus', 'Opus'], ['seven_day_sonnet', 'Sonnet']] as const) {
-		const b = bucket(r[field]);
-		if (b && ![...models.keys()].some((k) => k.includes(name.toLowerCase()))) model(name, b.percentage, (r[field] as { resets_at?: unknown }).resets_at);
+	// The older top-level buckets, known and future ones: any object with a numeric utilization.
+	for (const [field, value] of Object.entries(r)) {
+		if (['five_hour', 'seven_day', 'limits', 'spend'].includes(field) || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+		const b = value as { utilization?: unknown; resets_at?: unknown; is_active?: unknown };
+		if (typeof b.utilization !== 'number' || !Number.isFinite(b.utilization) || b.utilization < 0) continue;
+		const name = field === 'seven_day_opus' ? 'Opus' : field === 'seven_day_sonnet' ? 'Sonnet' : null;
+		// The array is authoritative when it carries the same allowance: the same model by name, or a
+		// longer name for it ("Claude Opus 5") at the same level. A different level is a different
+		// allowance, and dropping it could hide one that is used up.
+		if (
+			name &&
+			found.some(
+				(f) =>
+					f.model &&
+					((f.kind === 'weekly_scoped' && f.label.toLowerCase() === name.toLowerCase()) ||
+						(f.label.toLowerCase().includes(name.toLowerCase()) && Math.abs(f.percentage - (b.utilization as number)) < 0.5))
+			)
+		)
+			continue;
+		found.push({ key: slug(field), kind: field, label: name ?? words(field), model: !!name, active: b.is_active === true, percentage: b.utilization, resets: b.resets_at });
 	}
-	if (!u.session.available && !u.weekly.available && !anyLimit) return null;
-	if (models.size) u.models = [...models.values()];
+	if (!u.session.available && !u.weekly.available && !anyLimit && !found.length) return null;
+	if (found.length) {
+		// one row per limit: of two answers for the same one, the active wins, then the fullest
+		found.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : Number(b.active) - Number(a.active) || b.percentage - a.percentage));
+		const kept = found.filter((f, i) => i === 0 || found[i - 1].key !== f.key);
+		// two limits of one model (weekly and daily, say) must not look like one
+		const twice = (f: (typeof kept)[number]) => kept.filter((x) => x.label.toLowerCase() === f.label.toLowerCase()).length > 1;
+		u.models = kept.map((f) => ({
+			label: twice(f) && words(f.kind).toLowerCase() !== f.label.toLowerCase() ? `${f.label} (${words(f.kind)})` : f.label,
+			percentage: f.percentage,
+			resets_at_unix: isoToUnix(f.resets),
+			...(f.model ? {} : { other: true as const })
+		}));
+	}
 	const extra = extraUsage(r.spend, u);
 	if (extra) u.extra = extra;
 	return u;
@@ -367,11 +425,12 @@ export function readCodexCredentials(codexHome: string): CodexCreds | null {
 }
 
 /**
- * codex.rs codex_usage_from_response_at (windows only; the credits gauge is widget-side). Windows
- * are assigned by length, not slot: >= 1 day is weekly; a window without a length keeps the legacy
- * slot mapping (primary = session, secondary = weekly). reset_at < 0 = no usable reset.
+ * codex.rs codex_usage_from_response_at. Windows are assigned by length, not slot: >= 1 day is
+ * weekly; a window without a length keeps the legacy slot mapping (primary = session, secondary =
+ * weekly). reset_at < 0 = no usable reset. The credit balance is returned as read; codexExtra turns
+ * it into `extra` once the previous reading's balance is known.
  */
-export function codexUsageFromResponse(body: unknown): Usage | null {
+export function codexUsageFromResponse(body: unknown, accountId: string | null = null): Usage | null {
 	if (!body || typeof body !== 'object') return null;
 	const rl = (body as { rate_limit?: unknown }).rate_limit;
 	if (!rl || typeof rl !== 'object') return null;
@@ -383,13 +442,53 @@ export function codexUsageFromResponse(body: unknown): Usage | null {
 	for (const [w, defaultWeekly] of slots) {
 		if (!w || typeof w !== 'object') continue;
 		const x = w as { used_percent?: unknown; reset_at?: unknown; limit_window_seconds?: unknown };
-		if (typeof x.used_percent !== 'number' || typeof x.reset_at !== 'number') continue; // serde would reject it
+		// The widget rejects the whole answer here (both fields are required). Skipping the window instead
+		// would save a reading that says the window is not in use, while it may be at its limit.
+		if (typeof x.used_percent !== 'number' || typeof x.reset_at !== 'number') return null;
 		const section: WindowUsage = { available: true, percentage: x.used_percent, resets_at_unix: x.reset_at >= 0 ? x.reset_at : null };
 		const weekly = typeof x.limit_window_seconds === 'number' ? x.limit_window_seconds >= WEEKLY_WINDOW_THRESHOLD_SECONDS : defaultWeekly;
 		if (weekly) u.weekly = section;
 		else u.session = section;
 	}
+	const c = (body as { credits?: unknown }).credits;
+	if (c && typeof c === 'object') {
+		const x = c as { has_credits?: unknown; unlimited?: unknown; overage_limit_reached?: unknown; balance?: unknown };
+		// sent as a decimal string; anything else reads as an empty balance, as in the widget
+		const n = typeof x.balance === 'string' && x.balance.trim() ? Number(x.balance) : NaN;
+		const balance = Number.isFinite(n) && n >= 0 ? n : 0;
+		u.credits = {
+			account: accountId,
+			balance,
+			baseline: balance,
+			live: x.has_credits === true && x.unlimited !== true && (rl as { limit_reached?: unknown }).limit_reached === true,
+			capped: x.overage_limit_reached === true
+		};
+	}
 	return u;
+}
+
+/** Codex bills credits at 25 to the dollar (codex.rs CODEX_CREDITS_PER_DOLLAR); only the displayed amounts depend on it. */
+const CODEX_CREDITS_PER_DOLLAR = 25;
+
+/**
+ * codex.rs codex_credits: measures a Codex balance against the one kept with the previous reading
+ * and, once an allowance is spent and credits have started going down, sets `extra`. The balance
+ * only falls as credits are spent, so any rise is a top-up and becomes the new baseline. Call it
+ * for every Codex reading, shown or not, so a top-up is never missed.
+ */
+export function codexExtra(u: Usage, previous: CodexCredits | null | undefined): void {
+	const c = u.credits;
+	if (!c) return;
+	const prev = previous && previous.account === c.account && Number.isFinite(previous.balance) && Number.isFinite(previous.baseline) ? previous : null;
+	c.baseline = prev && c.balance <= prev.balance ? Math.max(prev.baseline, c.balance) : c.balance;
+	delete u.extra;
+	if (!c.live || c.baseline <= 0 || c.balance >= c.baseline) return;
+	u.extra = {
+		percentage: c.capped ? 100 : Math.min(100, Math.max(0, ((c.baseline - c.balance) / c.baseline) * 100)),
+		// with the spending limit reached the balance cannot be used: nothing is left to carry the account
+		remaining: c.capped ? 0 : c.balance / CODEX_CREDITS_PER_DOLLAR,
+		total: c.baseline / CODEX_CREDITS_PER_DOLLAR
+	};
 }
 
 class CodexAuthRequired {}
@@ -417,7 +516,7 @@ async function fetchCodexUsage(creds: CodexCreds, deps: PollDeps): Promise<Usage
 	} catch {
 		throw 'request_failed' as const;
 	}
-	const u = codexUsageFromResponse(body);
+	const u = codexUsageFromResponse(body, creds.accountId);
 	if (!u) throw 'request_failed' as const;
 	return u;
 }

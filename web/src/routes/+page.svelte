@@ -3,6 +3,7 @@
 	import UsageBar from '$lib/UsageBar.svelte';
 	import LoginPanel, { type LoginInfo } from '$lib/LoginPanel.svelte';
 	import { ago, needsLogin, post, refreshSummary, resetsIn, windowFull } from '$lib/format';
+	import { atLimit, onExtra } from '$lib/headline';
 	import type { Snapshot } from '$lib/server/api';
 
 	let { data } = $props();
@@ -29,13 +30,15 @@
 	let removeTarget = $state<Snapshot['accounts'][number] | null>(null);
 	let removeDialog: HTMLDialogElement | undefined = $state();
 	const server = $derived(snap.mode === 'server');
-	/** The last good reading is too old to describe the account (server mode). */
+	/** The last good reading is too old to describe the account, or the widget marked it as carried over. */
 	const isOld = (a: Snapshot['accounts'][number]) =>
-		snap.staleAfterSeconds !== null && a.usageReadUnix !== null && now / 1000 - a.usageReadUnix > snap.staleAfterSeconds;
+		a.usageStale || (snap.staleAfterSeconds !== null && a.usageReadUnix !== null && now / 1000 - a.usageReadUnix > snap.staleAfterSeconds);
 
 	async function refresh() {
 		try {
 			const res = await fetch('/api/accounts');
+			// signed out, or no longer allowed here: let the server send the browser where it belongs
+			if (res.status === 401 || res.status === 403) return void location.reload();
 			if (res.ok) snap = await res.json();
 		} catch {
 			/* server briefly unreachable: keep the last snapshot */
@@ -257,7 +260,12 @@
 						<input
 							type="checkbox"
 							checked={a.enabled}
-							onchange={(e) => act(a.id, { action: 'enable', enabled: e.currentTarget.checked })}
+							onchange={async (e) => {
+								const box = e.currentTarget;
+								await act(a.id, { action: 'enable', enabled: box.checked });
+								// the server may have refused: the box shows what is saved, not what was clicked
+								box.checked = snap.accounts.find((x) => x.id === a.id)?.enabled ?? box.checked;
+							}}
 						/>
 						<span>On widget</span>
 					</label>
@@ -272,7 +280,7 @@
 
 				{#if needsLogin(a.status.state) && a.email}
 					<div class="needs" role="alert">
-						<span>{a.status.message} Usage below is the last known and may be out of date.</span>
+						<span>{a.status.message}{a.usage?.session || a.usage?.weekly ? ' Usage below is the last known and may be out of date.' : ''}</span>
 						<button type="button" class="primary" onclick={() => relogin(a.id)} disabled={starting}>Re-login</button>
 					</div>
 				{:else if a.status.state === 'error'}
@@ -280,7 +288,7 @@
 				{/if}
 				{#if a.email && !needsLogin(a.status.state)}
 					{#each (a.usage?.models ?? []).filter((m) => windowFull(m, now)) as m (m.label)}
-						<p class="transient" data-testid="model-limit">{m.label} limit reached{m.resetsAt ? `, resets in ${resetsIn(m.resetsAt, now)}` : ''}. Other models still work.</p>
+						<p class="transient" data-testid="model-limit">{m.label} limit reached{m.resetsAt ? `, resets in ${resetsIn(m.resetsAt, now)}` : ''}.{m.other || (atLimit(a, now) && !onExtra(a, now)) ? '' : ' Other models still work.'}</p>
 					{/each}
 				{/if}
 				{#if a.email && !needsLogin(a.status.state) && a.usage?.extra && (windowFull(a.usage.session, now) || windowFull(a.usage.weekly, now))}
@@ -324,8 +332,8 @@
 		<div>
 			<strong>Usage polling</strong>
 			<span class="hint">
-				this server polls every account &middot; last poll
-				{snap.usageUpdatedUnix ? new Date(snap.usageUpdatedUnix * 1000).toLocaleTimeString() : 'not yet'}
+				this server reads every account that is on the widget &middot; last reading
+				{#if snap.usageUpdatedUnix}{new Date(snap.usageUpdatedUnix * 1000).toLocaleTimeString()}{#if now / 1000 - snap.usageUpdatedUnix > 600}&nbsp;({ago(snap.usageUpdatedUnix, now)} ago){/if}{:else}not yet{/if}
 			</span>
 		</div>
 		<button type="button" onclick={refreshUsage} disabled={refreshing || snap.accounts.length === 0} data-testid="refresh-all">

@@ -18,7 +18,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::accounts::{fingerprint, AccountProfile, AccountSettings, ProviderAccounts};
 use crate::app_settings::SettingsFile;
-use crate::models::{AccountUsage, UsageData, UsageSection};
+use crate::models::{
+    limit_slug, AccountUsage, CreditsSection, UsageData, UsageLimit, UsageSection,
+};
 use crate::poller::PollError;
 use crate::providers::{ProviderId, ProviderSet};
 
@@ -233,6 +235,30 @@ pub struct RemoteUsage {
     pub session: Option<RemoteSection>,
     #[serde(default)]
     pub weekly: Option<RemoteSection>,
+    /// Paid extra usage in force past a spent window. Kept as raw JSON so a
+    /// shape this widget does not know cannot fail the whole payload.
+    #[serde(default)]
+    pub credits: Option<serde_json::Value>,
+    /// Limits next to the two windows, one entry each; raw for the same reason.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub limits: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct RemoteCredits {
+    percentage: f64,
+    remaining: f64,
+    total: f64,
+}
+
+#[derive(Deserialize)]
+struct RemoteLimit {
+    label: String,
+    percentage: f64,
+    #[serde(default)]
+    resets_at_unix: Option<i64>,
+    #[serde(default)]
+    model: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -303,9 +329,55 @@ fn section(section: Option<&RemoteSection>) -> UsageSection {
 }
 
 pub fn usage_data(usage: &RemoteUsage) -> UsageData {
+    let credits = usage
+        .credits
+        .as_ref()
+        .and_then(|value| serde_json::from_value::<RemoteCredits>(value.clone()).ok())
+        .filter(|credits| {
+            credits.percentage.is_finite()
+                && credits.remaining.is_finite()
+                && credits.total.is_finite()
+                && credits.total > 0.0
+        })
+        .map(|credits| CreditsSection {
+            percentage: credits.percentage.clamp(0.0, 100.0),
+            remaining: credits.remaining.max(0.0),
+            total: credits.total,
+        });
+    let limits = usage
+        .limits
+        .iter()
+        .filter_map(|value| serde_json::from_value::<RemoteLimit>(value.clone()).ok())
+        .filter(|limit| {
+            !limit.label.trim().is_empty()
+                && limit.percentage.is_finite()
+                && limit.percentage >= 0.0
+        })
+        .map(|limit| {
+            let label = limit.label.trim().to_string();
+            UsageLimit {
+                key: limit_slug(&label),
+                // The server sends the name and whether it is a model's own
+                // limit, not the provider's kind.
+                kind: if limit.model { "model" } else { "other" }.to_string(),
+                model: limit.model.then(|| label.clone()),
+                model_id: None,
+                scope: None,
+                is_active: false,
+                usage: section(Some(&RemoteSection {
+                    available: true,
+                    percentage: limit.percentage,
+                    resets_at_unix: limit.resets_at_unix,
+                })),
+                label,
+            }
+        })
+        .collect();
     UsageData {
         session: section(usage.session.as_ref()),
         weekly: section(usage.weekly.as_ref()),
+        credits,
+        limits,
         ..Default::default()
     }
 }
@@ -1003,6 +1075,62 @@ mod tests {
             url: url.into(),
             token: SecretToken::new("secret-token-value"),
         }
+    }
+
+    #[test]
+    fn credits_and_limits_from_the_server_reach_the_usage_data() {
+        let payload = parse_payload(
+            r#"{ "schema": 2, "revision": 1, "accounts": [
+              { "id": "ba", "name": "BA", "status": "ok", "usage": {
+                  "session": { "available": true, "percentage": 100.0, "resets_at_unix": 1790248799 },
+                  "weekly":  { "available": true, "percentage": 44.0, "resets_at_unix": 1790456399 },
+                  "credits": { "percentage": 25.0, "remaining": 37.5, "total": 50.0 },
+                  "limits": [
+                    { "label": "Opus", "percentage": 100.0, "resets_at_unix": 1790456399, "model": true },
+                    { "label": "seven day cowork", "percentage": 12.0, "resets_at_unix": null, "model": false },
+                    { "label": "", "percentage": 5.0 },
+                    { "nonsense": true },
+                    "not an object"
+                  ] } },
+              { "id": "kv", "name": "kv", "status": "ok", "usage": {
+                  "session": { "available": true, "percentage": 1.0, "resets_at_unix": null },
+                  "credits": { "percentage": "a lot" }, "limits": null } }
+            ] }"#,
+        )
+        .unwrap();
+        let usage = usage_data(account(&payload, "ba").usage.as_ref().unwrap());
+        assert_eq!(
+            usage.credits,
+            Some(CreditsSection {
+                percentage: 25.0,
+                remaining: 37.5,
+                total: 50.0
+            })
+        );
+        let limits: Vec<_> = usage
+            .limits
+            .iter()
+            .map(|limit| {
+                (
+                    limit.label.as_str(),
+                    limit.model.as_deref(),
+                    limit.usage.percentage,
+                    limit.usage.resets_at.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            limits,
+            vec![
+                ("Opus", Some("Opus"), 100.0, true),
+                ("seven day cowork", None, 12.0, false)
+            ]
+        );
+        // Fields this widget cannot read are dropped, never the account.
+        let plain = usage_data(account(&payload, "kv").usage.as_ref().unwrap());
+        assert_eq!(plain.credits, None);
+        assert!(plain.limits.is_empty());
+        assert_eq!(plain.session.percentage, 1.0);
     }
 
     fn account<'a>(payload: &'a Payload, id: &str) -> &'a RemoteAccount {

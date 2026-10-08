@@ -259,6 +259,59 @@ describe('reading history', () => {
 		db.database().prepare('DELETE FROM usage_samples WHERE account_id = ?').run(other);
 		db.database().prepare('DELETE FROM report_accounts WHERE account_id = ?').run(other);
 	});
+	it('Codex credits are measured against the balance kept with the last good reading, across a failed poll', () => {
+		const other = db.createAccount('codex credits').id;
+		const full = (balance: number) => ({
+			ok: true as const,
+			usage: {
+				session: { available: false, percentage: 0, resets_at_unix: null },
+				weekly: { available: true, percentage: 100, resets_at_unix: kl('2026-10-04', '14:00') / 1000 },
+				credits: { account: 'acct-1', balance, baseline: balance, live: true, capped: false }
+			}
+		});
+		const stored = () => JSON.parse(rows<{ usage_json: string }>(`SELECT usage_json FROM account_usage WHERE account_id = '${other}'`)[0].usage_json);
+		usage.saveResult(other, full(500), kl('2026-10-04', '10:00'));
+		expect(stored().extra).toBeUndefined();
+		usage.saveResult(other, { ok: false, error: 'network_error' }, kl('2026-10-04', '10:30'));
+		usage.saveResult(other, full(400), kl('2026-10-04', '11:00'));
+		expect(stored()).toMatchObject({ extra: { percentage: 20, remaining: 16, total: 20 }, credits: { balance: 400, baseline: 500 } });
+		expect(rows<{ extra_left: number | null }>(`SELECT extra_left FROM usage_samples WHERE account_id = '${other}' ORDER BY ts_unix`).map((r) => r.extra_left)).toEqual([null, 16]);
+		db.removeAccount(other);
+		db.database().prepare('DELETE FROM usage_samples WHERE account_id = ?').run(other);
+		db.database().prepare('DELETE FROM report_accounts WHERE account_id = ?').run(other);
+	});
+	it('a reading whose saved per-model text is not what the server writes never breaks a report', () => {
+		const other = db.createAccount('odd models').id;
+		const at = kl('2026-10-03', '10:00') / 1000;
+		const ins = db.database().prepare('INSERT INTO usage_samples (account_id, ts_unix, s_pct, w_pct, models_json) VALUES (?, ?, 10, 20, ?)');
+		const texts = ['not json', '{"a":1}', '[null,5,"x",{"label":1,"pct":"x"},{"label":"Z"}]', '[{"label":"","pct":100,"reset":5}]', '[{"label":"Opus","pct":100,"reset":1e300}]', '[{"label":"Opus","pct":1e999,"reset":null}]', '[{"label":"  Opus ","pct":100,"reset":-4}]'];
+		texts.forEach((t, i) => ins.run(other, at + i * 60, t));
+		const kept = usage.samplesBetween(at, at + 3600).get(other)!.map((s) => s.models);
+		// only a named model with a real level is kept; a reset that is no real moment is dropped, not the reading
+		expect(kept).toEqual([null, null, null, null, [{ label: 'Opus', pct: 100, reset: null }], null, [{ label: 'Opus', pct: 100, reset: null }]]);
+		const r = reportData.loadReport('day', '2026-10-03', kl('2026-10-03', '16:00'));
+		expect(r.hits.filter((h) => h.accountId === other)).toMatchObject([{ model: 'Opus', until: null }]);
+		db.removeAccount(other);
+		db.database().prepare('DELETE FROM usage_samples WHERE account_id = ?').run(other);
+		db.database().prepare('DELETE FROM report_accounts WHERE account_id = ?').run(other);
+	});
+	it('calendar dots mark exactly the days whose report has data, also where the day starts mid-hour', () => {
+		const before = settings.getSettings();
+		// Kolkata is UTC+5:30: a report day starting at 09:00 begins at 03:30 UTC, inside an hour
+		settings.saveSettings({ timezone: 'Asia/Kolkata' });
+		const other = db.createAccount('dots').id;
+		const at = Date.parse('2026-11-06T08:40:00+05:30'); // 20 minutes before the 6th starts: still the 5th
+		const onLine = Date.parse('2026-11-08T09:00:00+05:30'); // exactly on the line: belongs to the day that just ended
+		usage.saveResult(other, reading(10), at);
+		usage.saveResult(other, reading(12), onLine);
+		expect(reportData.daysWithData('2026-11')).toEqual(['2026-11-05', '2026-11-07']);
+		for (const [date, has] of [['2026-11-05', true], ['2026-11-06', false], ['2026-11-07', true], ['2026-11-08', false]] as const)
+			expect(reportData.loadReport('day', date, onLine + 3_600_000).hasData, date).toBe(has);
+		settings.saveSettings({ timezone: before.timezone });
+		db.removeAccount(other);
+		db.database().prepare('DELETE FROM usage_samples WHERE account_id = ?').run(other);
+		db.database().prepare('DELETE FROM report_accounts WHERE account_id = ?').run(other);
+	});
 	it('the report cuts the kept readings into the configured slots', () => {
 		const r = reportData.loadReport('day', '2026-10-06', kl('2026-10-06', '16:00'));
 		expect(r.accounts).toMatchObject([{ name: 'work', slots: [30, 15], total: 45 }]);

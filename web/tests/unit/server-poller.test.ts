@@ -197,13 +197,55 @@ describe('parsers', () => {
 		})!;
 		expect(u.weekly.percentage).toBe(60);
 		expect(u.models).toEqual([{ label: 'Opus', percentage: 100, resets_at_unix: Date.parse(at) / 1000 }]);
-		// the array names the model itself and wins over the older field for the same model
-		const both = P.usageFromResponse({
+		// the array names the model itself and wins over the older field for the same allowance
+		const opus5 = { kind: 'weekly_scoped', percent: 100, resets_at: at, scope: { model: { id: 'claude-opus-5', display_name: 'Claude Opus 5' } } };
+		const same = P.usageFromResponse({ seven_day: { utilization: 60 }, seven_day_opus: { utilization: 100 }, limits: [opus5] })!;
+		expect(same.models).toEqual([{ label: 'Claude Opus 5', percentage: 100, resets_at_unix: Date.parse(at) / 1000 }]);
+		const exact = P.usageFromResponse({ seven_day: { utilization: 60 }, seven_day_opus: { utilization: 40 }, limits: [{ ...opus5, scope: { model: { display_name: 'opus' } } }] })!;
+		expect(exact.models).toEqual([{ label: 'opus', percentage: 100, resets_at_unix: Date.parse(at) / 1000 }]);
+		// ... but a longer name at another level may be another allowance: both stay, so neither can hide a full one
+		const both = P.usageFromResponse({ seven_day: { utilization: 60 }, seven_day_opus: { utilization: 100 }, limits: [{ ...opus5, percent: 10 }] })!;
+		expect(both.models!.map((m) => [m.label, m.percentage])).toEqual([
+			['Opus', 100],
+			['Claude Opus 5', 10]
+		]);
+		// two answers for one limit: the active one wins, then the fullest
+		const twice = P.usageFromResponse({
 			seven_day: { utilization: 60 },
-			seven_day_opus: { utilization: 40 },
-			limits: [{ kind: 'weekly_scoped', percent: 100, resets_at: at, scope: { model: { id: 'claude-opus-5', display_name: 'Claude Opus 5' } } }]
+			limits: [
+				{ ...opus5, percent: 90 },
+				{ ...opus5, percent: 30, is_active: true },
+				{ ...opus5, percent: 20, is_active: true }
+			]
 		})!;
-		expect(both.models).toEqual([{ label: 'Claude Opus 5', percentage: 100, resets_at_unix: Date.parse(at) / 1000 }]);
+		expect(twice.models).toEqual([{ label: 'Claude Opus 5', percentage: 30, resets_at_unix: Date.parse(at) / 1000 }]);
+		// a weekly and a daily limit of one model are two limits, told apart by their kind
+		const kinds = P.usageFromResponse({ seven_day: { utilization: 60 }, limits: [opus5, { ...opus5, kind: 'daily_scoped', percent: 5 }] })!;
+		expect(kinds.models!.map((m) => [m.label, m.percentage])).toEqual([
+			['Claude Opus 5 (daily scoped)', 5],
+			['Claude Opus 5 (weekly scoped)', 100]
+		]);
+		// limits that are not a model's are kept too, marked as such: older buckets and array entries alike
+		const others = P.usageFromResponse({
+			five_hour: { utilization: 10 },
+			seven_day: { utilization: 20 },
+			seven_day_cowork: { utilization: 100, resets_at: at },
+			seven_day_oauth_apps: null,
+			extra_note: { text: 'not a bucket' },
+			limits: [
+				{ kind: 'daily_team', percent: 100, scope: { team: 'example' } },
+				{ kind: 'monthly', percent: 55 },
+				{ kind: 'session', percent: 99 }
+			]
+		})!;
+		expect(others.session.percentage).toBe(10);
+		expect(others.models).toEqual([
+			{ label: 'daily team', percentage: 100, resets_at_unix: null, other: true },
+			{ label: 'monthly', percentage: 55, resets_at_unix: null, other: true },
+			{ label: 'seven day cowork', percentage: 100, resets_at_unix: Date.parse(at) / 1000, other: true }
+		]);
+		// an answer made only of such a bucket is still an answer
+		expect(P.usageFromResponse({ seven_day_cowork: { utilization: 5 } })).toMatchObject({ models: [{ label: 'seven day cowork', other: true }] });
 		// no per-model limit in the answer: the field is left out, as before
 		expect(P.usageFromResponse({ five_hour: { utilization: 1 }, seven_day: { utilization: 2 } })).not.toHaveProperty('models');
 	});

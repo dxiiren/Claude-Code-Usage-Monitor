@@ -48,7 +48,10 @@ export interface DocModel {
 }
 
 const utc = (date: string, opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', ...opts }).format(new Date(`${date}T00:00:00Z`));
-export const pct = (v: number) => `${Math.round(v)}%`;
+/** Whole percent. Something used but under half a percent reads "<1%": as "0%" it would add up to a total it does not explain. */
+export const pct = (v: number) => (v > 0 && v < 0.5 ? '<1%' : `${Math.round(v)}%`);
+/** "A", "A and B", "A, B and C" */
+const list = (names: string[]) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
 
 /** "Tuesday, 6 October 2026" / "Week of 5 Oct to 11 Oct 2026" / "October 2026" */
 export function periodLabel(r: Pick<ReportPayload, 'period' | 'dates'>): string {
@@ -63,6 +66,8 @@ export const shortDay = (date: string, many: boolean) => (many ? utc(date, { day
 
 /** A moment in the report's time zone: "Tue, 6 Oct, 15:42". */
 export function whenLabel(unix: number, timezone: string): string {
+	// a moment no date can hold must not take the whole report down
+	if (!Number.isFinite(unix) || Math.abs(unix) > 8.64e12) return 'not known';
 	return new Intl.DateTimeFormat('en-GB', { timeZone: timezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(unix * 1000);
 }
 
@@ -78,29 +83,42 @@ type Hit = ReportPayload['hits'][number];
 
 /** When a limit was reached; "Before ..." when no reading saw the account get there. */
 export const reachedLabel = (h: Hit, timezone: string) => `${h.before ? 'Before ' : ''}${whenLabel(h.ts, timezone)}`;
-/** Which limit a row is about: one of the two windows by its name from Settings, or "Opus limit" for one model. */
-export const limitName = (h: Hit, labels: ReportPayload['labels']) => (h.model ? `${h.model} limit` : labels[h.window]);
+/** Which limit a row is about: one of the two windows by its name from Settings, or "Opus limit" for a limit of its own. */
+export const limitName = (h: Hit, labels: ReportPayload['labels']) => (h.scope === 'window' ? labels[h.window] : `${h.model} limit`);
 /** One model's own limit is used up: only that model stops, the account is not blocked. */
-export const modelOut = (h: Hit) => h.model !== null && h.pct >= 100;
+export const modelOut = (h: Hit) => h.scope === 'model' && h.pct >= 100;
+/** Another allowance the provider reports (a feature, a team) is used up: what it stops is not known, so it is not called blocked. */
+export const otherOut = (h: Hit) => h.scope === 'other' && h.pct >= 100;
 /** Past 100% on paid extra usage the whole time: the account kept working. */
-export const onExtra = (h: Hit) => h.model === null && h.pct >= 100 && h.extra === 'all';
+export const onExtra = (h: Hit) => h.scope === 'window' && h.pct >= 100 && h.extra === 'all';
 /** Only 100% of a whole window blocks an account, and not while paid extra usage covers it; Settings can count a lower level as "limit reached". */
-export const isBlocked = (h: Hit) => h.model === null && h.pct >= 100 && h.extra !== 'all';
-/** "2 h 15 min"; "at least ..." when it was reached before the first reading that saw it. */
-export function blockedFor(h: Hit): string {
+export const isBlocked = (h: Hit) => h.scope === 'window' && h.pct >= 100 && h.extra !== 'all';
+/** The account as a limit row names it: one removed since says so. */
+export const hitAccount = (h: Hit) => `${h.account}${h.current ? '' : ' (removed)'}`;
+/** A whole-window limit blocked the same account during this stretch: "other models still work" would then be untrue. */
+export const alsoBlocked = (h: Hit, hits: Hit[]) =>
+	hits.some((x) => x !== h && x.accountId === h.accountId && isBlocked(x) && x.ts <= (h.until ?? Infinity) && (x.until ?? Infinity) >= h.ts);
+/** "2 h 15 min"; "at least ..." when it was reached before the first reading that saw it. `hits` = the report's other rows. */
+export function blockedFor(h: Hit, hits: Hit[] = []): string {
 	if (onExtra(h)) return 'not blocked (paid extra usage)';
-	if (modelOut(h)) return 'not blocked (other models still work)';
+	if (modelOut(h)) return alsoBlocked(h, hits) ? 'this model only (the account was blocked as well)' : 'not blocked (other models still work)';
+	if (otherOut(h)) return 'not known (this limit only)';
 	if (!isBlocked(h)) return `not blocked (${pct(h.pct)})`;
 	return `${h.before && h.blockedSeconds !== null ? 'at least ' : ''}${blockedLabel(h.blockedSeconds)}${h.extra === 'part' ? ' (the rest on paid extra usage)' : ''}`;
 }
-/** A limit's row on the page: "blocked 2 h 0 min · until Tue, 6 Oct, 11:30". */
-export function hitState(h: Hit, timezone: string): string {
+/**
+ * A limit's row on the page: "blocked 2 h 0 min · until Tue, 6 Oct, 11:30". `ctx.hits` = the report's
+ * other rows; `ctx.now` = when the report was made, so a limit still in force is not worded as if its
+ * whole length had passed.
+ */
+export function hitState(h: Hit, timezone: string, ctx: { hits?: Hit[]; now?: number } = {}): string {
 	const resets = h.until === null ? '' : ` · resets ${whenLabel(h.until, timezone)}`;
 	if (onExtra(h)) return `not blocked: on paid extra usage${resets}`;
-	if (modelOut(h)) return `${h.model} used up, other models still work${resets}`;
+	if (modelOut(h)) return `${h.model} used up${alsoBlocked(h, ctx.hits ?? []) ? '' : ', other models still work'}${resets}`;
+	if (otherOut(h)) return `${h.model} limit reached${resets}`;
 	if (!isBlocked(h)) return `reached ${pct(h.pct)}${resets}`;
 	if (h.until === null) return h.extra === 'part' ? 'blocked (part of the time on paid extra usage)' : 'blocked';
-	return `blocked ${blockedFor(h)} · until ${whenLabel(h.until, timezone)}`;
+	return `blocked ${blockedFor(h)}${ctx.now !== undefined && h.until > ctx.now ? ' in all' : ''} · until ${whenLabel(h.until, timezone)}`;
 }
 
 const times = (n: number) => `${n} ${n === 1 ? 'time' : 'times'}`;
@@ -134,25 +152,47 @@ export function dayChart(r: ReportPayload, palette = PRINT_PALETTE): Drawn {
 	});
 }
 
+/** The 5-hour window by its name from Settings, in running text ("hourly session"). */
+export const windowName = (r: Pick<ReportPayload, 'labels'>) => r.labels.session.trim().toLowerCase() || 'hourly session';
+/**
+ * The kept readings begin inside the period (history started then, or older readings were removed
+ * by "Keep history for"): the part before them is not covered, and the figures are low by its use.
+ */
+export function startsLate(r: ReportPayload): string | null {
+	if (r.firstUnix === null || r.firstUnix <= r.from + 600 || r.firstUnix > r.to) return null;
+	return `The saved readings start on ${whenLabel(r.firstUnix, r.timezone)}. The part of the period before that is not covered by these figures.`;
+}
+
 export function summaryLines(r: ReportPayload): string[] {
 	if (!r.hasData) return [];
 	const many = r.period !== 'day';
+	// an account without a single reading is not "0% used": it is left out of the count and named further down
+	const read = r.accounts.filter((a) => a.had).length;
 	const out = [
-		`Total usage across ${r.accounts.length} ${r.accounts.length === 1 ? 'account' : 'accounts'} was ${pct(r.total)} of an hourly session${many ? ` over ${r.daysWithData} ${r.daysWithData === 1 ? 'day' : 'days'} with data` : ''}.`
+		`Total usage across ${read} ${read === 1 ? 'account' : 'accounts'} was ${pct(r.total)} of one ${windowName(r)}${many ? ` over ${r.daysWithData} ${r.daysWithData === 1 ? 'day' : 'days'} with data` : ''}.`
 	];
-	if (r.busiestSlot !== null) out.push(`The busiest time slot was ${head(r.slots[r.busiestSlot])} with ${pct(r.slotTotals[r.busiestSlot])}.`);
-	if (r.topAccount) out.push(`The most used account was ${r.topAccount} with ${pct(r.topTotal)}.`);
+	if (r.busiestSlots.length > 1) out.push(`The busiest time slots were ${list(r.busiestSlots.map((i) => head(r.slots[i])))} with ${pct(r.slotTotals[r.busiestSlots[0]])} each.`);
+	else if (r.busiestSlot !== null) out.push(`The busiest time slot was ${head(r.slots[r.busiestSlot])} with ${pct(r.slotTotals[r.busiestSlot])}.`);
+	if (r.topAccounts.length > 1) out.push(`The most used accounts were ${list(r.topAccounts)} with ${pct(r.topTotal)} each.`);
+	else if (r.topAccount) out.push(`The most used account was ${r.topAccount} with ${pct(r.topTotal)}.`);
 	const blocked = r.hits.filter(isBlocked);
-	out.push(blocked.length ? `An account was blocked by a limit ${times(blocked.length)}: ${[...new Set(blocked.map((h) => h.account))].join(', ')}.` : 'No account was blocked by a limit.');
+	out.push(blocked.length ? `An account was blocked by a limit ${times(blocked.length)}: ${[...new Set(blocked.map(hitAccount))].join(', ')}.` : 'No account was blocked by a limit.');
 	const paid = r.hits.filter(onExtra);
-	if (paid.length) out.push(`An account went past a limit and kept working on paid extra usage ${times(paid.length)}: ${[...new Set(paid.map((h) => h.account))].join(', ')}.`);
+	if (paid.length) out.push(`An account went past a limit and kept working on paid extra usage ${times(paid.length)}: ${[...new Set(paid.map(hitAccount))].join(', ')}.`);
 	const models = r.hits.filter(modelOut);
-	if (models.length) out.push(`A limit on one model was reached ${times(models.length)}, with the other models still working: ${[...new Set(models.map((h) => `${h.account} (${h.model})`))].join(', ')}.`);
-	const near = r.hits.length - blocked.length - paid.length - models.length;
+	if (models.length)
+		out.push(
+			`A limit on one model was reached ${times(models.length)}${models.some((h) => alsoBlocked(h, r.hits)) ? '' : ', with the other models still working'}: ${[...new Set(models.map((h) => `${hitAccount(h)} (${h.model})`))].join(', ')}.`
+		);
+	const others = r.hits.filter(otherOut);
+	if (others.length) out.push(`Another limit was reached ${times(others.length)}: ${[...new Set(others.map((h) => `${hitAccount(h)} (${h.model})`))].join(', ')}.`);
+	const near = r.hits.length - blocked.length - paid.length - models.length - others.length;
 	if (near) out.push(`An account reached ${r.limitAt}% of a limit without being blocked ${times(near)}.`);
 	if (r.idle.length) out.push(`${r.idleBelow > 1 ? `Used less than ${r.idleBelow}%` : 'Not used at all'}: ${r.idle.join(', ')}.`);
 	if (r.noReadings.length) out.push(`No readings were saved for: ${r.noReadings.join(', ')}. Their use in this period is not known.`);
 	if (r.outsideSlots >= 0.5) out.push(`${pct(r.outsideSlots)} was used at times no time slot covers and is in none of these figures.`);
+	const uncovered = startsLate(r);
+	if (uncovered) out.push(uncovered);
 	return out;
 }
 
@@ -170,16 +210,16 @@ export function buildDoc(r: ReportPayload, doc: DocSettings, view: View, prepare
 			? [
 					{
 						type: 'p',
-						text: `Each time an account was at a limit and could not be used until that limit reset. A limit reached before the period and still in force during it is listed too.${r.hits.some((h) => h.extra !== 'none') ? ' An account with paid extra usage kept working past its limit for as long as that lasted; that time is not counted as blocked.' : ''}${r.hits.some((h) => h.model !== null) ? ' A limit on one model stops that model only; the account itself is not blocked.' : ''}${r.limitAt < 100 ? ` Settings counts ${r.limitAt}% as a limit reached; an account is only blocked at 100%.` : ''}`
+						text: `Each time an account was at a limit and could not be used until that limit reset. A limit reached before the period and still in force during it is listed too.${r.hits.some((h) => h.extra !== 'none') ? ' An account with paid extra usage kept working past its limit for as long as that lasted; that time is not counted as blocked.' : ''}${r.hits.some((h) => h.scope === 'model') ? ' A limit on one model stops that model only; the account itself is not blocked.' : ''}${r.hits.some((h) => h.scope === 'other') ? ' Other limits the provider reports are listed by its own name for them; what such a limit stops is not known.' : ''}${r.limitAt < 100 ? ` Settings counts ${r.limitAt}% as a limit reached; an account is only blocked at 100%.` : ''}`
 					},
 					{
 						type: 'table',
 						head: ['Reached', 'Account', 'Limit', 'Blocked for', 'Blocked until'],
 						rows: r.hits.map((h) => [
 							reachedLabel(h, r.timezone),
-							h.account,
+							hitAccount(h),
 							limitName(h, r.labels),
-							blockedFor(h),
+							blockedFor(h, r.hits),
 							!isBlocked(h) ? '-' : h.until === null ? 'not known' : whenLabel(h.until, r.timezone)
 						]),
 						caption: `Table ${++tab}. Limits reached`
@@ -202,28 +242,27 @@ export function buildDoc(r: ReportPayload, doc: DocSettings, view: View, prepare
 		});
 
 		const slotBlocks: Block[] = [];
-		if (showG && r.accounts.length) slotBlocks.push({ type: 'figure', chart: slotChart(r), caption: `Figure ${++fig}. Hourly session used in each time slot, by account (%)` });
+		if (showG && r.accounts.length) slotBlocks.push({ type: 'figure', chart: slotChart(r), caption: `Figure ${++fig}. ${r.labels.session} used in each time slot, by account (%)` });
 		if (showT)
 			slotBlocks.push({
 				type: 'table',
 				head: ['Account', ...r.slots.map(head), 'Total', ...(many ? ['Days used'] : [])],
 				rows: [
 					...r.accounts.map((a) => [
-						`${a.name}${a.provider === 'codex' ? ' (Codex)' : ''}${a.current ? '' : ' (removed)'}`,
-						...a.slots.map(pct),
-						pct(a.total),
-						...(many ? [`${a.daysUsed} of ${r.daysWithData}`] : [])
+						`${a.name}${a.provider === 'codex' ? ' (Codex)' : ''}${a.current ? '' : ' (removed)'}${a.had ? '' : ' (no readings)'}`,
+						// no reading in the period: its use is not known, which is not the same as 0%
+						...(a.had ? [...a.slots.map(pct), pct(a.total), ...(many ? [`${a.daysUsed} of ${r.daysWithData}`] : [])] : [...a.slots.map(() => '-'), '-', ...(many ? ['-'] : [])])
 					]),
 					['All accounts', ...r.slotTotals.map(pct), pct(r.total), ...(many ? [''] : [])]
 				],
-				caption: `Table ${++tab}. Hourly session used in each time slot, by account`,
+				caption: `Table ${++tab}. ${r.labels.session} used in each time slot, by account${r.accounts.some((a) => !a.had) ? ' (- = no readings saved for the account)' : ''}`,
 				totalRow: true
 			});
 		sections.push({ title: 'Usage by Time Slot', blocks: slotBlocks });
 
 		if (many) {
 			const dayBlocks: Block[] = [];
-			if (showG) dayBlocks.push({ type: 'figure', chart: dayChart(r), caption: `Figure ${++fig}. Total hourly session used per day, all accounts (%)` });
+			if (showG) dayBlocks.push({ type: 'figure', chart: dayChart(r), caption: `Figure ${++fig}. Total ${windowName(r)} used per day, all accounts (%)` });
 			if (showT)
 				dayBlocks.push({
 					type: 'table',
@@ -242,7 +281,7 @@ export function buildDoc(r: ReportPayload, doc: DocSettings, view: View, prepare
 		blocks: [
 			{
 				type: 'p',
-				text: `Figures are a percentage of one hourly session allowance per account. A value above 100% means the session reset and was used again within the period. Each report day runs for 24 hours from ${slotRange(r.slots[0]).split(' – ')[0]}, so a slot that runs past midnight belongs to the day it starts on. Times are in the ${r.timezone} time zone.`
+				text: `Figures are a percentage of one ${windowName(r)} allowance per account. In an account's own row, a value above 100% means its ${windowName(r)} reset and was used again within the period; rows that add up accounts or days pass 100% simply by adding. Figures are rounded to whole percent, so a total can differ by 1% from the sum of the figures shown under it. Each report day runs for 24 hours from ${slotRange(r.slots[0]).split(' – ')[0]}, so a slot that runs past midnight belongs to the day it starts on. Times are in the ${r.timezone} time zone.`
 			}
 		]
 	});

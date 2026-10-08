@@ -184,7 +184,7 @@
 			<label class="k-field">Name of the 7-day window<input class="k-input" value={s.weeklyLabel} maxlength="24" onchange={(e) => save({ weeklyLabel: str(e) }, 'window name')} /></label>
 			<label class="k-field">Turn amber at (%)<input class="k-input" type="number" min="1" max="99" value={s.warnAt} onchange={(e) => save({ warnAt: num(e) }, 'amber level')} /></label>
 			<label class="k-field">Turn red at (%)<input class="k-input" type="number" min="2" max="100" value={s.highAt} onchange={(e) => save({ highAt: num(e) }, 'red level')} /></label>
-			<label class="k-field">Page refreshes itself every
+			<label class="k-field">Usage page refreshes itself every
 				<select class="k-input" value={s.autoRefreshSeconds} onchange={(e) => save({ autoRefreshSeconds: num(e) }, 'page refresh')}>
 					<option value={15}>15 seconds</option><option value={30}>30 seconds</option><option value={60}>1 minute</option><option value={0}>Off</option>
 				</select>

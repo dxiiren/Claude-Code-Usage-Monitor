@@ -232,7 +232,9 @@ test('usage: past its limit on paid extra usage is not "blocked"; a refused logi
 	await expect(row.getByTestId('extra-usage')).toHaveText('extra usage');
 	await expect(row.getByText('blocked', { exact: true })).toHaveCount(0);
 	await expect(row.getByTestId('extra-line')).toContainText('12.50 of 50.00 used');
-	await expect(page.getByTestId('best')).toContainText('All at their limit');
+	// it still works, so the headline does not call it out as at its limit
+	await expect(page.getByTestId('best')).toContainText('On paid extra usage only');
+	await expect(page.getByTestId('best')).not.toContainText('All at their limit');
 	await expect(page.getByTestId('best')).toContainText('alpha still works on paid extra usage');
 	await page.screenshot({ path: path.join(shots, 'usage-extra-usage.png'), fullPage: true });
 
@@ -242,6 +244,14 @@ test('usage: past its limit on paid extra usage is not "blocked"; a refused logi
 	await expect(row.getByText('blocked', { exact: true })).toBeVisible();
 	await expect(row.getByTestId('extra-usage')).toHaveCount(0);
 	await expect(row.getByTestId('extra-line')).toContainText('used up as well');
+
+	// both windows have room but one model's own limit is used up: the headline says so
+	store({ session: { available: true, percentage: 12, resets_at_unix: now + 3600 }, weekly: { available: true, percentage: 44, resets_at_unix: now + 86400 }, models: [{ label: 'Opus', percentage: 100, resets_at_unix: now + 86400 }] }, null);
+	await page.reload();
+	await expect(page.getByTestId('best')).toContainText('alpha');
+	await expect(page.getByTestId('best-models')).toHaveText('Opus used up, other models still work');
+	await expect(row.getByTestId('model-limit')).toContainText('Opus limit reached');
+	await page.screenshot({ path: path.join(shots, 'usage-best-model-out.png'), fullPage: true });
 
 	// HTTP 403: the login was refused, which is not the same as expired
 	store(usage, { http_status: 403 });

@@ -292,7 +292,7 @@ test('report: a weekly limit already in force is listed, in the page and in the 
 
 		await page.getByRole('button', { name: 'Download preview' }).click();
 		const preview = page.getByTestId('doc-preview');
-		await expect(preview).toContainText('An account was blocked by a limit 1 time: Capped team.');
+		await expect(preview).toContainText('An account was blocked by a limit 1 time: Capped team (removed).');
 		await expect(preview).toContainText('Blocked until');
 		await expect(preview).toContainText('at least 2 d 0 h');
 	} finally {
@@ -326,7 +326,7 @@ test('report: an account past its limit on paid extra usage is not listed as blo
 		await page.getByRole('button', { name: 'Download preview' }).click();
 		const preview = page.getByTestId('doc-preview');
 		await expect(preview).toContainText('No account was blocked by a limit.');
-		await expect(preview).toContainText('An account went past a limit and kept working on paid extra usage 1 time: Paid team.');
+		await expect(preview).toContainText('An account went past a limit and kept working on paid extra usage 1 time: Paid team (removed).');
 		await expect(preview).toContainText('not blocked (paid extra usage)');
 		await page.keyboard.press('Escape');
 
@@ -375,7 +375,7 @@ test('report: a limit on one model is listed by the model, and the account is no
 		await page.getByRole('button', { name: 'Download preview' }).click();
 		const preview = page.getByTestId('doc-preview');
 		await expect(preview).toContainText('No account was blocked by a limit.');
-		await expect(preview).toContainText('A limit on one model was reached 1 time, with the other models still working: Opus team (Opus).');
+		await expect(preview).toContainText('A limit on one model was reached 1 time, with the other models still working: Opus team (removed) (Opus).');
 		await expect(preview).toContainText('not blocked (other models still work)');
 	} finally {
 		const c = new DatabaseSync(dbFile);

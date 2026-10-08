@@ -4,12 +4,15 @@
 	import { BRAND } from '$lib/brand';
 	import { PAGE_PALETTE, isOutlined } from '$lib/chart';
 	import { getJson } from '$lib/format';
-	import { buildDoc, dayChart, dayLabel, hitState, isBlocked, limitName, pct, periodLabel, reachedLabel, slotChart, whenLabel, type View } from '$lib/reportDoc';
+	import { buildDoc, dayChart, dayLabel, hitAccount, hitState, isBlocked, limitName, pct, startsLate, windowName, periodLabel, reachedLabel, slotChart, whenLabel, type View } from '$lib/reportDoc';
 	import { clock, slotName, slotRange } from '$lib/slots';
 
 	let { data } = $props();
 	const r = $derived(data.report);
 	const many = $derived(r.period !== 'day');
+	/** accounts with at least one reading in the period: the others are unknown, not unused */
+	const readAccounts = $derived(r.accounts.filter((a) => a.had).length);
+	const blockedHits = $derived(r.hits.filter(isBlocked).length);
 
 	// svelte-ignore state_referenced_locally
 	let view = $state<View>(data.view);
@@ -134,7 +137,7 @@
 		<div class="k-cardhead"><h2>Limits reached</h2><span class="k-small k-muted">{r.hits.length} in this period</span></div>
 		{#if r.hits.length}
 			{#each r.hits as h (`${h.accountId}-${h.window}-${h.model ?? ''}-${h.ts}`)}
-				<div class="kv"><span><b>{h.account}</b> <span class="k-small k-muted">{limitName(h, r.labels)} &middot; {reachedLabel(h, r.timezone)}</span></span><span class="k-num" class:blocked={isBlocked(h)}>{hitState(h, r.timezone)}</span></div>
+				<div class="kv"><span><b>{hitAccount(h)}</b> <span class="k-small k-muted">{limitName(h, r.labels)} &middot; {reachedLabel(h, r.timezone)}</span></span><span class="k-num" class:blocked={isBlocked(h)}>{hitState(h, r.timezone, { hits: r.hits, now: r.generatedUnix })}</span></div>
 			{/each}
 		{:else}<p class="empty k-muted">No account was blocked by a limit.</p>{/if}
 	</section>
@@ -227,14 +230,15 @@
 			{#if r.hits.length}{@render limits()}{/if}
 		{:else}
 			<div class="kpis" data-testid="kpis">
-				<div class="kpi"><div class="k-label">Total used</div><div class="v">{pct(r.total)}</div><div class="s">{r.accounts.length} {r.accounts.length === 1 ? 'account' : 'accounts'}{many ? ` · ${r.daysWithData} ${r.daysWithData === 1 ? 'day' : 'days'}` : ''}</div></div>
-				<div class="kpi"><div class="k-label">Busiest slot</div><div class="v">{r.busiestSlot === null ? '-' : slotName(r.slots[r.busiestSlot])}</div><div class="s">{r.busiestSlot === null ? 'nothing used' : `${slotRange(r.slots[r.busiestSlot])} · ${pct(r.slotTotals[r.busiestSlot])}`}</div></div>
-				<div class="kpi"><div class="k-label">Top account</div><div class="v">{r.topAccount ?? '-'}</div><div class="s">{r.topAccount ? pct(r.topTotal) : 'nothing used'}</div></div>
-				<div class="kpi"><div class="k-label">Limits reached</div><div class="v">{r.hits.length}</div><div class="s">{r.hits.length ? 'listed below' : 'none in this period'}</div></div>
+				<div class="kpi"><div class="k-label">Total used</div><div class="v">{pct(r.total)}</div><div class="s">{readAccounts} {readAccounts === 1 ? 'account' : 'accounts'}{many ? ` · ${r.daysWithData} ${r.daysWithData === 1 ? 'day' : 'days'}` : ''}</div></div>
+				<div class="kpi"><div class="k-label">Busiest slot</div><div class="v">{r.busiestSlot === null ? '-' : slotName(r.slots[r.busiestSlot])}</div><div class="s">{r.busiestSlot === null ? 'nothing used' : `${slotRange(r.slots[r.busiestSlot])} · ${pct(r.slotTotals[r.busiestSlot])}${r.busiestSlots.length > 1 ? ` · tied with ${r.busiestSlots.length - 1} other` : ''}`}</div></div>
+				<div class="kpi"><div class="k-label">Top account</div><div class="v">{r.topAccounts.length ? r.topAccounts.join(', ') : '-'}</div><div class="s">{r.topAccount ? `${pct(r.topTotal)}${r.topAccounts.length > 1 ? ' each' : ''}` : 'nothing used'}</div></div>
+				<div class="kpi"><div class="k-label">Limits reached</div><div class="v">{r.hits.length}</div><div class="s">{r.hits.length ? `${blockedHits} blocked · listed below` : 'none in this period'}</div></div>
 				<div class="kpi"><div class="k-label">Not used</div><div class="v">{r.idle.length}</div><div class="s">{r.idle.length ? r.idle.join(', ') : r.idleBelow === 0 ? 'not counted (Settings)' : r.noReadings.length || r.hits.length ? 'none' : 'all accounts active'}</div></div>
 			</div>
-			{#if r.noReadings.length || r.outsideSlots >= 0.5}
+			{#if r.noReadings.length || r.outsideSlots >= 0.5 || startsLate(r)}
 				<p class="k-note" data-testid="report-gaps">
+					{#if startsLate(r)}{startsLate(r)}{/if}
 					{#if r.noReadings.length}No readings were saved for {r.noReadings.join(', ')} in this period, so {r.noReadings.length === 1 ? 'its' : 'their'} use is not known.{/if}
 					{#if r.outsideSlots >= 0.5}{pct(r.outsideSlots)} was used at times no time slot covers and is in none of these figures.{/if}
 				</p>
@@ -242,7 +246,7 @@
 
 			{#if showG}
 				<section class="k-card" data-testid="slot-chart">
-					<div class="k-cardhead"><h2>Usage by time slot</h2><span class="k-small k-muted">% of an hourly session</span></div>
+					<div class="k-cardhead"><h2>Usage by time slot</h2><span class="k-small k-muted">% of one {windowName(r)}</span></div>
 					<div class="k-only-wide">
 						<div class="chartbox">{@html slotSvg}</div>
 						<div class="legend">{#each r.accounts as a, i (a.id)}<span><i class:alt={isOutlined(i)} style:--c="var(--series-{(i % 6) + 1})"></i>{a.name}</span>{/each}</div>
@@ -270,7 +274,7 @@
 							</thead>
 							<tbody>
 								{#each r.accounts as a (a.id)}
-									<tr><td><b>{a.name}</b>{#if a.provider === 'codex'}&nbsp;<span class="k-tag">Codex</span>{/if}{#if !a.current}&nbsp;<span class="k-small k-muted">(removed)</span>{/if}</td>{#each a.slots as v, si (si)}<td class="r">{pct(v)}</td>{/each}<td class="r"><b>{pct(a.total)}</b></td>{#if many}<td class="r">{a.daysUsed} of {r.daysWithData}</td>{/if}</tr>
+									<tr><td><b>{a.name}</b>{#if a.provider === 'codex'}&nbsp;<span class="k-tag">Codex</span>{/if}{#if !a.current}&nbsp;<span class="k-small k-muted">(removed)</span>{/if}{#if !a.had}&nbsp;<span class="k-small k-muted">(no readings)</span>{/if}</td>{#each a.slots as v, si (si)}<td class="r">{a.had ? pct(v) : '-'}</td>{/each}<td class="r"><b>{a.had ? pct(a.total) : '-'}</b></td>{#if many}<td class="r">{a.had ? `${a.daysUsed} of ${r.daysWithData}` : '-'}</td>{/if}</tr>
 								{/each}
 								<tr><td><b>All accounts</b></td>{#each r.slotTotals as v, si (si)}<td class="r"><b>{pct(v)}</b></td>{/each}<td class="r"><b>{pct(r.total)}</b></td>{#if many}<td></td>{/if}</tr>
 							</tbody>
@@ -279,9 +283,11 @@
 					<div class="k-only-narrow">
 						{#each r.accounts as a (a.id)}
 							<div class="grp">
-								<div class="grphead"><b>{a.name}{#if a.provider === 'codex'} <span class="k-tag">Codex</span>{/if}{#if !a.current}&nbsp;<span class="k-small k-muted">(removed)</span>{/if}</b><b class="k-num">{pct(a.total)}</b></div>
-								{#each r.slots as s, si (si)}<div class="kv slim"><span class="k-muted">{slotName(s)}</span><span class="k-num">{pct(a.slots[si])}</span></div>{/each}
-								{#if many}<div class="kv slim"><span class="k-muted">Days used</span><span class="k-num">{a.daysUsed} of {r.daysWithData}</span></div>{/if}
+								<div class="grphead"><b>{a.name}{#if a.provider === 'codex'} <span class="k-tag">Codex</span>{/if}{#if !a.current}&nbsp;<span class="k-small k-muted">(removed)</span>{/if}</b><b class="k-num">{a.had ? pct(a.total) : 'no readings'}</b></div>
+								{#if a.had}
+									{#each r.slots as s, si (si)}<div class="kv slim"><span class="k-muted">{slotName(s)}</span><span class="k-num">{pct(a.slots[si])}</span></div>{/each}
+									{#if many}<div class="kv slim"><span class="k-muted">Days used</span><span class="k-num">{a.daysUsed} of {r.daysWithData}</span></div>{/if}
+								{/if}
 							</div>
 						{/each}
 					</div>
@@ -305,7 +311,8 @@
 			{@render limits()}
 		{/if}
 		<p class="k-note">
-			Figures are a percentage of one hourly session per account. Over 100% means the session reset and was used again.
+			Figures are a percentage of one {windowName(r)} per account. In an account's own row, over 100% means its {windowName(r)} reset and was used again; totals pass 100% simply by adding accounts or days.
+			Figures are rounded to whole percent, so a total can differ by 1% from the sum of its parts.
 			A report day runs for 24 hours from {clock(r.slots[0].from)}. Times are in {r.timezone}.
 			Download gives the same figures as a Word or PDF document, or as a spreadsheet.
 		</p>

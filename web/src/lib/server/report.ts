@@ -3,11 +3,12 @@
 // configured time slots when it is opened, which is why slots can change at any time.
 import { slotLength, type Slot } from '../slots';
 
-/** A limit that covers one model only, as one reading saw it. */
+/** A limit next to the two windows, as one reading saw it: one model's own, or (`other`) another allowance. */
 export interface ModelLevel {
 	label: string;
 	pct: number;
 	reset: number | null;
+	other?: boolean;
 }
 
 /** One stored reading: the 5-hour ("hourly session") window, and the 7-day one when it was kept. */
@@ -216,19 +217,26 @@ export interface LimitSpell {
 export interface LimitHit extends Omit<LimitSpell, 'last'> {
 	accountId: string;
 	account: string;
-	/** set when the limit covers this one model only: the account's other models kept working */
+	/** false = the account was removed since */
+	current: boolean;
+	/** the limit's own name when it is not one of the two windows: a model ("Opus") or another allowance */
 	model: string | null;
+	/**
+	 * What the limit covers: a whole window (the account stops), one model (the other models keep
+	 * working), or another allowance the provider reports, where what stops is not known.
+	 */
+	scope: 'window' | 'model' | 'other';
 }
 
 /**
- * The readings as one series per model that has its own limit, in the shape limitHits reads as a
- * weekly window. Only readings that carried per-model limits are used, so history from before they
+ * The readings as one series per limit next to the two windows, in the shape limitHits reads as a
+ * weekly window. Only readings that carried such limits are used, so history from before they
  * were kept does not read as "the model was free until now".
  */
-function modelSeries(samples: Sample[]): Map<string, { label: string; samples: Sample[] }> {
+function modelSeries(samples: Sample[]): Map<string, { label: string; other: boolean; samples: Sample[] }> {
 	const withModels = samples.filter((s) => s.models?.length);
-	const out = new Map<string, { label: string; samples: Sample[] }>();
-	for (const s of withModels) for (const m of s.models!) if (!out.has(m.label.toLowerCase())) out.set(m.label.toLowerCase(), { label: m.label, samples: [] });
+	const out = new Map<string, { label: string; other: boolean; samples: Sample[] }>();
+	for (const s of withModels) for (const m of s.models!) if (!out.has(m.label.toLowerCase())) out.set(m.label.toLowerCase(), { label: m.label, other: !!m.other, samples: [] });
 	for (const [key, series] of out)
 		for (const s of withModels) {
 			const m = s.models!.find((x) => x.label.toLowerCase() === key);
@@ -300,7 +308,8 @@ export interface Report {
 	timezone: string;
 	slots: { name: string; from: number; to: number }[];
 	hasData: boolean;
-	accounts: { id: string; name: string; provider: string; current: boolean; slots: number[]; total: number; daysUsed: number }[];
+	/** `had` = the account has at least one reading in the period; without one its figures are not zero but unknown */
+	accounts: { id: string; name: string; provider: string; current: boolean; slots: number[]; total: number; daysUsed: number; had: boolean }[];
 	days: { date: string; hasData: boolean; slots: number[]; total: number }[];
 	slotTotals: number[];
 	total: number;
@@ -311,7 +320,11 @@ export interface Report {
 	/** every limit in force at some moment of the period, whenever it was reached */
 	hits: LimitHit[];
 	busiestSlot: number | null;
+	/** every slot that shares the highest total (more than one = a tie) */
+	busiestSlots: number[];
 	topAccount: string | null;
+	/** every account that shares the highest total, as the page shows it (whole %) */
+	topAccounts: string[];
 	/** the top account's own total (a name can repeat once an account was removed and added again) */
 	topTotal: number;
 	/** current accounts that had readings, were never at a limit, and stayed under the "not used" level */
@@ -358,17 +371,17 @@ export function buildReport(input: ReportInput): Report {
 			if (!placed) outside += inc.use;
 		}
 		let limited = false;
-		const keep = (spells: LimitSpell[], model: string | null) => {
+		const keep = (spells: LimitSpell[], model: string | null, scope: LimitHit['scope']) => {
 			for (const { last, ...h } of spells) {
 				// In force at some moment of the period, whenever it began. A level only falls when the
 				// window resets, so the limit held until then even if the readings stopped earlier.
 				if (h.ts > range.to || Math.max(last, h.until ?? 0) <= range.from) continue;
-				hits.push({ ...h, accountId: a.id, account: a.name, model });
+				hits.push({ ...h, accountId: a.id, account: a.name, current: a.current, model, scope });
 				limited = true;
 			}
 		};
-		for (const window of ['session', 'weekly'] as const) keep(limitHits(all, input.limitAt, window), null);
-		for (const m of modelSeries(all).values()) keep(limitHits(m.samples, input.limitAt, 'weekly'), m.label);
+		for (const window of ['session', 'weekly'] as const) keep(limitHits(all, input.limitAt, window), null, 'window');
+		for (const m of modelSeries(all).values()) keep(limitHits(m.samples, input.limitAt, 'weekly'), m.label, m.other ? 'other' : 'model');
 		const total = perSlot.reduce((x, y) => x + y, 0);
 		return {
 			id: a.id,
@@ -386,7 +399,7 @@ export function buildReport(input: ReportInput): Report {
 
 	// an account that was removed and has nothing in this period would only be noise
 	const kept = accounts.filter((a) => a.current || a.had);
-	const shown = kept.map(({ had: _had, outside: _outside, limited: _limited, ...a }) => a);
+	const shown = kept.map(({ outside: _outside, limited: _limited, ...a }) => a);
 	for (const d of days) {
 		d.total = round1(d.slots.reduce((x, y) => x + y, 0));
 		d.slots = d.slots.map(round1);
@@ -413,7 +426,9 @@ export function buildReport(input: ReportInput): Report {
 		to: range.to,
 		hits,
 		busiestSlot: hasData && best > 0 ? slotTotals.indexOf(best) : null,
+		busiestSlots: hasData && best > 0 ? slotTotals.flatMap((t, i) => (Math.round(t) === Math.round(best) ? [i] : [])) : [],
 		topAccount: hasData && top && top.total > 0 ? top.name : null,
+		topAccounts: hasData && top && top.total > 0 ? shown.filter((a) => Math.round(a.total) === Math.round(top.total)).map((a) => a.name) : [],
 		topTotal: hasData && top ? top.total : 0,
 		// judged as the page shows it (whole %), and counting use that fell outside the slots
 		idle: hasData ? kept.filter((a) => a.current && a.had && !a.limited && Math.round(a.total + a.outside) < input.idleBelow).map((a) => a.name) : [],
