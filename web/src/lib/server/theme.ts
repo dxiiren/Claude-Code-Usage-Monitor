@@ -129,6 +129,9 @@ function boxLayer(
 }
 
 /** Card opacity 0.85: see-through, but still readable over light windows. */
+/** A name as literal text in a template: the widget reads `{...}` as an expression, and `{{` as one brace. */
+const literal = (text: string) => text.replace(/\{/g, '{{');
+
 export function buildTheme(accounts: ThemeAccount[], mode: CardTheme = 'dark', opacity = 0.85): Json {
 	const PAD = 10, TOP = 16, LINE = 17, GAP = 9, BW = 44, TW = 96;
 	const LX = 67, BX = LX + 20, TX = BX + BW + 6;
@@ -159,7 +162,7 @@ export function buildTheme(accounts: ThemeAccount[], mode: CardTheme = 'dark', o
 
 	if (empty) {
 		for (const v of vs)
-			kids.push(textLayer(`no-accounts${v.suffix}`, PAD, PAD + TOP, W - 2 * PAD, LINE, 'No accounts yet', 11, v.p.text, 'medium', v.render));
+			kids.push(textLayer(`no-accounts${v.suffix}`, PAD, PAD + TOP, W - 2 * PAD, LINE, 'No accounts on the widget', 11, v.p.text, 'medium', v.render));
 	}
 
 	let n = 0;
@@ -177,7 +180,7 @@ export function buildTheme(accounts: ThemeAccount[], mode: CardTheme = 'dark', o
 		}
 		// Codex: name on the first line, a small "Codex" tag under it. Claude keeps the kit layout.
 		for (const v of vs)
-			kids.push(textLayer(`name-${a.id}${v.suffix}`, PAD, codex ? y0 : y0 + Math.floor(LINE / 2), 56, 18, a.name, 13, v.p.text, 'semibold', v.render));
+			kids.push(textLayer(`name-${a.id}${v.suffix}`, PAD, codex ? y0 : y0 + Math.floor(LINE / 2), 56, 18, literal(a.name), 13, v.p.text, 'semibold', v.render));
 		if (codex)
 			for (const v of vs) kids.push(textLayer(`tag-${a.id}${v.suffix}`, PAD, y0 + LINE + 1, 56, 14, 'Codex', 9, v.p.muted, 'semibold', v.render));
 		const rows: [string, string][] = [
@@ -207,7 +210,7 @@ export function buildTheme(accounts: ThemeAccount[], mode: CardTheme = 'dark', o
 		// In place of the two bar rows while the login needs renewing.
 		for (const v of vs)
 			kids.push(
-				textLayer(`expired-${a.id}${v.suffix}`, LX, y0 + Math.floor(LINE / 2), W - LX - PAD, LINE, `Expired ${DOT} re-login`, 11, v.p.alert, 'semibold', mul(L, v.render))
+				textLayer(`expired-${a.id}${v.suffix}`, LX, y0 + Math.floor(LINE / 2), W - LX - PAD, LINE, `Login needed`, 11, v.p.alert, 'semibold', mul(L, v.render))
 			);
 	});
 

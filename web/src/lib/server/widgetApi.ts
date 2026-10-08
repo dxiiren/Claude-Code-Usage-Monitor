@@ -14,7 +14,14 @@ export interface WidgetAccount {
 	plan: string | null;
 	status: 'ok' | 'expired' | 'logged_out' | 'error';
 	status_message: string;
-	usage: { session: WindowUsage; weekly: WindowUsage } | null;
+	usage: {
+		session: WindowUsage;
+		weekly: WindowUsage;
+		/** Paid extra usage in force past a spent window; left out when there is none. */
+		credits?: { percentage: number; remaining: number; total: number };
+		/** Limits next to the two windows (one model's own when `model`, else another allowance); left out when there are none. */
+		limits?: { label: string; percentage: number; resets_at_unix: number | null; model: boolean }[];
+	} | null;
 }
 
 export interface WidgetPayload {
@@ -67,7 +74,16 @@ export async function widgetPayload(auth: AuthLookup, nowMs = Date.now()): Promi
 			plan: a.plan,
 			status: st.state,
 			status_message: st.message,
-			usage: u ? { session: win(u.session), weekly: win(u.weekly) } : null
+			usage: u
+				? {
+						session: win(u.session),
+						weekly: win(u.weekly),
+						...(u.extra ? { credits: { percentage: u.extra.percentage, remaining: u.extra.remaining, total: u.extra.total } } : {}),
+						...(u.models?.length
+							? { limits: u.models.map((m) => ({ label: m.label, percentage: m.percentage, resets_at_unix: m.resets_at_unix ?? null, model: !m.other })) }
+							: {})
+					}
+				: null
 		};
 	});
 	return {

@@ -318,7 +318,7 @@ support the original.
 | From the upstream project | Added in this fork |
 | --- | --- |
 | The widget: taskbar/floating card, theme engine and Theme Studio, localisation (14 languages) | Account Manager web app (SvelteKit + SQLite): add accounts by pasting the login code, Usage page, light/dark |
-| Usage polling for Claude Code, Codex, Cursor, Grok, Antigravity, OpenCode | Widget reads its Claude accounts from `accounts.db` and reloads live; "Expired · re-login" state |
+| Usage polling for Claude Code, Codex, Cursor, Grok, Antigravity, OpenCode | Widget reads its Claude accounts from `accounts.db` and reloads live; "Login needed" state |
 | Multi-account profiles, credential handling, the self-updater, WinGet packaging | Docker server mode (password login, server-side polling, widget tokens) + widget remote mode |
 | The original README, kept as [`docs/upstream-README.md`](docs/upstream-README.md) | `setup.ps1` / `justfile` kit, deploy overlays (Cloudflare tunnel, own-cert HTTPS), CI suites |
 | The widget's Codex provider (usage polling, `auth.json` credentials) | Codex accounts in the Account Manager: sign-in through the Codex CLI's app-server, paste-the-callback step on a server, server-side Codex polling, Codex tag on the pages and card, Codex CLI in `setup.ps1` and the Docker image |

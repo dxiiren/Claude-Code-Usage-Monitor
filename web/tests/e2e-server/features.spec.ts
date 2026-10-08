@@ -292,7 +292,7 @@ test('report: a weekly limit already in force is listed, in the page and in the 
 
 		await page.getByRole('button', { name: 'Download preview' }).click();
 		const preview = page.getByTestId('doc-preview');
-		await expect(preview).toContainText('An account was blocked by a limit 1 time: Capped team.');
+		await expect(preview).toContainText('An account was blocked by a limit 1 time: Capped team (removed).');
 		await expect(preview).toContainText('Blocked until');
 		await expect(preview).toContainText('at least 2 d 0 h');
 	} finally {
@@ -326,7 +326,7 @@ test('report: an account past its limit on paid extra usage is not listed as blo
 		await page.getByRole('button', { name: 'Download preview' }).click();
 		const preview = page.getByTestId('doc-preview');
 		await expect(preview).toContainText('No account was blocked by a limit.');
-		await expect(preview).toContainText('An account went past a limit and kept working on paid extra usage 1 time: Paid team.');
+		await expect(preview).toContainText('An account went past a limit and kept working on paid extra usage 1 time: Paid team (removed).');
 		await expect(preview).toContainText('not blocked (paid extra usage)');
 		await page.keyboard.press('Escape');
 
@@ -342,6 +342,45 @@ test('report: an account past its limit on paid extra usage is not listed as blo
 		const c = new DatabaseSync(dbFile);
 		c.exec('PRAGMA busy_timeout = 5000');
 		c.exec("DELETE FROM usage_samples WHERE account_id = 'paid'; DELETE FROM report_accounts WHERE account_id = 'paid';");
+		c.close();
+	}
+});
+
+test('report: a limit on one model is listed by the model, and the account is not called blocked', async ({ page }) => {
+	const date = seedHistory();
+	const d = new DatabaseSync(dbFile);
+	d.exec('PRAGMA busy_timeout = 5000');
+	const first = (d.prepare("SELECT MAX(ts_unix) AS t FROM usage_samples WHERE account_id = 'legacy'").get() as { t: number }).t - 120;
+	d.prepare("INSERT OR REPLACE INTO report_accounts (account_id, name, provider) VALUES ('opus', 'Opus team', 'claude')").run();
+	// both windows have room; the Opus allowance fills up and stays full
+	const ins = d.prepare("INSERT OR REPLACE INTO usage_samples (account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix, models_json) VALUES ('opus', ?, 20, NULL, 40, NULL, ?)");
+	[80, 100, 100].forEach((pct, i) => ins.run(first + i * 60, JSON.stringify([{ label: 'Opus', pct, reset: first + 2 * 86400 }, { label: 'Sonnet', pct: 10, reset: first + 2 * 86400 }])));
+	d.close();
+	try {
+		await signIn(page);
+		await page.goto(`/report?period=day&date=${date}`);
+		const limits = page.getByTestId('limits');
+		await expect(limits).toContainText('1 in this period');
+		await expect(limits).toContainText('Opus team');
+		await expect(limits).toContainText('Opus limit');
+		await expect(limits).toContainText('Opus used up, other models still work · resets');
+		await expect(limits).not.toContainText('blocked');
+		for (const width of [1280, 390]) {
+			await page.setViewportSize({ width, height: 800 });
+			expect(await sideways(page), `model limit at ${width}px`).toBeLessThanOrEqual(0);
+		}
+		await page.setViewportSize({ width: 1280, height: 800 });
+		await page.screenshot({ path: path.join(shots, 'report-model-limit.png'), fullPage: true });
+
+		await page.getByRole('button', { name: 'Download preview' }).click();
+		const preview = page.getByTestId('doc-preview');
+		await expect(preview).toContainText('No account was blocked by a limit.');
+		await expect(preview).toContainText('A limit on one model was reached 1 time, with the other models still working: Opus team (removed) (Opus).');
+		await expect(preview).toContainText('not blocked (other models still work)');
+	} finally {
+		const c = new DatabaseSync(dbFile);
+		c.exec('PRAGMA busy_timeout = 5000');
+		c.exec("DELETE FROM usage_samples WHERE account_id = 'opus'; DELETE FROM report_accounts WHERE account_id = 'opus';");
 		c.close();
 	}
 });

@@ -226,6 +226,28 @@ describe('settings', () => {
 	});
 });
 
+describe('settings that would make screens ambiguous', () => {
+	it('the two usage windows cannot carry the same name', () => {
+		const before = settings.getSettings();
+		expect(() => settings.saveSettings({ hourlyLabel: 'Session', weeklyLabel: 'session ' })).toThrow(/different names/);
+		expect(() => settings.saveSettings({ weeklyLabel: before.hourlyLabel })).toThrow(/different names/);
+		expect(settings.getSettings()).toMatchObject({ hourlyLabel: before.hourlyLabel, weeklyLabel: before.weeklyLabel });
+	});
+	it('names that were already equal (saved by an older version) do not block other settings', () => {
+		const before = settings.getSettings();
+		const d = db.database();
+		const put = d.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+		put.run('hourlyLabel', JSON.stringify('Same'));
+		put.run('weeklyLabel', JSON.stringify('same'));
+		settings.resetSettingsCache();
+		expect(settings.saveSettings({ idleBelow: before.idleBelow }).hourlyLabel).toBe('Same');
+		expect(() => settings.saveSettings({ hourlyLabel: 'same' })).toThrow(/different names/);
+		settings.saveSettings({ hourlyLabel: before.hourlyLabel });
+		settings.saveSettings({ weeklyLabel: before.weeklyLabel });
+		expect(settings.getSettings()).toMatchObject({ hourlyLabel: before.hourlyLabel, weeklyLabel: before.weeklyLabel });
+	});
+});
+
 describe('reading history', () => {
 	const kl = (date: string, hhmm: string) => Date.parse(`${date}T${hhmm}:00+08:00`);
 	const reading = (pct: number) => ({ ok: true as const, usage: { session: { available: true, percentage: pct, resets_at_unix: null }, weekly: { available: true, percentage: 5, resets_at_unix: null } } });
@@ -255,6 +277,70 @@ describe('reading history', () => {
 		const hit = reportData.loadReport('day', '2026-10-05', kl('2026-10-05', '16:00')).hits.find((h) => h.accountId === other);
 		// on paid extra usage 10:00 to 11:00, then blocked until the reset at 14:00
 		expect(hit).toMatchObject({ extra: 'part', blockedSeconds: 3 * 3600 });
+		db.removeAccount(other);
+		db.database().prepare('DELETE FROM usage_samples WHERE account_id = ?').run(other);
+		db.database().prepare('DELETE FROM report_accounts WHERE account_id = ?').run(other);
+	});
+	it('Codex credits are measured against the balance kept with the last good reading, across a failed poll', () => {
+		const other = db.createAccount('codex credits').id;
+		const full = (balance: number) => ({
+			ok: true as const,
+			usage: {
+				session: { available: false, percentage: 0, resets_at_unix: null },
+				weekly: { available: true, percentage: 100, resets_at_unix: kl('2026-10-04', '14:00') / 1000 },
+				credits: { account: 'acct-1', balance, baseline: balance, live: true, capped: false }
+			}
+		});
+		const stored = () => JSON.parse(rows<{ usage_json: string }>(`SELECT usage_json FROM account_usage WHERE account_id = '${other}'`)[0].usage_json);
+		usage.saveResult(other, full(500), kl('2026-10-04', '10:00'));
+		expect(stored().extra).toBeUndefined();
+		usage.saveResult(other, { ok: false, error: 'network_error' }, kl('2026-10-04', '10:30'));
+		usage.saveResult(other, full(400), kl('2026-10-04', '11:00'));
+		expect(stored()).toMatchObject({ extra: { percentage: 20, remaining: 16, total: 20 }, credits: { balance: 400, baseline: 500 } });
+		// an answer without a balance keeps what was learned: the next one is still measured against 500
+		const bare = full(0);
+		delete (bare.usage as { credits?: unknown }).credits;
+		usage.saveResult(other, bare, kl('2026-10-04', '11:30'));
+		expect(stored()).toMatchObject({ credits: { balance: 400, baseline: 500, live: false } });
+		expect(stored().extra).toBeUndefined();
+		usage.saveResult(other, full(300), kl('2026-10-04', '12:00'));
+		expect(stored()).toMatchObject({ extra: { percentage: 40, remaining: 12, total: 20 } });
+		expect(rows<{ extra_left: number | null }>(`SELECT extra_left FROM usage_samples WHERE account_id = '${other}' ORDER BY ts_unix`).map((r) => r.extra_left)).toEqual([null, 16, null, 12]);
+		db.removeAccount(other);
+		db.database().prepare('DELETE FROM usage_samples WHERE account_id = ?').run(other);
+		db.database().prepare('DELETE FROM report_accounts WHERE account_id = ?').run(other);
+	});
+	it('a reading whose saved per-model text is not what the server writes never breaks a report', () => {
+		const other = db.createAccount('odd models').id;
+		const at = kl('2026-10-03', '10:00') / 1000;
+		const ins = db.database().prepare('INSERT INTO usage_samples (account_id, ts_unix, s_pct, w_pct, models_json) VALUES (?, ?, 10, 20, ?)');
+		const texts = ['not json', '{"a":1}', '[null,5,"x",{"label":1,"pct":"x"},{"label":"Z"}]', '[{"label":"","pct":100,"reset":5}]', '[{"label":"Opus","pct":100,"reset":1e300}]', '[{"label":"Opus","pct":1e999,"reset":null}]', '[{"label":"  Opus ","pct":100,"reset":-4}]'];
+		texts.forEach((t, i) => ins.run(other, at + i * 60, t));
+		const kept = usage.samplesBetween(at, at + 3600).get(other)!.map((s) => s.models);
+		// only a named model with a real level is kept; a reset that is no real moment is dropped, not the reading
+		expect(kept).toEqual([null, null, null, null, [{ label: 'Opus', pct: 100, reset: null }], null, [{ label: 'Opus', pct: 100, reset: null }]]);
+		const r = reportData.loadReport('day', '2026-10-03', kl('2026-10-03', '16:00'));
+		expect(r.hits.filter((h) => h.accountId === other)).toMatchObject([{ model: 'Opus', until: null }]);
+		db.removeAccount(other);
+		db.database().prepare('DELETE FROM usage_samples WHERE account_id = ?').run(other);
+		db.database().prepare('DELETE FROM report_accounts WHERE account_id = ?').run(other);
+	});
+	it('calendar dots mark exactly the days whose report has data, also where the day starts mid-hour', () => {
+		const before = settings.getSettings();
+		// Kolkata is UTC+5:30: a report day starting at 09:00 begins at 03:30 UTC, inside an hour
+		settings.saveSettings({ timezone: 'Asia/Kolkata' });
+		const other = db.createAccount('dots').id;
+		const at = Date.parse('2026-11-06T08:40:00+05:30'); // 20 minutes before the 6th starts: still the 5th
+		const onLine = Date.parse('2026-11-08T09:00:00+05:30'); // exactly on the line: belongs to the day that just ended
+		usage.saveResult(other, reading(10), at);
+		usage.saveResult(other, reading(12), onLine);
+		// a reading of an account the report does not know (no account, no name on record) marks no day
+		db.database().prepare("INSERT INTO usage_samples (account_id, ts_unix, s_pct, w_pct) VALUES ('orphan', ?, 5, 5)").run(Date.parse('2026-11-20T12:00:00+05:30') / 1000);
+		expect(reportData.daysWithData('2026-11')).toEqual(['2026-11-05', '2026-11-07']);
+		db.database().prepare("DELETE FROM usage_samples WHERE account_id = 'orphan'").run();
+		for (const [date, has] of [['2026-11-05', true], ['2026-11-06', false], ['2026-11-07', true], ['2026-11-08', false]] as const)
+			expect(reportData.loadReport('day', date, onLine + 3_600_000).hasData, date).toBe(has);
+		settings.saveSettings({ timezone: before.timezone });
 		db.removeAccount(other);
 		db.database().prepare('DELETE FROM usage_samples WHERE account_id = ?').run(other);
 		db.database().prepare('DELETE FROM report_accounts WHERE account_id = ?').run(other);

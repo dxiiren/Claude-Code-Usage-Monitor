@@ -3,6 +3,14 @@
 // configured time slots when it is opened, which is why slots can change at any time.
 import { slotLength, type Slot } from '../slots';
 
+/** A limit next to the two windows, as one reading saw it: one model's own, or (`other`) another allowance. */
+export interface ModelLevel {
+	label: string;
+	pct: number;
+	reset: number | null;
+	other?: boolean;
+}
+
 /** One stored reading: the 5-hour ("hourly session") window, and the 7-day one when it was kept. */
 export interface Sample {
 	ts: number;
@@ -14,6 +22,13 @@ export interface Sample {
 	weekReset?: number | null;
 	/** paid extra usage left at this reading, kept only while a window was spent; null = none in force */
 	extraLeft?: number | null;
+	/**
+	 * The limits next to the two windows that this reading carried; an empty list = it carried none.
+	 * null or absent = not known: the reading is from before these were kept.
+	 */
+	models?: ModelLevel[] | null;
+	/** Set on a reading without a figure when it is KNOWN that the limit was not there (not just missing from the answer's data). */
+	absent?: boolean;
 }
 
 export interface ReportAccount {
@@ -30,6 +45,8 @@ const DAY_MS = 86_400_000;
 /** A reading this long after the previous one cannot belong to the same window. */
 const WINDOW_S = { session: 5 * 3600, weekly: 7 * 86_400 } as const;
 export type LimitWindow = keyof typeof WINDOW_S;
+/** A level seen under the limit at least this long before the reset means the limit was lifted early. */
+const EARLY_LIFT_S = 120;
 /** Jitter allowed in a window's reported reset time before it counts as a new window. */
 const RESET_JITTER_S = 600;
 
@@ -122,6 +139,8 @@ interface Level {
 	reset: number | null;
 	/** the account still worked on paid extra usage at this reading */
 	extra: boolean;
+	/** false = the reading carried no figure for this window and is counted as zero */
+	real: boolean;
 }
 
 /**
@@ -135,7 +154,8 @@ function levels(samples: Sample[], window: LimitWindow): Level[] {
 		ts: s.ts,
 		pct: (weekly ? s.weekPct : s.pct) ?? null,
 		reset: (weekly ? s.weekReset : s.reset) ?? null,
-		extra: (s.extraLeft ?? 0) > 0
+		extra: (s.extraLeft ?? 0) > 0,
+		absent: !!s.absent
 	}));
 	// for each position, the next reading that has a percentage
 	const next: ((typeof raw)[number] | null)[] = new Array(raw.length).fill(null);
@@ -145,14 +165,14 @@ function levels(samples: Sample[], window: LimitWindow): Level[] {
 	for (let i = 0; i < raw.length; i++) {
 		const cur = raw[i];
 		if (cur.pct !== null) {
-			out.push({ ts: cur.ts, pct: cur.pct, reset: cur.reset, extra: cur.extra });
+			out.push({ ts: cur.ts, pct: cur.pct, reset: cur.reset, extra: cur.extra, real: true });
 			known = cur;
 			continue;
 		}
 		const before = known?.reset ?? null;
 		const after = next[i]?.reset ?? null;
 		const sameWindow = before !== null && after !== null && Math.abs(after - before) <= RESET_JITTER_S;
-		if (!sameWindow) out.push({ ts: cur.ts, pct: 0, reset: cur.reset, extra: false });
+		if (!sameWindow) out.push({ ts: cur.ts, pct: 0, reset: cur.reset, extra: false, real: cur.absent });
 	}
 	return out;
 }
@@ -207,6 +227,34 @@ export interface LimitSpell {
 export interface LimitHit extends Omit<LimitSpell, 'last'> {
 	accountId: string;
 	account: string;
+	/** false = the account was removed since */
+	current: boolean;
+	/** the limit's own name when it is not one of the two windows: a model ("Opus") or another allowance */
+	model: string | null;
+	/**
+	 * What the limit covers: a whole window (the account stops), one model (the other models keep
+	 * working), or another allowance the provider reports, where what stops is not known.
+	 */
+	scope: 'window' | 'model' | 'other';
+}
+
+/**
+ * The readings as one series per limit next to the two windows, in the shape limitHits reads as a
+ * weekly window. Readings from before these limits were kept (models = null) are left out, so that
+ * history does not read as "the model was free until now"; a reading that is known to have carried
+ * none counts as the limit not being there.
+ */
+function modelSeries(samples: Sample[]): Map<string, { label: string; other: boolean; samples: Sample[] }> {
+	const withModels = samples.filter((s) => s.models !== null && s.models !== undefined);
+	const out = new Map<string, { label: string; other: boolean; samples: Sample[] }>();
+	for (const s of withModels) for (const m of s.models!) if (!out.has(m.label.toLowerCase())) out.set(m.label.toLowerCase(), { label: m.label, other: !!m.other, samples: [] });
+	for (const [key, series] of out)
+		for (const s of withModels) {
+			const m = s.models!.find((x) => x.label.toLowerCase() === key);
+			// the answer listed its limits and this one was not among them: it was not there
+			series.samples.push({ ts: s.ts, pct: null, reset: null, weekPct: m?.pct ?? null, weekReset: m?.reset ?? null, absent: !m });
+		}
+	return out;
 }
 
 /**
@@ -228,6 +276,14 @@ export function limitHits(samples: Sample[], limitAt: number, window: LimitWindo
 		const silent = prev !== null && cur.ts - prev.ts > WINDOW_S[window];
 		// a later reset time means the window turned over, even with the level still at the limit
 		const turned = open !== null && open.until !== null && cur.reset !== null && cur.reset > open.until + RESET_JITTER_S;
+		// A reading under the limit before the reset it was waiting for: the limit was lifted early (a raised
+		// allowance, a plan change). It held until this reading, not until the reset it once announced.
+		// Only a reading with a real figure counts, and only clearly before the reset: the reset is kept to
+		// the minute, so a reading in the seconds around it is the normal reset, not an early lift.
+		if (open && cur.real && cur.pct < limitAt && !silent && open.until !== null && cur.ts < open.until - EARLY_LIFT_S) {
+			open.until = cur.ts;
+			open.blockedSeconds = blockedIn(cur.ts);
+		}
 		if (cur.pct < limitAt || silent || turned) open = null;
 		if (cur.pct >= limitAt) {
 			if (!open) {
@@ -272,7 +328,8 @@ export interface Report {
 	timezone: string;
 	slots: { name: string; from: number; to: number }[];
 	hasData: boolean;
-	accounts: { id: string; name: string; provider: string; current: boolean; slots: number[]; total: number; daysUsed: number }[];
+	/** `had` = the account has at least one reading in the period; without one its figures are not zero but unknown */
+	accounts: { id: string; name: string; provider: string; current: boolean; slots: number[]; total: number; daysUsed: number; had: boolean }[];
 	days: { date: string; hasData: boolean; slots: number[]; total: number }[];
 	slotTotals: number[];
 	total: number;
@@ -283,11 +340,17 @@ export interface Report {
 	/** every limit in force at some moment of the period, whenever it was reached */
 	hits: LimitHit[];
 	busiestSlot: number | null;
+	/** every slot that shares the highest total (more than one = a tie) */
+	busiestSlots: number[];
 	topAccount: string | null;
+	/** every account that shares the highest total, as the page shows it (whole %) */
+	topAccounts: string[];
 	/** the top account's own total (a name can repeat once an account was removed and added again) */
 	topTotal: number;
 	/** current accounts that had readings, were never at a limit, and stayed under the "not used" level */
 	idle: string[];
+	/** one of them did use something (inside a slot or outside): "not used at all" would be untrue for the list */
+	idleUsed: boolean;
 	/** current accounts without a single reading in the period: nothing is known about their use */
 	noReadings: string[];
 	/** % used at times no slot covers; it is in none of the figures above */
@@ -295,6 +358,11 @@ export interface Report {
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
+/**
+ * How a figure reads on the page: nothing, under 1%, or a whole percent. Two figures tie only when
+ * they read the same AND something was used: an unused account is never "tied" with a barely used one.
+ */
+const shownAs = (v: number) => (v <= 0 ? 'none' : v < 0.5 ? 'under1' : String(Math.round(v)));
 
 export function buildReport(input: ReportInput): Report {
 	const { slots, timezone: tz } = input;
@@ -330,14 +398,17 @@ export function buildReport(input: ReportInput): Report {
 			if (!placed) outside += inc.use;
 		}
 		let limited = false;
-		for (const window of ['session', 'weekly'] as const)
-			for (const { last, ...h } of limitHits(all, input.limitAt, window)) {
+		const keep = (spells: LimitSpell[], model: string | null, scope: LimitHit['scope']) => {
+			for (const { last, ...h } of spells) {
 				// In force at some moment of the period, whenever it began. A level only falls when the
 				// window resets, so the limit held until then even if the readings stopped earlier.
 				if (h.ts > range.to || Math.max(last, h.until ?? 0) <= range.from) continue;
-				hits.push({ ...h, accountId: a.id, account: a.name });
+				hits.push({ ...h, accountId: a.id, account: a.name, current: a.current, model, scope });
 				limited = true;
 			}
+		};
+		for (const window of ['session', 'weekly'] as const) keep(limitHits(all, input.limitAt, window), null, 'window');
+		for (const m of modelSeries(all).values()) keep(limitHits(m.samples, input.limitAt, 'weekly'), m.label, m.other ? 'other' : 'model');
 		const total = perSlot.reduce((x, y) => x + y, 0);
 		return {
 			id: a.id,
@@ -355,11 +426,12 @@ export function buildReport(input: ReportInput): Report {
 
 	// an account that was removed and has nothing in this period would only be noise
 	const kept = accounts.filter((a) => a.current || a.had);
-	const shown = kept.map(({ had: _had, outside: _outside, limited: _limited, ...a }) => a);
+	const shown = kept.map(({ outside: _outside, limited: _limited, ...a }) => a);
 	for (const d of days) {
 		d.total = round1(d.slots.reduce((x, y) => x + y, 0));
 		d.slots = d.slots.map(round1);
 	}
+	const idle = kept.filter((a) => a.current && a.had && !a.limited && Math.round(a.total + a.outside) < input.idleBelow);
 	const slotTotals = slots.map((_, i) => round1(shown.reduce((x, a) => x + a.slots[i], 0)));
 	const total = round1(slotTotals.reduce((x, y) => x + y, 0));
 	const hasData = days.some((d) => d.hasData);
@@ -382,10 +454,13 @@ export function buildReport(input: ReportInput): Report {
 		to: range.to,
 		hits,
 		busiestSlot: hasData && best > 0 ? slotTotals.indexOf(best) : null,
+		busiestSlots: hasData && best > 0 ? slotTotals.flatMap((t, i) => (shownAs(t) === shownAs(best) ? [i] : [])) : [],
 		topAccount: hasData && top && top.total > 0 ? top.name : null,
+		topAccounts: hasData && top && top.total > 0 ? shown.filter((a) => shownAs(a.total) === shownAs(top.total)).map((a) => `${a.name}${a.current ? '' : ' (removed)'}`) : [],
 		topTotal: hasData && top ? top.total : 0,
 		// judged as the page shows it (whole %), and counting use that fell outside the slots
-		idle: hasData ? kept.filter((a) => a.current && a.had && !a.limited && Math.round(a.total + a.outside) < input.idleBelow).map((a) => a.name) : [],
+		idle: hasData ? idle.map((a) => a.name) : [],
+		idleUsed: hasData && idle.some((a) => a.slots.some((v) => v > 0) || a.total > 0 || a.outside > 0),
 		noReadings: hasData ? kept.filter((a) => a.current && !a.had).map((a) => a.name) : [],
 		outsideSlots: round1(kept.reduce((x, a) => x + a.outside, 0))
 	};

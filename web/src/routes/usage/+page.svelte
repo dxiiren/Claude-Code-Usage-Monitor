@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import UsageBar from '$lib/UsageBar.svelte';
 	import { ago, needsLogin, pctText, post, readingOver, refreshSummary, resetsIn, windowFull } from '$lib/format';
+	import { headlines, limitsOut as fullLimits, atLimit as accountAtLimit, onExtra as accountOnExtra } from '$lib/headline';
 	import type { Snapshot } from '$lib/server/api';
 
 	let { data } = $props();
@@ -12,10 +13,15 @@
 	let snap = $state<Snapshot>(data.snap);
 	let now = $state(Date.now());
 	let stale = $state(false);
+	/** The server answered, but refused: this user may no longer open the screen. */
+	let denied = $state(false);
 
 	async function refresh() {
 		try {
 			const res = await fetch('/api/accounts');
+			// signed out meanwhile (session ended, password reset): the sign-in page, not "unreachable"
+			if (res.status === 401) return void location.assign('/login');
+			denied = res.status === 403;
 			if (!res.ok) throw new Error();
 			snap = await res.json();
 			stale = false;
@@ -71,45 +77,29 @@
 
 	type Acc = Snapshot['accounts'][number];
 	/** At a limit right now in either window (a window that has reset since no longer counts). */
-	const atLimit = (a: Acc) => windowFull(a.usage?.session, now) || windowFull(a.usage?.weekly, now);
+	const atLimit = (a: Acc) => accountAtLimit(a, now);
 	/** Past its limit but still working, on paid extra usage that has not run out. */
-	const onExtra = (a: Acc) => atLimit(a) && !!a.usage?.extra && a.usage.extra.remaining > 0;
+	const onExtra = (a: Acc) => accountOnExtra(a, now);
 	/** At a limit with nothing to carry it further: it cannot be used until the limit resets. */
 	const isBlocked = (a: Acc) => atLimit(a) && !onExtra(a);
 	const money = (n: number) => n.toFixed(2);
-	/** The last good reading is too old to describe the account (server mode; see staleAfterSeconds). */
-	const isOld = (a: Acc) => snap.staleAfterSeconds !== null && a.usageReadUnix !== null && now / 1000 - a.usageReadUnix > snap.staleAfterSeconds;
-	/**
-	 * Accounts whose numbers describe right now: a recent reading with at least one window (a plan
-	 * can come with one only). Age alone decides: one failed poll does not make a two-minute-old
-	 * reading wrong, while a hidden account, which is not read, drops out once its numbers are old.
-	 */
-	const current = $derived(loggedIn.filter((a) => !isOld(a) && (a.usage?.session || a.usage?.weekly)));
+	/** The last good reading is too old to describe the account (see staleAfterSeconds), or the widget marked it as carried over. */
+	const isOld = (a: Acc) => a.usageStale || (snap.staleAfterSeconds !== null && a.usageReadUnix !== null && now / 1000 - a.usageReadUnix > snap.staleAfterSeconds);
 
 	/** This window was read above zero and has reset since: its number is of a window that is over. */
 	const over = (w: { percentage: number; resetsAt: number | null } | null | undefined) => readingOver(w?.percentage, w?.resetsAt, now);
 
-	/** Most room right now: lowest 5h % among the current accounts that are not at a limit. */
-	const best = $derived.by(() => {
-		// a session that has reset since it was read is empty again, whatever the old number says
-		const used = (a: Acc) => (over(a.usage?.session) ? 0 : (a.usage?.session?.percentage ?? 0));
-		return current.filter((a) => !atLimit(a)).sort((x, y) => used(x) - used(y))[0] ?? null;
-	});
-	const allBlocked = $derived(current.length > 0 && !best);
-
-	/** When nothing is usable: the soonest moment any blocked account frees up. */
-	const nextFree = $derived.by(() => {
-		let soonest: number | null = null;
-		for (const a of current) {
-			const blockers = [a.usage?.session, a.usage?.weekly].filter((w) => windowFull(w, now) && w!.resetsAt);
-			if (!blockers.length) continue;
-			const freeAt = Math.max(...blockers.map((w) => w!.resetsAt!));
-			if (soonest === null || freeAt < soonest) soonest = freeAt;
-		}
-		return soonest;
-	});
-	/** Some account has numbers, but none of them can be trusted for "now". */
-	const onlyOld = $derived(!current.length && loggedIn.some((a) => a.usage?.session || a.usage?.weekly));
+	/** The limits next to the two windows that are used up right now: one model's own (the other models still work), or another allowance. */
+	const limitsOut = (a: Acc) => fullLimits(a, now);
+	const limitsOutText = (a: Acc) => {
+		const models = limitsOut(a).filter((m) => !m.other).map((m) => m.label);
+		const others = limitsOut(a).filter((m) => m.other).map((m) => m.label);
+		return [models.length ? `${models.join(', ')} used up, other models still work` : '', others.length ? `${others.join(', ')} limit reached` : ''].filter(Boolean).join('; ');
+	};
+	/** One headline per provider: which account to use now, or why none can be named ($lib/headline). */
+	const heads = $derived(headlines(snap.accounts, now, isOld));
+	const bestIds = $derived(heads.flatMap((h) => (h.head.kind === 'best' ? [h.head.account.id] : [])));
+	const names = (list: Acc[]) => list.map((a) => a.name).join(', ');
 
 	const hasCodex = $derived(snap.accounts.some((a) => a.provider === 'codex'));
 	const hasClaude = $derived(snap.accounts.some((a) => a.provider !== 'codex'));
@@ -139,25 +129,45 @@
 		</div>
 	{/if}
 
-	<p class="summary" data-testid="best">
-		{#if best}
-			<span class="tag">Best to use now</span>
-			<strong>{best.name}</strong>
-			<span class="muted">
-				&middot; {ui.hourlyLabel} {over(best.usage?.session) ? 'has reset' : `${pctText(best.usage?.session?.percentage)} used`}, {ui.weeklyLabel.toLowerCase()} {over(best.usage?.weekly) ? 'has reset' : pctText(best.usage?.weekly?.percentage)}
-			</span>
-		{:else if allBlocked}
-			<span class="tag full">All at their limit</span>
-			{#if current.some(onExtra)}<span class="muted">{current.filter(onExtra).map((a) => a.name).join(', ')} still {current.filter(onExtra).length === 1 ? 'works' : 'work'} on paid extra usage</span>
-			{:else if nextFree}<span class="muted">next account frees up in {resetsIn(nextFree, now, true)}</span>{/if}
-		{:else if onlyOld}
-			<span class="tag none">No current reading</span>
-			<span class="muted">the last readings failed or are out of date</span>
-		{:else}
-			<span class="tag none">No usage data yet</span>
-			<span class="muted">{snap.mode === 'server' ? 'the server has not polled these accounts yet' : 'the widget has not polled these accounts'}</span>
-		{/if}
-	</p>
+	<div class="summary" data-testid="best">
+		{#each heads as { provider, head } (provider)}
+			<p class="headline" data-provider={provider}>
+				{#if heads.length > 1}<span class="ptag">{provider === 'codex' ? 'Codex' : 'Claude'}</span>{/if}
+				{#if head.kind === 'best'}
+					{@const best = head.account}
+					<span class="tag">Best to use now</span>
+					<strong>{best.name}</strong>
+					<span class="muted">
+						&middot; {ui.hourlyLabel} {over(best.usage?.session) ? 'has reset' : `${pctText(best.usage?.session?.percentage)} used`}, {ui.weeklyLabel.toLowerCase()} {over(best.usage?.weekly) ? 'has reset' : pctText(best.usage?.weekly?.percentage)}{#if limitsOut(best).length}
+							&middot; <b data-testid="best-models">{limitsOutText(best)}</b>{/if}
+					</span>
+				{:else if head.kind === 'extra'}
+					<span class="tag paid">On paid extra usage only</span>
+					<span class="muted">{names(head.accounts)} still {head.accounts.length === 1 ? 'works' : 'work'} on paid extra usage; no account is under its limit</span>
+				{:else if head.kind === 'blocked'}
+					<span class="tag full">{head.unknown ? 'None free right now' : 'All at their limit'}</span>
+					<span class="muted">
+						{#if head.unknown}{head.blocked} at {head.blocked === 1 ? 'its' : 'their'} limit, {head.unknown} without a current reading{/if}{#if head.unknown && head.nextFree}{' · '}{/if}{#if head.nextFree}next account frees up in {resetsIn(head.nextFree, now, true)}{/if}
+					</span>
+				{:else if head.kind === 'old'}
+					<span class="tag none">No current reading</span>
+					<span class="muted">the last readings failed or are out of date</span>
+				{:else if head.why === 'hidden'}
+					<span class="tag none">No account is read</span>
+					<span class="muted">every account is hidden from the widget, and hidden accounts are not read</span>
+				{:else if head.why === 'login'}
+					<span class="tag none">No account to read</span>
+					<span class="muted">every account needs a login first</span>
+				{:else if head.why === 'failed'}
+					<span class="tag none">No reading yet</span>
+					<span class="muted">the readings so far have failed; the reason is with each account below</span>
+				{:else}
+					<span class="tag none">No usage data yet</span>
+					<span class="muted">{snap.mode === 'server' ? 'the server has not polled these accounts yet' : 'the widget has not polled these accounts'}</span>
+				{/if}
+			</p>
+		{/each}
+	</div>
 
 	<div class="card">
 		<div class="cardhead">
@@ -165,7 +175,7 @@
 			<div class="headright">
 				<p class="updated" class:stale>
 					{#if updated}updated {updated.toLocaleTimeString()}{#if now - updated.getTime() > 600_000}&nbsp;({ago(snap.usageUpdatedUnix!, now)} ago){/if}{:else}{snap.mode === 'server' ? 'not polled yet' : 'no widget data yet'}{/if}
-					{#if stale}&middot; server unreachable{/if}
+					{#if denied}&middot; you can no longer open this screen{:else if stale}&middot; server unreachable{/if}
 				</p>
 				{#if snap.mode === 'server'}
 					<button class="k-btn primary" type="button" disabled={refreshing || waitLeft > 0} onclick={refreshNow} data-testid="refresh-all">
@@ -180,7 +190,7 @@
 				{@const login = needsLogin(a.status.state)}
 				{@const blocked = !login && isBlocked(a)}
 				{@const old = !login && isOld(a)}
-				<li class:off={!a.enabled} class:blocked class:login class:best={best?.id === a.id} data-account={a.id}>
+				<li class:off={!a.enabled} class:blocked class:login class:best={bestIds.includes(a.id)} data-account={a.id}>
 					<div class="who">
 						<span class="name">{a.name}</span>
 						{#if a.provider === 'codex'}<span class="ptag" data-testid="codex-tag">Codex</span>{/if}
@@ -203,7 +213,7 @@
 						</div>
 
 						{#each (a.usage?.models ?? []).filter((m) => windowFull(m, now)) as m (m.label)}
-							<p class="error full" data-testid="model-limit">{m.label} limit reached{m.resetsAt ? `, resets in ${resetsIn(m.resetsAt, now)}` : ''}. Other models still work.</p>
+							<p class="error full" data-testid="model-limit">{m.label} limit reached{m.resetsAt ? `, resets in ${resetsIn(m.resetsAt, now)}` : ''}.{m.other || blocked ? '' : ' Other models still work.'}</p>
 						{/each}
 						{#if a.usage?.extra && atLimit(a)}
 							<p class="error" data-testid="extra-line">
@@ -229,11 +239,14 @@
 		clip-path: inset(50%);
 	}
 	.summary {
+		margin: 0.5rem 0 1rem;
+	}
+	.headline {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: baseline;
 		gap: 0.3rem 0.5rem;
-		margin: 0.5rem 0 1rem;
+		margin: 0 0 0.35rem;
 		font-size: 1rem;
 	}
 	.tag {
@@ -251,6 +264,9 @@
 	}
 	.tag.none {
 		background: var(--muted);
+	}
+	.tag.paid {
+		background: var(--amber);
 	}
 	.muted {
 		color: var(--muted);

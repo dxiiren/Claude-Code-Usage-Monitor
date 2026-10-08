@@ -97,6 +97,73 @@ describe('pollCodexAccount (port of src/poller/codex.rs)', () => {
 		expect([un.session.percentage, un.weekly.percentage]).toEqual([20, 80]);
 		expect(P.codexUsageFromResponse({})).toBeNull();
 		expect(P.codexUsageFromResponse({ rate_limit: null })).toBeNull();
+		// a window that is there but unreadable fails the answer, as in the widget: it may be the one at its limit
+		expect(P.codexUsageFromResponse(body({ used_percent: 100, limit_window_seconds: 18000, reset_at: null }, { used_percent: 20, limit_window_seconds: 604800, reset_at: 2 }))).toBeNull();
+		expect(P.codexUsageFromResponse(body({ limit_window_seconds: 18000, reset_at: 5 }, null))).toBeNull();
+	});
+
+	describe('credits (port of codex.rs codex_credits)', () => {
+		const week = { used_percent: 100, limit_window_seconds: 604800, reset_at: 1787198224 };
+		/** One answer: the weekly allowance spent (or not), and a credit balance. */
+		const answer = (balance: string | null, over: { limit_reached?: boolean; has_credits?: boolean; unlimited?: boolean; overage_limit_reached?: boolean } = {}) => ({
+			rate_limit: { primary_window: week, secondary_window: null, limit_reached: over.limit_reached ?? true },
+			credits: { has_credits: over.has_credits ?? true, unlimited: over.unlimited ?? false, overage_limit_reached: over.overage_limit_reached ?? false, balance }
+		});
+		/** Reads a run of answers the way the server does: each one measured against the reading before it. */
+		const run = (answers: unknown[], account: string | null = 'acct-1') => {
+			let prev: ReturnType<typeof P.codexUsageFromResponse> = null;
+			return answers.map((a) => {
+				const u = P.codexUsageFromResponse(a, account)!;
+				P.codexExtra(u, prev?.credits);
+				prev = u;
+				return u;
+			});
+		};
+		it('an answer without credits is read as before', () => {
+			const u = P.codexUsageFromResponse(body(week, null), 'acct-1')!;
+			expect(u.credits).toBeUndefined();
+			P.codexExtra(u, null);
+			expect(u.extra).toBeUndefined();
+		});
+		it('the first balance seen reads as untouched; once it falls with an allowance spent, credits carry the account', () => {
+			const [first, second] = run([answer('500'), answer('400')]);
+			expect(first.extra).toBeUndefined();
+			expect(first.credits).toMatchObject({ balance: 500, baseline: 500, live: true });
+			// 100 of 500 credits used = 20%; 400 credits = 16.00 left of 20.00
+			expect(second.extra).toEqual({ percentage: 20, remaining: 16, total: 20 });
+		});
+		it('a rise is a top-up and becomes what later readings are measured against', () => {
+			const [, , topped, after] = run([answer('500'), answer('400'), answer('900'), answer('450')]);
+			expect(topped.extra).toBeUndefined();
+			expect(after.extra).toEqual({ percentage: 50, remaining: 18, total: 36 });
+		});
+		it('nothing is shown while the allowance has room, but the balance keeps being tracked', () => {
+			const [, idle, spent] = run([answer('500', { limit_reached: false }), answer('300', { limit_reached: false }), answer('300')]);
+			expect(idle.extra).toBeUndefined();
+			expect(spent.extra).toMatchObject({ percentage: 40, remaining: 12 });
+		});
+		it('no credits, unlimited credits or an empty balance never read as paid extra usage', () => {
+			expect(run([answer('500'), answer('400', { has_credits: false })])[1].extra).toBeUndefined();
+			expect(run([answer('500'), answer('400', { unlimited: true })])[1].extra).toBeUndefined();
+			expect(run([answer(null), answer(null)])[1].extra).toBeUndefined();
+			expect(run([answer('abc'), answer('-5')])[1].credits).toMatchObject({ balance: 0, baseline: 0 });
+		});
+		it('with the spending limit reached nothing is left to carry the account', () => {
+			const [, capped] = run([answer('500'), answer('400', { overage_limit_reached: true })]);
+			expect(capped.extra).toEqual({ percentage: 100, remaining: 0, total: 20 });
+		});
+		it('a balance kept for another ChatGPT account is not used', () => {
+			const before = P.codexUsageFromResponse(answer('500'), 'acct-1')!;
+			const now = P.codexUsageFromResponse(answer('400'), 'acct-2')!;
+			P.codexExtra(now, before.credits);
+			expect(now.extra).toBeUndefined();
+			expect(now.credits).toMatchObject({ account: 'acct-2', baseline: 400 });
+		});
+		it('a poll carries the account id with the balance', async () => {
+			const f = fakeFetch(() => json(answer('500')));
+			const r = await P.pollCodexAccount(home(authJson('tok', 'acct-9')), deps(f.fn));
+			expect(r).toMatchObject({ ok: true, usage: { credits: { account: 'acct-9', balance: 500 } } });
+		});
 	});
 
 	it('401 -> refresh via the CLI, re-read auth.json, retry once with the new token', async () => {

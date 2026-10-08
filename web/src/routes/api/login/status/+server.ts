@@ -10,7 +10,7 @@ import { codexSessionStatus } from '$lib/server/codex';
 export const GET = ({ url }) =>
 	handle(() => {
 		const s = codexSessionStatus(url.searchParams.get('sessionId') ?? '');
-		if (!s) return json({ state: 'gone', error: 'This login session no longer exists. Click Re-login to start again.' }, { status: 410 });
+		if (!s) return json({ state: 'gone', error: 'This login session no longer exists: it ran out of time, was cancelled, or another Codex sign-in was started (only one can run at a time). Click Re-login to start again.' }, { status: 410 });
 		const sameEmailAs = s.state === 'done' && s.email ? accountsWithEmail(s.email, s.accountId).map((a) => a.name) : [];
 		return json({ state: s.state, error: s.error, email: s.email ?? (s.state === 'done' ? 'ChatGPT account' : null), plan: s.plan, sameEmailAs });
 	});

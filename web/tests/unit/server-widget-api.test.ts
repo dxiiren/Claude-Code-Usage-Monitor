@@ -191,6 +191,42 @@ describe('GET /api/v1/widget', () => {
 		expect(store.readServerUsage(enabled).byId[enabled[0].id]).toMatchObject({ pollError: null, session: { percentage: 5 } });
 	});
 
+	it('paid extra usage and the limits next to the two windows are sent too, and left out when there are none', async () => {
+		const t = auth.createToken('extras');
+		const acc = db.createAccount('extras acc');
+		db.setAuth(acc.id, 'e@x', 'max');
+		const now = Date.now();
+		const win = (percentage: number) => ({ available: true, percentage, resets_at_unix: 1790456399 });
+		store.saveResult(acc.id, { ok: true, usage: { session: win(100), weekly: win(40) } }, now);
+		const get = async () =>
+			((await api.handleWidgetRequest(`Bearer ${t.token}`, loggedIn, now)).body as { accounts: { id: string; usage: Record<string, unknown> }[] }).accounts.find((a) => a.id === acc.id)!.usage;
+		expect(Object.keys(await get()).sort()).toEqual(['session', 'weekly']);
+		store.saveResult(
+			acc.id,
+			{
+				ok: true,
+				usage: {
+					session: win(100),
+					weekly: win(40),
+					extra: { percentage: 25, remaining: 37.5, total: 50 },
+					models: [
+						{ label: 'Opus', percentage: 100, resets_at_unix: 1790456399 },
+						{ label: 'seven day cowork', percentage: 12, resets_at_unix: null, other: true }
+					]
+				}
+			},
+			now
+		);
+		expect(await get()).toMatchObject({
+			credits: { percentage: 25, remaining: 37.5, total: 50 },
+			limits: [
+				{ label: 'Opus', percentage: 100, resets_at_unix: 1790456399, model: true },
+				{ label: 'seven day cowork', percentage: 12, resets_at_unix: null, model: false }
+			]
+		});
+		db.removeAccount(acc.id);
+	});
+
 	it('numbers nobody has refreshed for a while are sent as stale, never as current', async () => {
 		const ba = db.listAccounts().find((a) => a.id === 'ba')!;
 		const read = 1790241000;
@@ -208,7 +244,8 @@ describe('GET /api/v1/widget', () => {
 		// the dashboard gets the reading's own time, so it can say how old the numbers are
 		expect(store.readServerUsage([ba]).byId[ba.id]).toMatchObject({ readUnix: read });
 		store.saveResult(ba.id, { ok: false, error: 'network_error' }, (read + 600) * 1000);
-		expect(store.readServerUsage([ba])).toMatchObject({ updatedUnix: read + 600, byId: { [ba.id]: { readUnix: read, session: { percentage: 3 } } } });
+		// a failed attempt has updated nothing: "updated" stays the time of the last good reading
+		expect(store.readServerUsage([ba])).toMatchObject({ updatedUnix: read, byId: { [ba.id]: { readUnix: read, session: { percentage: 3 } } } });
 		expect(store.staleAfterSeconds()).toBeGreaterThanOrEqual(600);
 	});
 });

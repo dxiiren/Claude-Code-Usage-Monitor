@@ -93,8 +93,49 @@ describe('usage-cache matching', () => {
 		);
 		const u = usage.readUsage([kv, ba]);
 		expect(u.updatedUnix).toBe(1790000000);
-		expect(u.byId.kv).toEqual({ session: { percentage: 42.5, resetsAt: 1790001000 }, weekly: { percentage: 71, resetsAt: 1790500000 }, models: [], extra: null, pollError: null, readUnix: null });
+		expect(u.byId.kv).toEqual({ session: { percentage: 42.5, resetsAt: 1790001000 }, weekly: { percentage: 71, resetsAt: 1790500000 }, models: [], extra: null, pollError: null, readUnix: 1790000000, stale: false });
 		expect(u.byId.ba).toBeNull();
+	});
+
+	it('keeps what the widget cached next to the two windows: other limits, paid extra usage, and its "carried over" mark', () => {
+		const kv = row('kv');
+		const limit = (kind: string, label: string, model: string | null, pct: number, scope: unknown = null) => ({ key: kind, kind, label, model, model_id: null, scope, is_active: false, usage: win(pct, 1790500000) });
+		fs.writeFileSync(
+			path.join(env.appDir, 'usage-cache.json'),
+			JSON.stringify({
+				updated_unix: 1790000000,
+				data: {
+					accounts: [
+						{
+							provider: 'claude',
+							source_path: path.join(kv.config_dir, '.credentials.json'),
+							usage: {
+								session: win(100, 1790001000),
+								weekly: win(71, 1790500000),
+								credits: { percentage: 25, remaining: 37.5, total: 50 },
+								limits: [
+									limit('session', 'session', null, 100),
+									limit('weekly_scoped', 'Fable', 'Fable', 100, { model: { display_name: 'Fable' } }),
+									limit('seven_day_cowork', 'seven day cowork', null, 12),
+									{ kind: 'broken' }
+								],
+								stale: true
+							}
+						}
+					]
+				}
+			})
+		);
+		expect(usage.readUsage([kv]).byId.kv).toMatchObject({
+			// the session window itself is in the widget's list too and is not repeated as a limit
+			models: [
+				{ label: 'Fable', percentage: 100, resetsAt: 1790500000 },
+				{ label: 'seven day cowork', percentage: 12, resetsAt: 1790500000, other: true }
+			],
+			extra: { percentage: 25, remaining: 37.5, total: 50 },
+			stale: true
+		});
+		expect(usage.readUsage([kv]).byId.kv!.models[0]).not.toHaveProperty('other');
 	});
 
 	it('missing or broken cache -> no usage, no throw', () => {

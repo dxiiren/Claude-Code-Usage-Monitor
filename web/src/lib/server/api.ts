@@ -77,6 +77,9 @@ onCodexLogin(async ({ accountId, configDir, email, plan }) => {
 	}
 });
 
+/** Local mode: a widget cache this old no longer describes now. */
+const LOCAL_STALE_SECONDS = 900;
+
 export async function snapshot() {
 	const accounts = listAccounts();
 	// Server: the server's own poll results; local: the widget's usage-cache.json.
@@ -88,8 +91,12 @@ export async function snapshot() {
 		revision: Number(meta.revision ?? 0),
 		cardTheme: getCardTheme(),
 		usageUpdatedUnix: usage.updatedUnix,
-		/** Server: a reading older than this is shown as out of date. Local: the widget's cache has no per-account time. */
-		staleAfterSeconds: SERVER ? staleAfterSeconds() : null,
+		/**
+		 * A reading older than this is shown as out of date. Server: three poll intervals. Local: the
+		 * widget's cache carries one time for all accounts, and 15 minutes without a new one means the
+		 * widget is not running or not reading.
+		 */
+		staleAfterSeconds: SERVER ? staleAfterSeconds() : LOCAL_STALE_SECONDS,
 		widget: SERVER ? { installed: false, running: false } : { installed: !!findWidgetExe(), running: widgetRunning() },
 		accounts: accounts.map((a, i) => {
 			const u = usage.byId[a.id];
@@ -113,10 +120,23 @@ export async function snapshot() {
 					: [],
 				status: loginStatus({ pollError: stale ? null : u?.pollError, auth: auths[i], everLoggedIn: !!a.email, provider: a.provider }),
 				usage: u ? { session: u.session, weekly: u.weekly, models: u.models, extra: u.extra } : null,
-				usageReadUnix: u?.readUnix ?? null
+				usageReadUnix: u?.readUnix ?? null,
+				/** Local mode: the widget carried these numbers over from an earlier poll because its last one failed. */
+				usageStale: !!u?.stale
 			};
 		})
 	};
 }
 
 export type Snapshot = Awaited<ReturnType<typeof snapshot>>;
+
+/**
+ * The snapshot as one user may see it. The Usage screen needs the accounts' usage, but not what only
+ * managing accounts needs: where an account's folder is, and which accounts share an email. No user
+ * (local mode) or a user with the Accounts screen gets all of it.
+ */
+export async function snapshotFor(user: { screens: string[] } | undefined): Promise<Snapshot> {
+	const snap = await snapshot();
+	if (user && !user.screens.includes('accounts')) for (const a of snap.accounts) Object.assign(a, { configDir: '', sameEmailAs: [] });
+	return snap;
+}

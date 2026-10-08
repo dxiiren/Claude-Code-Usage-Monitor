@@ -1,3 +1,3 @@
-import { snapshot } from '$lib/server/api';
+import { snapshotFor } from '$lib/server/api';
 
-export const load = async () => ({ snap: await snapshot() });
+export const load = async ({ locals }) => ({ snap: await snapshotFor(locals.user) });

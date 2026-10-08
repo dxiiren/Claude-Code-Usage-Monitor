@@ -3,10 +3,10 @@
 import { UserError, batch, database, listAccounts, type Account } from './db';
 import { refreshTokenViaCli } from './claude';
 import { refreshCodexTokenViaCli } from './codex';
-import { Poller, defaultUrls, type PollResult, type Usage } from './poller';
+import { Poller, codexExtra, defaultUrls, type PollResult, type Usage } from './poller';
 import type { AccountUsage, UsageSnapshot } from './usage';
 import { getSettings, onSettingsChange } from './settings';
-import type { ReportAccount, Sample } from './report';
+import type { ModelLevel, ReportAccount, Sample } from './report';
 
 interface Row {
 	account_id: string;
@@ -25,6 +25,12 @@ export function saveResult(id: string, r: PollResult, nowMs: number): void {
 		// The account may have been removed while its poll was running.
 		if (!d.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)) return;
 		if (r.ok) {
+			// Codex credits have no ceiling in the answer: measure them against the balance kept with the last good reading
+			const had = d.prepare('SELECT usage_json FROM account_usage WHERE account_id = ?').get(id) as { usage_json: string | null } | undefined;
+			const kept = parse<Usage>(had?.usage_json ?? null)?.credits;
+			if (r.usage.credits) codexExtra(r.usage, kept);
+			// an answer without the balance says nothing about it: what was learned so far stays for the next one
+			else if (kept) r.usage.credits = { ...kept, live: false };
 			d.prepare(
 				`INSERT INTO account_usage (account_id, usage_json, error_json, polled_at, polled_unix, ok_unix) VALUES (?, ?, NULL, ?, ?, ?)
 				 ON CONFLICT(account_id) DO UPDATE SET usage_json = excluded.usage_json, error_json = NULL, polled_at = excluded.polled_at,
@@ -51,8 +57,18 @@ function recordSample(id: string, usage: Usage, unix: number): void {
 	const s = win(usage.session);
 	const w = win(usage.weekly);
 	d.prepare(
-		'INSERT OR REPLACE INTO usage_samples (account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix, extra_left) VALUES (?, ?, ?, ?, ?, ?, ?)'
-	).run(id, unix, s.pct, s.reset, w.pct, w.reset, usage.extra ? usage.extra.remaining : null);
+		'INSERT OR REPLACE INTO usage_samples (account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix, extra_left, models_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+	).run(
+		id,
+		unix,
+		s.pct,
+		s.reset,
+		w.pct,
+		w.reset,
+		usage.extra ? usage.extra.remaining : null,
+		// "[]" = this reading carried no such limit, which is not the same as a reading from before they were kept (NULL)
+		JSON.stringify((usage.models ?? []).map((m) => ({ label: m.label, pct: m.percentage, reset: m.resets_at_unix, ...(m.other ? { other: true } : {}) })))
+	);
 	// The account's current name, so a report can still name it after it is removed.
 	d.prepare(
 		`INSERT INTO report_accounts (account_id, name, provider) SELECT id, name, provider FROM accounts WHERE id = ?
@@ -70,11 +86,30 @@ export function pruneSamples(nowUnix: number, days = getSettings().historyDays):
 	return Number(database().prepare('DELETE FROM usage_samples WHERE ts_unix < ?').run(nowUnix - days * 86_400).changes);
 }
 
+/** The limits kept with a reading: a list (empty = the reading carried none), or null when nothing usable was saved. */
+function modelsOf(json: string | null): ModelLevel[] | null {
+	if (!json) return null;
+	try {
+		const list = JSON.parse(json) as unknown;
+		if (!Array.isArray(list)) return null;
+		const out: ModelLevel[] = [];
+		for (const m of list as { label?: unknown; pct?: unknown; reset?: unknown; other?: unknown }[]) {
+			if (!m || typeof m.label !== 'string' || !m.label.trim() || typeof m.pct !== 'number' || !Number.isFinite(m.pct)) continue;
+			// a reset must be a moment a date can hold (unix seconds); anything else is "not known"
+			const reset = typeof m.reset === 'number' && Number.isSafeInteger(Math.round(m.reset)) && m.reset > 0 && m.reset < 1e11 ? Math.round(m.reset) : null;
+			out.push({ label: m.label.trim(), pct: m.pct, reset, ...(m.other === true ? { other: true } : {}) });
+		}
+		return out.length || !list.length ? out : null;
+	} catch {
+		return null;
+	}
+}
+
 /** Readings of both windows per account, oldest first, for from <= ts <= to. */
 export function samplesBetween(from: number, to: number): Map<string, Sample[]> {
 	const rows = database()
 		.prepare(
-			'SELECT account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix, extra_left FROM usage_samples WHERE ts_unix >= ? AND ts_unix <= ? ORDER BY account_id, ts_unix'
+			'SELECT account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix, extra_left, models_json FROM usage_samples WHERE ts_unix >= ? AND ts_unix <= ? ORDER BY account_id, ts_unix'
 		)
 		.all(from, to) as unknown as {
 		account_id: string;
@@ -84,23 +119,26 @@ export function samplesBetween(from: number, to: number): Map<string, Sample[]> 
 		w_pct: number | null;
 		w_reset_unix: number | null;
 		extra_left: number | null;
+		models_json: string | null;
 	}[];
 	const out = new Map<string, Sample[]>();
 	for (const r of rows) {
 		let list = out.get(r.account_id);
 		if (!list) out.set(r.account_id, (list = []));
-		list.push({ ts: r.ts_unix, pct: r.s_pct, reset: r.s_reset_unix, weekPct: r.w_pct, weekReset: r.w_reset_unix, extraLeft: r.extra_left });
+		list.push({ ts: r.ts_unix, pct: r.s_pct, reset: r.s_reset_unix, weekPct: r.w_pct, weekReset: r.w_reset_unix, extraLeft: r.extra_left, models: modelsOf(r.models_json) });
 	}
 	return out;
 }
 
-/** One timestamp per hour that has any reading in the range (enough to mark calendar days). */
-export function sampleHours(from: number, to: number): number[] {
-	return (
-		database().prepare('SELECT DISTINCT ts_unix / 3600 AS h FROM usage_samples WHERE ts_unix >= ? AND ts_unix < ? ORDER BY h').all(from, to) as unknown as {
-			h: number;
-		}[]
-	).map((r) => r.h * 3600);
+/** True when any reading falls in from < ts <= to (the rule a report day uses). */
+export function hasSampleBetween(from: number, to: number): boolean {
+	// readings of accounts the report knows (current, or removed with a name on record): the same set buildReport is given
+	return !!database()
+		.prepare(
+			`SELECT 1 FROM usage_samples WHERE ts_unix > ? AND ts_unix <= ?
+			   AND (account_id IN (SELECT id FROM accounts) OR account_id IN (SELECT account_id FROM report_accounts)) LIMIT 1`
+		)
+		.get(from, to);
 }
 
 /** Oldest reading kept, or null when there is no history yet. */
@@ -157,12 +195,13 @@ export function readServerUsage(accounts: Account[]): UsageSnapshot {
 			byId[a.id] = null;
 			continue;
 		}
-		if (r.polled_unix && (updated === null || r.polled_unix > updated)) updated = r.polled_unix;
 		const u = storedUsage(r);
+		// the newest GOOD reading: an attempt that failed has updated nothing
+		if (u && r.ok_unix && (updated === null || r.ok_unix > updated)) updated = r.ok_unix;
 		const win = (w: Usage['session'] | undefined) =>
 			w && w.available ? { percentage: w.percentage, resetsAt: w.resets_at_unix ?? null } : null;
 		// ok_unix, not polled_unix: a failed poll keeps the old numbers, and they keep their old age
-		const models = (u?.models ?? []).map((m) => ({ label: m.label, percentage: m.percentage, resetsAt: m.resets_at_unix ?? null }));
+		const models = (u?.models ?? []).map((m) => ({ label: m.label, percentage: m.percentage, resetsAt: m.resets_at_unix ?? null, ...(m.other ? { other: true } : {}) }));
 		byId[a.id] = { session: win(u?.session), weekly: win(u?.weekly), models, extra: u?.extra ?? null, pollError: parse(r.error_json), readUnix: u ? r.ok_unix : null };
 	}
 	return { updatedUnix: updated, byId };

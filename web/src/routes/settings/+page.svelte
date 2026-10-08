@@ -59,6 +59,8 @@
 	function setTime(k: number, field: 'from' | 'to', e: Event) {
 		const m = minutes(str(e));
 		if (m !== null) slots[k][field] = m;
+		// a cleared box keeps its time: show it again, or Save would send a time the box does not show
+		else (e.currentTarget as HTMLInputElement).value = hhmm(slots[k][field]);
 	}
 	function addSlot() {
 		const last = slots[slots.length - 1];
@@ -174,7 +176,7 @@
 				<datalist id="zones">{#each zones as z (z)}<option value={z}></option>{/each}</datalist>
 			</label>
 		</div>
-		<p class="k-small k-muted hint">A shorter interval gives more exact slot figures. The readings are kept, so slots can be changed later without losing anything.</p>
+		<p class="k-small k-muted hint">A shorter interval gives more exact slot figures. The readings are kept for as long as "Keep history for" says, so slots can be changed later and reports of that time are cut again.</p>
 	</section>
 
 	<section class="k-card">
@@ -184,7 +186,7 @@
 			<label class="k-field">Name of the 7-day window<input class="k-input" value={s.weeklyLabel} maxlength="24" onchange={(e) => save({ weeklyLabel: str(e) }, 'window name')} /></label>
 			<label class="k-field">Turn amber at (%)<input class="k-input" type="number" min="1" max="99" value={s.warnAt} onchange={(e) => save({ warnAt: num(e) }, 'amber level')} /></label>
 			<label class="k-field">Turn red at (%)<input class="k-input" type="number" min="2" max="100" value={s.highAt} onchange={(e) => save({ highAt: num(e) }, 'red level')} /></label>
-			<label class="k-field">Page refreshes itself every
+			<label class="k-field">Usage page refreshes itself every
 				<select class="k-input" value={s.autoRefreshSeconds} onchange={(e) => save({ autoRefreshSeconds: num(e) }, 'page refresh')}>
 					<option value={15}>15 seconds</option><option value={30}>30 seconds</option><option value={60}>1 minute</option><option value={0}>Off</option>
 				</select>
@@ -233,7 +235,7 @@
 					<option value="docx">Word (.docx)</option><option value="pdf">PDF</option><option value="csv">Spreadsheet (.csv)</option>
 				</select>
 			</label>
-			<label class="k-field wide">Notice on page 2<textarea class="k-input" maxlength="1200" value={s.docNotice} onchange={(e) => save({ docNotice: str(e) }, 'notice')}></textarea></label>
+			<label class="k-field wide">Notice (on the contents page)<textarea class="k-input" maxlength="1200" value={s.docNotice} onchange={(e) => save({ docNotice: str(e) }, 'notice')}></textarea></label>
 			<label class="k-check"><input type="checkbox" checked={s.docCover} onchange={(e) => save({ docCover: e.currentTarget.checked }, 'cover page')} />Include cover page</label>
 			<label class="k-check"><input type="checkbox" checked={s.docContents} onchange={(e) => save({ docContents: e.currentTarget.checked }, 'contents page')} />Include notice and contents page</label>
 			<label class="k-check"><input type="checkbox" checked={s.docLogo} onchange={(e) => save({ docLogo: e.currentTarget.checked }, 'logo')} />Show company logo</label>
@@ -252,7 +254,7 @@
 			</label>
 			<label class="k-field">Shortest password allowed<input class="k-input" type="number" min="8" max="64" value={s.minPassword} onchange={(e) => save({ minPassword: num(e) }, 'password length')} /></label>
 			<label class="k-field">Wrong passwords before a pause<input class="k-input" type="number" min="3" max="20" value={s.loginTries} onchange={(e) => save({ loginTries: num(e) }, 'sign-in attempts')} /></label>
-			<label class="k-field">Length of the pause
+			<label class="k-field">Wrong passwords are counted over
 				<select class="k-input" value={s.loginPauseMinutes} onchange={(e) => save({ loginPauseMinutes: num(e) }, 'pause length')}>
 					<option value={5}>5 minutes</option><option value={15}>15 minutes</option><option value={60}>1 hour</option>
 				</select>

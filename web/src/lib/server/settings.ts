@@ -217,6 +217,9 @@ export function saveSettings(patch: Record<string, unknown>, admin = true): Sett
 	}
 	const next = { ...getSettings(), ...Object.fromEntries(clean) } as Settings;
 	if (next.warnAt >= next.highAt) throw new UserError('The amber level must be lower than the red level.');
+	// only when a name is being saved: names that were already equal must not block every other setting
+	if (('hourlyLabel' in patch || 'weeklyLabel' in patch) && next.hourlyLabel.trim().toLowerCase() === next.weeklyLabel.trim().toLowerCase())
+		throw new UserError('The two usage windows need different names, or their bars and limits cannot be told apart.');
 	const d = database();
 	d.exec('BEGIN IMMEDIATE');
 	try {
@@ -246,7 +249,7 @@ const LABELS: Record<keyof Settings, string> = {
 	weeklyLabel: 'Name of the 7-day window',
 	warnAt: 'Turn amber at',
 	highAt: 'Turn red at',
-	autoRefreshSeconds: 'Page refreshes itself every',
+	autoRefreshSeconds: 'Usage page refreshes itself every',
 	refreshWaitSeconds: 'Wait between manual refreshes',
 	reportView: 'Open the report showing',
 	reportPeriod: 'Default period',
@@ -257,7 +260,7 @@ const LABELS: Record<keyof Settings, string> = {
 	docWebsite: 'Website',
 	docEmail: 'Contact e-mail',
 	docFooter: 'Footer text',
-	docNotice: 'Notice on page 2',
+	docNotice: 'Notice (on the contents page)',
 	docFormat: 'Default download format',
 	docCover: 'Include cover page',
 	docContents: 'Include notice and contents page',
@@ -265,7 +268,7 @@ const LABELS: Record<keyof Settings, string> = {
 	sessionDays: 'Stay signed in for',
 	minPassword: 'Shortest password allowed',
 	loginTries: 'Wrong passwords before a pause',
-	loginPauseMinutes: 'Length of the pause',
+	loginPauseMinutes: 'Wrong passwords are counted over',
 	defaultTheme: 'Theme for new users'
 };
 
