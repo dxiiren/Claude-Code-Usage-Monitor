@@ -27,6 +27,16 @@ export const PRINT_PALETTE: Palette = {
 	font: 'Arial, Helvetica, sans-serif'
 };
 
+/**
+ * The palette has six colours. A seventh series takes the first colour again, drawn as an outline,
+ * so that no two series on a chart look alike (up to twelve).
+ */
+export const isOutlined = (i: number, colours = 6) => Math.floor(i / colours) % 2 === 1;
+const paint = (p: Palette, i: number) => {
+	const c = p.series[i % p.series.length];
+	return isOutlined(i, p.series.length) ? `fill="${c}" fill-opacity="0.28" stroke="${c}" stroke-width="1.5"` : `fill="${c}"`;
+};
+
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 const n1 = (v: number) => v.toFixed(1);
 
@@ -59,13 +69,38 @@ export interface Drawn {
  * One group of bars per time slot, one bar per account, value written on top.
  * `values[group][series]` in percent.
  */
-export function groupedBars(o: { groups: { label: string; sub?: string }[]; series: string[]; values: number[][]; palette: Palette; label: string }): Drawn {
+export function groupedBars(o: {
+	groups: { label: string; sub?: string }[];
+	series: string[];
+	values: number[][];
+	palette: Palette;
+	label: string;
+	/** draw the names of the series under the chart (a document has no page around it to do that) */
+	legend?: boolean;
+}): Drawn {
 	const W = 800;
-	const H = 306;
+	const PLOT = 306;
 	const [L, R, T, B] = [46, 8, 18, 46];
 	const p = o.palette;
+	// the legend, laid out in rows before the height is known
+	const keys: { x: number; row: number; name: string; si: number }[] = [];
+	let rows = 0;
+	if (o.legend && o.series.length > 1) {
+		let x = L;
+		rows = 1;
+		o.series.forEach((name, si) => {
+			const w = 16 + name.length * 6.6 + 18;
+			if (x > L && x + w > W - R) {
+				x = L;
+				rows++;
+			}
+			keys.push({ x, row: rows - 1, name, si });
+			x += w;
+		});
+	}
+	const H = PLOT + (rows ? rows * 18 + 10 : 0);
 	const { top, step } = axis(Math.max(0, ...o.values.flat()));
-	const f = frame(W, H, L, R, T, B, top, step, p);
+	const f = frame(W, PLOT, L, R, T, B, top, step, p);
 	const cw = (W - L - R) / Math.max(1, o.groups.length);
 	const n = Math.max(1, o.series.length);
 	const bw = Math.min((cw * 0.8) / n, 56);
@@ -79,13 +114,17 @@ export function groupedBars(o: { groups: { label: string; sub?: string }[]; seri
 			const x = x0 + si * bw;
 			const y = f.y(v);
 			const w = Math.max(1, bw - 3);
-			g += `<rect x="${n1(x)}" y="${n1(y)}" width="${n1(w)}" height="${n1(Math.max(0, f.y(0) - y))}" rx="2" fill="${p.series[si % p.series.length]}"><title>${esc(o.series[si])}, ${esc(grp.label)}: ${Math.round(v)}%</title></rect>`;
+			g += `<rect x="${n1(x)}" y="${n1(y)}" width="${n1(w)}" height="${n1(Math.max(0, f.y(0) - y))}" rx="2" ${paint(p, si)}><title>${esc(o.series[si])}, ${esc(grp.label)}: ${Math.round(v)}%</title></rect>`;
 			if (showValues) g += `<text x="${n1(x + w / 2)}" y="${n1(y - 4)}" text-anchor="middle" fill="${p.text}" font-size="11">${Math.round(v)}%</text>`;
 		});
 		const cx = n1(L + gi * cw + cw / 2);
-		g += `<text x="${cx}" y="${H - B + 17}" text-anchor="middle" fill="${p.text}" font-size="12" font-weight="600">${esc(grp.label)}</text>`;
-		if (grp.sub) g += `<text x="${cx}" y="${H - B + 32}" text-anchor="middle" fill="${p.muted}" font-size="11">${esc(grp.sub)}</text>`;
+		g += `<text x="${cx}" y="${PLOT - B + 17}" text-anchor="middle" fill="${p.text}" font-size="12" font-weight="600">${esc(grp.label)}</text>`;
+		if (grp.sub) g += `<text x="${cx}" y="${PLOT - B + 32}" text-anchor="middle" fill="${p.muted}" font-size="11">${esc(grp.sub)}</text>`;
 	});
+	for (const k of keys) {
+		const y = PLOT + 6 + k.row * 18;
+		g += `<rect x="${n1(k.x)}" y="${y}" width="10" height="10" rx="2" ${paint(p, k.si)}/><text x="${n1(k.x + 16)}" y="${y + 9}" fill="${p.text}" font-size="11">${esc(k.name)}</text>`;
+	}
 	return { svg: `${open(W, H, p, o.label, Math.min(560, 140 * o.groups.length))}${g}</svg>`, width: W, height: H };
 }
 

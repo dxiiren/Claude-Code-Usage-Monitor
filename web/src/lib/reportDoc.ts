@@ -108,7 +108,9 @@ export function slotChart(r: ReportPayload, palette = PRINT_PALETTE): Drawn {
 		series: r.accounts.map((a) => a.name),
 		values: r.slots.map((_, si) => r.accounts.map((a) => a.slots[si])),
 		palette,
-		label: 'Usage by time slot, one bar per account'
+		label: 'Usage by time slot, one bar per account',
+		// the page has its own legend under the chart; in a document the chart carries it
+		legend: palette === PRINT_PALETTE
 	});
 }
 export function dayChart(r: ReportPayload, palette = PRINT_PALETTE): Drawn {

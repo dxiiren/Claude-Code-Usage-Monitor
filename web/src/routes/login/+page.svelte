@@ -7,7 +7,7 @@
 
 <section class="box">
 	<h1>Sign in</h1>
-	<p class="hint">This Account Manager runs on a server. Sign in with the admin account to manage accounts.</p>
+	<p class="hint">This dashboard runs on a server. Sign in with your own username and password.</p>
 	<form method="POST" onsubmit={() => (busy = true)}>
 		<label for="username">Username</label>
 		<!-- svelte-ignore a11y_autofocus -->
