@@ -50,14 +50,9 @@ function recordSample(id: string, usage: Usage, unix: number): void {
 	const win = (w: Usage['session'] | undefined) => (w && w.available ? { pct: w.percentage, reset: w.resets_at_unix ?? null } : { pct: null, reset: null });
 	const s = win(usage.session);
 	const w = win(usage.weekly);
-	d.prepare('INSERT OR REPLACE INTO usage_samples (account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix) VALUES (?, ?, ?, ?, ?, ?)').run(
-		id,
-		unix,
-		s.pct,
-		s.reset,
-		w.pct,
-		w.reset
-	);
+	d.prepare(
+		'INSERT OR REPLACE INTO usage_samples (account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix, extra_left) VALUES (?, ?, ?, ?, ?, ?, ?)'
+	).run(id, unix, s.pct, s.reset, w.pct, w.reset, usage.extra ? usage.extra.remaining : null);
 	// The account's current name, so a report can still name it after it is removed.
 	d.prepare(
 		`INSERT INTO report_accounts (account_id, name, provider) SELECT id, name, provider FROM accounts WHERE id = ?
@@ -79,7 +74,7 @@ export function pruneSamples(nowUnix: number, days = getSettings().historyDays):
 export function samplesBetween(from: number, to: number): Map<string, Sample[]> {
 	const rows = database()
 		.prepare(
-			'SELECT account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix FROM usage_samples WHERE ts_unix >= ? AND ts_unix <= ? ORDER BY account_id, ts_unix'
+			'SELECT account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix, extra_left FROM usage_samples WHERE ts_unix >= ? AND ts_unix <= ? ORDER BY account_id, ts_unix'
 		)
 		.all(from, to) as unknown as {
 		account_id: string;
@@ -88,12 +83,13 @@ export function samplesBetween(from: number, to: number): Map<string, Sample[]> 
 		s_reset_unix: number | null;
 		w_pct: number | null;
 		w_reset_unix: number | null;
+		extra_left: number | null;
 	}[];
 	const out = new Map<string, Sample[]>();
 	for (const r of rows) {
 		let list = out.get(r.account_id);
 		if (!list) out.set(r.account_id, (list = []));
-		list.push({ ts: r.ts_unix, pct: r.s_pct, reset: r.s_reset_unix, weekPct: r.w_pct, weekReset: r.w_reset_unix });
+		list.push({ ts: r.ts_unix, pct: r.s_pct, reset: r.s_reset_unix, weekPct: r.w_pct, weekReset: r.w_reset_unix, extraLeft: r.extra_left });
 	}
 	return out;
 }

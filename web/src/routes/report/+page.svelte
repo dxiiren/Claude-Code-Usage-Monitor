@@ -4,7 +4,7 @@
 	import { BRAND } from '$lib/brand';
 	import { PAGE_PALETTE, isOutlined } from '$lib/chart';
 	import { getJson } from '$lib/format';
-	import { buildDoc, dayChart, dayLabel, hitState, pct, periodLabel, reachedLabel, slotChart, whenLabel, type View } from '$lib/reportDoc';
+	import { buildDoc, dayChart, dayLabel, hitState, isBlocked, pct, periodLabel, reachedLabel, slotChart, whenLabel, type View } from '$lib/reportDoc';
 	import { clock, slotName, slotRange } from '$lib/slots';
 
 	let { data } = $props();
@@ -134,7 +134,7 @@
 		<div class="k-cardhead"><h2>Limits reached</h2><span class="k-small k-muted">{r.hits.length} in this period</span></div>
 		{#if r.hits.length}
 			{#each r.hits as h (`${h.accountId}-${h.window}-${h.ts}`)}
-				<div class="kv"><span><b>{h.account}</b> <span class="k-small k-muted">{r.labels[h.window]} &middot; {reachedLabel(h, r.timezone)}</span></span><span class="k-num blocked">{hitState(h, r.timezone)}</span></div>
+				<div class="kv"><span><b>{h.account}</b> <span class="k-small k-muted">{r.labels[h.window]} &middot; {reachedLabel(h, r.timezone)}</span></span><span class="k-num" class:blocked={isBlocked(h)}>{hitState(h, r.timezone)}</span></div>
 			{/each}
 		{:else}<p class="empty k-muted">No account was blocked by a limit.</p>{/if}
 	</section>

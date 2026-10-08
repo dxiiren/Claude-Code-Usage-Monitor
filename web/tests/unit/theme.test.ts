@@ -82,7 +82,7 @@ describe('buildTheme - card theme modes', () => {
 		// card behind it, which showed as a second box around ours.
 		expect(s.background).toEqual({ type: 'colour', colour: { color: '#00000000', opacity: '0' } });
 		for (const mode of ['auto', 'light', 'dark'] as const) {
-			expect(surface(buildTheme(acc(2), mode)).s.background.type).toBe('colour');
+			expect((surface(buildTheme(acc(2), mode)).s.background as { type: string }).type).toBe('colour');
 		}
 		expect(kids.slice(0, 2).map((k) => [k.id, k.render, k.background.colour!.color])).toEqual([
 			['bg-dark', 'system.dark', DARK.bg],

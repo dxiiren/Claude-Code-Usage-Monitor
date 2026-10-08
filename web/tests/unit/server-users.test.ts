@@ -242,6 +242,23 @@ describe('reading history', () => {
 		expect(rows<{ n: number }>('SELECT COUNT(*) AS n FROM usage_samples')[0].n).toBe(3);
 		expect(usage.firstSampleUnix()).toBe(kl('2026-10-06', '09:05') / 1000);
 	});
+	it('a reading keeps how much paid extra usage was left, and nothing when none was in force', () => {
+		const other = db.createAccount('paid').id;
+		const full = (extra?: { percentage: number; remaining: number; total: number }) => ({
+			ok: true as const,
+			usage: { session: { available: true, percentage: 100, resets_at_unix: kl('2026-10-05', '14:00') / 1000 }, weekly: { available: true, percentage: 5, resets_at_unix: null }, ...(extra ? { extra } : {}) }
+		});
+		usage.saveResult(other, full({ percentage: 25, remaining: 37.5, total: 50 }), kl('2026-10-05', '10:00'));
+		usage.saveResult(other, full({ percentage: 100, remaining: 0, total: 50 }), kl('2026-10-05', '11:00'));
+		usage.saveResult(other, full(), kl('2026-10-05', '12:00'));
+		expect(rows<{ extra_left: number | null }>(`SELECT extra_left FROM usage_samples WHERE account_id = '${other}' ORDER BY ts_unix`).map((r) => r.extra_left)).toEqual([37.5, 0, null]);
+		const hit = reportData.loadReport('day', '2026-10-05', kl('2026-10-05', '16:00')).hits.find((h) => h.accountId === other);
+		// on paid extra usage 10:00 to 11:00, then blocked until the reset at 14:00
+		expect(hit).toMatchObject({ extra: 'part', blockedSeconds: 3 * 3600 });
+		db.removeAccount(other);
+		db.database().prepare('DELETE FROM usage_samples WHERE account_id = ?').run(other);
+		db.database().prepare('DELETE FROM report_accounts WHERE account_id = ?').run(other);
+	});
 	it('the report cuts the kept readings into the configured slots', () => {
 		const r = reportData.loadReport('day', '2026-10-06', kl('2026-10-06', '16:00'));
 		expect(r.accounts).toMatchObject([{ name: 'work', slots: [30, 15], total: 45 }]);

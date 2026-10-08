@@ -304,6 +304,48 @@ test('report: a weekly limit already in force is listed, in the page and in the 
 	}
 });
 
+test('report: an account past its limit on paid extra usage is not listed as blocked', async ({ page }) => {
+	const date = seedHistory();
+	const d = new DatabaseSync(dbFile);
+	d.exec('PRAGMA busy_timeout = 5000');
+	const first = (d.prepare("SELECT MAX(ts_unix) AS t FROM usage_samples WHERE account_id = 'legacy'").get() as { t: number }).t - 120;
+	d.prepare("INSERT OR REPLACE INTO report_accounts (account_id, name, provider) VALUES ('paid', 'Paid team', 'claude')").run();
+	// the 5-hour session is spent the whole time; the paid amount covers it, shrinking from reading to reading
+	const ins = d.prepare("INSERT OR REPLACE INTO usage_samples (account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix, extra_left) VALUES ('paid', ?, 100, ?, 20, NULL, ?)");
+	[40, 35, 30].forEach((left, i) => ins.run(first + i * 60, first + 3 * 3600, left));
+	d.close();
+	try {
+		await signIn(page);
+		await page.goto(`/report?period=day&date=${date}`);
+		const limits = page.getByTestId('limits');
+		await expect(limits).toContainText('Paid team');
+		await expect(limits).toContainText('not blocked: on paid extra usage');
+		await expect(limits).not.toContainText('blocked at least');
+		await page.screenshot({ path: path.join(shots, 'report-extra-usage.png'), fullPage: true });
+
+		await page.getByRole('button', { name: 'Download preview' }).click();
+		const preview = page.getByTestId('doc-preview');
+		await expect(preview).toContainText('No account was blocked by a limit.');
+		await expect(preview).toContainText('An account went past a limit and kept working on paid extra usage 1 time: Paid team.');
+		await expect(preview).toContainText('not blocked (paid extra usage)');
+		await page.keyboard.press('Escape');
+
+		// the paid amount runs out: from that reading on the account is blocked until the session resets
+		const c = new DatabaseSync(dbFile);
+		c.exec('PRAGMA busy_timeout = 5000');
+		c.prepare("UPDATE usage_samples SET extra_left = 0 WHERE account_id = 'paid' AND ts_unix = ?").run(first + 120);
+		c.close();
+		await page.goto(`/report?period=day&date=${date}`);
+		// the reset is read to the minute, so the blocked time is 2 h 58 min or 2 h 59 min depending on the second the test runs at
+		await expect(limits).toContainText(/blocked at least 2 h 5[89] min \(the rest on paid extra usage\)/);
+	} finally {
+		const c = new DatabaseSync(dbFile);
+		c.exec('PRAGMA busy_timeout = 5000');
+		c.exec("DELETE FROM usage_samples WHERE account_id = 'paid'; DELETE FROM report_accounts WHERE account_id = 'paid';");
+		c.close();
+	}
+});
+
 test('report: the download menu closes on an outside click; Word, PDF and CSV files are real', async ({ page }) => {
 	const date = seedHistory();
 	await signIn(page);
