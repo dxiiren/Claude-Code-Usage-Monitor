@@ -189,13 +189,21 @@ test('settings: the names of the two usage windows and other values save as they
 	expect(s).toMatchObject({ hourlyLabel: 'Focus block', warnAt: 70, docTitle: 'Team AI Usage Report' });
 });
 
-/** Readings for an account that is no longer in the list: 10 %, 30 %, 55 % a minute apart. */
-function seedHistory(): string {
+/**
+ * The three moments of the seeded readings, fixed once when this file loads. Taking them from the
+ * clock at every call spread them out on a slow machine: a later call's rows then landed between
+ * an earlier call's, the level seemed to drop and rise again, and the day no longer added up to 45 %.
+ */
+const SEED_TIMES = (() => {
 	const now = Math.floor(Date.now() / 1000);
-	let times = [now - 180, now - 120, now - 60];
 	// the report day starts at 09:00 (server zone UTC here): keep all three readings in one day
 	const boundary = Math.floor((now - 9 * 3600) / 86400) * 86400 + 9 * 3600;
-	if (times[0] < boundary) times = [boundary - 180, boundary - 120, boundary - 60];
+	return now - 180 < boundary ? [boundary - 180, boundary - 120, boundary - 60] : [now - 180, now - 120, now - 60];
+})();
+
+/** Readings for an account that is no longer in the list: 10 %, 30 %, 55 % a minute apart. Every call writes the same three rows. */
+function seedHistory(): string {
+	const times = SEED_TIMES;
 	const d = new DatabaseSync(dbFile);
 	d.exec('PRAGMA busy_timeout = 5000');
 	d.prepare("INSERT OR REPLACE INTO report_accounts (account_id, name, provider) VALUES ('legacy', 'Legacy team', 'claude')").run();
