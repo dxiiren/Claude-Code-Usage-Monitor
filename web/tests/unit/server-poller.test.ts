@@ -214,6 +214,19 @@ describe('parsers', () => {
 		expect(P.usageFromResponse({ five_hour: { utilization: 10 }, seven_day: { utilization: '100' } })).toBeNull();
 		expect(P.usageFromResponse({ five_hour: 'soon', seven_day: { utilization: 50 } })).toBeNull();
 	});
+	it('paid extra usage past a spent window is kept, so the account is not called blocked while it still works', () => {
+		const spend = { enabled: true, used: { amount_minor: 1250, exponent: 2 }, limit: { amount_minor: 5000, exponent: 2 } };
+		const spent = P.usageFromResponse({ five_hour: { utilization: 20 }, seven_day: { utilization: 100 }, spend })!;
+		expect(spent.extra).toEqual({ percentage: 25, remaining: 37.5, total: 50 });
+		// no window is spent yet, the paid amount is untouched, or the option is off: nothing to show
+		expect(P.usageFromResponse({ five_hour: { utilization: 20 }, seven_day: { utilization: 60 }, spend })).not.toHaveProperty('extra');
+		expect(P.usageFromResponse({ five_hour: { utilization: 100 }, seven_day: { utilization: 60 }, spend: { ...spend, used: { amount_minor: 0, exponent: 2 } } })).not.toHaveProperty('extra');
+		expect(P.usageFromResponse({ five_hour: { utilization: 100 }, seven_day: { utilization: 60 }, spend: { ...spend, enabled: false } })).not.toHaveProperty('extra');
+		expect(P.usageFromResponse({ five_hour: { utilization: 100 }, seven_day: { utilization: 60 }, spend: null })).not.toHaveProperty('extra');
+		// all of it used: kept, with nothing remaining, so the screen can say it has run out as well
+		const out = P.usageFromResponse({ five_hour: { utilization: 100 }, seven_day: { utilization: 60 }, spend: { ...spend, used: { amount_minor: 5000, exponent: 2 } } })!;
+		expect(out.extra).toEqual({ percentage: 100, remaining: 0, total: 50 });
+	});
 	it('Retry-After: seconds, HTTP date, cap 24 h, junk ignored', () => {
 		const now = Date.parse('2026-09-24T00:00:00Z');
 		expect(P.parseRetryAfter('30', now)).toBe(30);

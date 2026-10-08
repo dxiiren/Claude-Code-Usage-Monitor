@@ -9,6 +9,8 @@ export type LoginState = 'ok' | 'expired' | 'logged_out' | 'error';
 export interface LoginStatus {
 	state: LoginState;
 	message: string;
+	/** The provider refused the login outright (HTTP 403) instead of calling it expired: it still needs a new sign-in, but "expired" would be the wrong word. */
+	refused?: boolean;
 }
 
 export type PollErrorKind = 'expired' | 'logged_out' | 'transient';
@@ -18,13 +20,13 @@ export type PollErrorKind = 'expired' | 'logged_out' | 'transient';
  * "token_expired" | "auth_required" | "no_credentials" | "request_failed" | "network_error" |
  * "unexpected_response" | { "http_status": 401 }. Same split as PollError::is_auth / is_transient.
  */
-export function classifyPollError(raw: unknown, provider: 'claude' | 'codex' = 'claude'): { kind: PollErrorKind; message: string } | null {
+export function classifyPollError(raw: unknown, provider: 'claude' | 'codex' = 'claude'): { kind: PollErrorKind; message: string; refused?: boolean } | null {
 	const r = classifyClaude(raw);
 	// Same classification for Codex; only the service named in the message differs.
 	return r && provider === 'codex' ? { ...r, message: r.message.replace(/\bClaude\b/g, 'ChatGPT') } : r;
 }
 
-function classifyClaude(raw: unknown): { kind: PollErrorKind; message: string } | null {
+function classifyClaude(raw: unknown): { kind: PollErrorKind; message: string; refused?: boolean } | null {
 	if (raw === null || raw === undefined) return null;
 	if (typeof raw === 'string') {
 		switch (raw) {
@@ -47,7 +49,10 @@ function classifyClaude(raw: unknown): { kind: PollErrorKind; message: string } 
 	}
 	if (typeof raw === 'object' && raw && 'http_status' in raw) {
 		const code = Number((raw as { http_status: unknown }).http_status);
-		if (code === 401 || code === 403) return { kind: 'expired', message: `Claude rejected the saved login (HTTP ${code}).` };
+		if (code === 401) return { kind: 'expired', message: 'Claude rejected the saved login (HTTP 401).' };
+		// Forbidden is not "expired": the login was refused. A new sign-in is still the first thing to try.
+		if (code === 403)
+			return { kind: 'expired', refused: true, message: 'Claude refused this login (HTTP 403). Sign in again; if it is refused again, the account itself may be restricted.' };
 		return { kind: 'transient', message: `Claude returned HTTP ${code}${code === 429 ? ' (rate limited)' : ''}.` };
 	}
 	return { kind: 'transient', message: 'Last poll failed.' };
@@ -72,7 +77,7 @@ export function loginStatus(opts: {
 }): LoginStatus {
 	const codex = opts.provider === 'codex';
 	const p = classifyPollError(opts.pollError, codex ? 'codex' : 'claude');
-	if (p?.kind === 'expired') return { state: 'expired', message: p.message };
+	if (p?.kind === 'expired') return { state: 'expired', message: p.message, ...(p.refused ? { refused: true } : {}) };
 	if (p?.kind === 'logged_out') return { state: 'logged_out', message: p.message };
 	if (opts.auth && !opts.auth.loggedIn)
 		return { state: 'logged_out', message: codex ? 'Codex says this folder is not logged in.' : 'Claude Code says this folder is not logged in.' };

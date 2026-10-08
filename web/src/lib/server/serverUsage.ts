@@ -167,7 +167,7 @@ export function readServerUsage(accounts: Account[]): UsageSnapshot {
 			w && w.available ? { percentage: w.percentage, resetsAt: w.resets_at_unix ?? null } : null;
 		// ok_unix, not polled_unix: a failed poll keeps the old numbers, and they keep their old age
 		const models = (u?.models ?? []).map((m) => ({ label: m.label, percentage: m.percentage, resetsAt: m.resets_at_unix ?? null }));
-		byId[a.id] = { session: win(u?.session), weekly: win(u?.weekly), models, pollError: parse(r.error_json), readUnix: u ? r.ok_unix : null };
+		byId[a.id] = { session: win(u?.session), weekly: win(u?.weekly), models, extra: u?.extra ?? null, pollError: parse(r.error_json), readUnix: u ? r.ok_unix : null };
 	}
 	return { updatedUnix: updated, byId };
 }

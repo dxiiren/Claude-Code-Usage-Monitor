@@ -28,6 +28,14 @@ describe('classifyPollError: every serialized PollError kind (src/poller.rs)', (
 			if (r) expect(r.message.length).toBeGreaterThan(0);
 		});
 	}
+	it('a refused login (403) still needs a sign-in but is not called expired', async () => {
+		const { loginStatus } = await import('../../src/lib/server/status');
+		const auth = { loggedIn: true, email: 'a@b', plan: 'max' };
+		const refused = loginStatus({ pollError: { http_status: 403 }, auth, everLoggedIn: true });
+		expect(refused).toMatchObject({ state: 'expired', refused: true });
+		expect(refused.message).toContain('refused this login (HTTP 403)');
+		expect(loginStatus({ pollError: { http_status: 401 }, auth, everLoggedIn: true })).toEqual({ state: 'expired', message: 'Claude rejected the saved login (HTTP 401).' });
+	});
 	it('429 says rate limited', () => {
 		expect(classifyPollError({ http_status: 429 })!.message).toMatch(/rate limited/);
 	});
