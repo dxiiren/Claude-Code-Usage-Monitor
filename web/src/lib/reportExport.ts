@@ -6,6 +6,12 @@ import { toCsv, type Block, type DocModel } from './reportDoc';
 
 const LOGO_URL = BRAND.logo;
 const LOGO_RATIO = BRAND.logoRatio;
+/**
+ * A table this short stays in one piece on a page, together with its caption. A longer one (the
+ * days of a month) may run on to the next page, where its heading row is repeated: kept whole it
+ * would leave most of a page empty.
+ */
+const WHOLE_ROWS = 12;
 
 function save(blob: Blob, name: string): void {
 	const url = URL.createObjectURL(blob);
@@ -103,13 +109,15 @@ export async function downloadDocx(m: DocModel): Promise<void> {
 		]
 	});
 
-	const cell = (text: string, o: { bold?: boolean; align?: 'center' | 'right' | 'left' } = {}) =>
+	const cell = (text: string, o: { bold?: boolean; align?: 'center' | 'right' | 'left'; keep?: boolean } = {}) =>
 		new d.TableCell({
 			margins: { top: 60, bottom: 60, left: 90, right: 90 },
 			verticalAlign: d.VerticalAlign.CENTER,
 			children: [
 				new d.Paragraph({
 					alignment: o.align === 'center' ? d.AlignmentType.CENTER : o.align === 'right' ? d.AlignmentType.RIGHT : d.AlignmentType.LEFT,
+					// Word keeps a row with the next one, and the last with the caption, when every paragraph says so
+					keepNext: o.keep,
 					children: [run(text, { size: 9, bold: o.bold })]
 				})
 			]
@@ -138,9 +146,9 @@ export async function downloadDocx(m: DocModel): Promise<void> {
 						width: { size: 100, type: d.WidthType.PERCENTAGE },
 						borders: { top: line, bottom: line, left: line, right: line, insideHorizontal: line, insideVertical: line },
 						rows: [
-							new d.TableRow({ tableHeader: true, cantSplit: true, children: b.head.map((h) => cell(h, { bold: true, align: 'center' })) }),
+							new d.TableRow({ tableHeader: true, cantSplit: true, children: b.head.map((h) => cell(h, { bold: true, align: 'center', keep: b.rows.length <= WHOLE_ROWS })) }),
 							...b.rows.map(
-								(r, ri) => new d.TableRow({ cantSplit: true, children: r.map((v, ci) => cell(v, { bold: !!b.totalRow && ri === b.rows.length - 1, align: ci === 0 ? 'left' : 'right' })) })
+								(r, ri) => new d.TableRow({ cantSplit: true, children: r.map((v, ci) => cell(v, { bold: !!b.totalRow && ri === b.rows.length - 1, align: ci === 0 ? 'left' : 'right', keep: b.rows.length <= WHOLE_ROWS })) })
 							)
 						]
 					})
@@ -263,7 +271,10 @@ export async function downloadPdf(m: DocModel): Promise<void> {
 			else if (b.type === 'figure')
 				content.push({ image: pngs.get(b), width: contentWidth, alignment: 'center', headlineLevel: 2, margin: [0, 6, 0, 3] }, { text: b.caption, style: 'cap', margin: [0, 0, 0, 10] });
 			else
-				content.push(
+				content.push({
+					// a short table moves as one block with its caption; a long one may break between rows
+					unbreakable: b.rows.length <= WHOLE_ROWS,
+					stack: [
 					{
 						table: {
 							headerRows: 1,
@@ -277,7 +288,8 @@ export async function downloadPdf(m: DocModel): Promise<void> {
 						layout: { hLineWidth: () => 0.6, vLineWidth: () => 0.6 }
 					},
 					{ text: b.caption, style: 'cap', margin: [0, 4, 0, 10] }
-				);
+					]
+				});
 		}
 	});
 

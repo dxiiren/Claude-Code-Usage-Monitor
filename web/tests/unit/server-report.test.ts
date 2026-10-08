@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildReport, increments, limitHits, periodDates, reportDateOf, slotWindows, wallToUnix, type ReportAccount, type Sample } from '../../src/lib/server/report';
 import { slotsProblem, uncoveredMinutes, type Slot } from '../../src/lib/slots';
+import { PRINT_PALETTE, groupedBars, isOutlined } from '../../src/lib/chart';
 import { blockedLabel, buildDoc, summaryLines, toCsv, whenLabel, type DocModel, type DocSettings } from '../../src/lib/reportDoc';
 import type { ReportPayload } from '../../src/lib/server/reportData';
 
@@ -322,6 +323,36 @@ describe('the limits in the document', () => {
 		expect(blockedLabel(2 * 3600 + 15 * 60)).toBe('2 h 15 min');
 		expect(blockedLabel(2 * 86_400 + 3 * 3600 + 59 * 60)).toBe('2 d 3 h');
 		expect(blockedLabel(null)).toBe('not known');
+	});
+});
+
+describe('charts', () => {
+	const draw = (n: number, legend = false) =>
+		groupedBars({ groups: [{ label: 'Morning' }], series: Array.from({ length: n }, (_, i) => `Account ${i + 1}`), values: [Array.from({ length: n }, (_, i) => 10 + i)], palette: PRINT_PALETTE, label: 'test', legend });
+	it('a seventh account does not look like the first: the colours come round again as outlines', () => {
+		expect([0, 5, 6, 11, 12].map((i) => isOutlined(i))).toEqual([false, false, true, true, false]);
+		const bars = draw(8).svg.match(/<rect [^>]*>/g)!;
+		expect(bars).toHaveLength(8);
+		expect(bars.map((b) => b.includes('fill-opacity'))).toEqual([false, false, false, false, false, false, true, true]);
+		// same hue as the first two, told apart by the outline
+		expect(bars[6]).toContain(`stroke="${PRINT_PALETTE.series[0]}"`);
+		expect(bars[7]).toContain(`fill="${PRINT_PALETTE.series[1]}"`);
+	});
+	it('a chart drawn for a document names its bars; the page chart leaves that to the page', () => {
+		const plain = draw(6);
+		const withKey = draw(6, true);
+		expect(plain.svg).not.toContain('Account 3</text>');
+		for (let i = 1; i <= 6; i++) expect(withKey.svg).toContain(`Account ${i}</text>`);
+		expect(withKey.height).toBeGreaterThan(plain.height);
+		expect(withKey.svg).toContain(`viewBox="0 0 ${withKey.width} ${withKey.height}"`);
+		// many long names wrap onto more rows instead of running off the side
+		const long = groupedBars({ groups: [{ label: 'x' }], series: Array.from({ length: 12 }, (_, i) => `A very long account name ${i}`), values: [Array(12).fill(5)], palette: PRINT_PALETTE, label: 't', legend: true });
+		expect(long.height).toBeGreaterThan(withKey.height);
+		const xs = [...long.svg.matchAll(/<rect x="([d.]+)" y="d+" width="10"/g)].map((m) => Number(m[1]));
+		expect(Math.max(...xs)).toBeLessThan(long.width - 100);
+	});
+	it('one series needs no legend', () => {
+		expect(draw(1, true).height).toBe(draw(1).height);
 	});
 });
 

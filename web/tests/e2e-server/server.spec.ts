@@ -224,6 +224,37 @@ test('an account whose token the usage endpoint rejects shows as expired', async
 	await expect(row.getByTestId('status-badge')).toHaveText(/Expired/);
 });
 
+test('a user without the Accounts screen is told who needs a login, with no Re-login button that leads nowhere', async ({ page, browser }) => {
+	await signIn(page);
+	await page.goto('/users');
+	await page.getByLabel('Username').fill('Viewer2');
+	await page.getByRole('button', { name: 'Create user' }).click();
+	await expect(page.getByTestId('flash')).toContainText('User viewer2 created');
+	const temp = (await page.getByTestId('secret').textContent())!.trim();
+
+	// the admin can sign the account in again, so the admin gets the link and the button
+	await page.goto('/usage');
+	await expect(page.getByTestId('needs-login').getByRole('link', { name: 'beta' })).toBeVisible();
+	await expect(page.locator('li[data-account="beta"]').getByRole('link', { name: 'Re-login' })).toBeVisible();
+
+	const context = await browser.newContext({ baseURL: ORIGIN });
+	const v = await context.newPage();
+	await signIn(v, temp, 'viewer2');
+	await v.getByLabel('Current password').fill(temp);
+	await v.getByLabel('New password', { exact: true }).fill('viewer2-long-password');
+	await v.getByLabel('Repeat new password').fill('viewer2-long-password');
+	await v.getByRole('button', { name: 'Save password' }).click();
+	await expect(v).toHaveURL(`${ORIGIN}/usage`);
+	const banner = v.getByTestId('needs-login');
+	await expect(banner).toContainText('beta');
+	await expect(banner).toContainText('Ask an administrator');
+	await expect(banner.getByRole('link')).toHaveCount(0);
+	const row = v.locator('li[data-account="beta"]');
+	await expect(row.getByRole('link', { name: 'Re-login' })).toHaveCount(0);
+	await expect(row).toContainText('ask an administrator');
+	await context.close();
+});
+
 test('widget tokens: create shows it once, the API accepts it, revoke makes it 401', async ({ page, playwright }) => {
 	await signIn(page);
 	await page.getByRole('link', { name: 'Widget tokens' }).click();

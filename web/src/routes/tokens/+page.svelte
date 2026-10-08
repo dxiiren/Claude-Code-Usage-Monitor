@@ -63,7 +63,8 @@
 		}
 	}
 
-	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : 'never');
+	// same wording as the Users screen: "8 Oct 2026, 07:53" cannot be read as the wrong month
+	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'never');
 </script>
 
 <svelte:head><title>Widget tokens - Claude Account Manager</title></svelte:head>

@@ -62,7 +62,10 @@
 
 	/** Accounts whose numbers can be trusted right now (logged in, login not expired). */
 	const loggedIn = $derived(snap.accounts.filter((a) => a.email && !needsLogin(a.status.state)));
-	const needing = $derived(snap.accounts.filter((a) => needsLogin(a.status.state)));
+	// a hidden account is not read at all, so it does not belong in the "needs login" alert
+	const needing = $derived(snap.accounts.filter((a) => a.enabled && needsLogin(a.status.state)));
+	/** Signing an account in again happens on the Accounts screen: only users who have it get the links. */
+	const canManage = $derived(data.menu.some((m) => m.id === 'accounts'));
 	const badgeText = (state: string) => (state === 'expired' ? 'Expired — log in again' : 'Not logged in');
 
 	type Acc = Snapshot['accounts'][number];
@@ -124,8 +127,9 @@
 		<div class="attention" role="alert" data-testid="needs-login">
 			<strong>{needing.length} {needing.length === 1 ? 'account needs' : 'accounts need'} login:</strong>
 			{#each needing as a, i (a.id)}
-				{#if i > 0}{', '}{/if}<a href="/?relogin={encodeURIComponent(a.id)}">{a.name}</a>
+				{#if i > 0}{', '}{/if}{#if canManage}<a href="/?relogin={encodeURIComponent(a.id)}">{a.name}</a>{:else}{a.name}{/if}
 			{/each}
+			{#if !canManage}. Ask an administrator to sign {needing.length === 1 ? 'it' : 'them'} in again.{/if}
 		</div>
 	{/if}
 
@@ -180,8 +184,8 @@
 					</div>
 					{#if login}
 						<div class="relogin">
-							<a class="btn" href="/?relogin={encodeURIComponent(a.id)}">Re-login</a>
-							<span class="small">{a.email ? 'Last known usage hidden: it may be out of date.' : a.status.message}</span>
+							{#if canManage}<a class="btn" href="/?relogin={encodeURIComponent(a.id)}">Re-login</a>{/if}
+							<span class="small">{a.email ? 'Last known usage hidden: it may be out of date.' : a.status.message}{canManage ? '' : ' Needs a new sign-in: ask an administrator.'}</span>
 						</div>
 					{:else if a.email}
 						<!-- a hidden row is dimmed as a whole already -->

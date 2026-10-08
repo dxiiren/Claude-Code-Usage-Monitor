@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { BRAND } from '$lib/brand';
-	import { PAGE_PALETTE } from '$lib/chart';
+	import { PAGE_PALETTE, isOutlined } from '$lib/chart';
 	import { getJson } from '$lib/format';
 	import { buildDoc, dayChart, dayLabel, hitState, pct, periodLabel, reachedLabel, slotChart, whenLabel, type View } from '$lib/reportDoc';
 	import { clock, slotName, slotRange } from '$lib/slots';
@@ -47,6 +47,14 @@
 	/** Earlier: only while history reaches that far. Later: never past today. */
 	const canPrev = $derived(!!r.firstDate && r.dates[0] > r.firstDate);
 	const canNext = $derived(r.dates[r.dates.length - 1] < r.today);
+	/** Last day of the period a date falls in: a period that ends before the first saved day has nothing to show. */
+	function periodEnd(d: string): string {
+		if (r.period === 'day') return d;
+		const t = ms(d);
+		if (r.period === 'week') return iso(t + (6 - ((new Date(t).getUTCDay() + 6) % 7)) * DAY);
+		const x = new Date(t);
+		return iso(Date.UTC(x.getUTCFullYear(), x.getUTCMonth() + 1, 0));
+	}
 
 	// ---- calendar ----
 	let calMonth = $state('');
@@ -163,6 +171,7 @@
 					<button type="button" aria-pressed={r.period === p[0]} onclick={() => open(p[0], r.date)}>{p[1]}</button>
 				{/each}
 			</div>
+			<div class="k-row nav">
 			<button class="k-btn" type="button" aria-label="Earlier" disabled={!canPrev} onclick={() => open(r.period, shifted(-1))}>‹</button>
 			<div class="k-anchor">
 				<button class="k-btn datebtn" type="button" data-testid="date-button" aria-haspopup="dialog" aria-expanded={menu === 'calendar'} onclick={toggleCalendar}>{dateButton} <span aria-hidden="true">▾</span></button>
@@ -177,7 +186,7 @@
 							{#each ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'] as d (d)}<span class="dow">{d}</span>{/each}
 							{#each cells as c, i (c ?? `pad-${i}`)}
 								{#if c}
-									<button type="button" class:has={dots.includes(c)} class:sel={c === r.date} disabled={c > r.today} onclick={() => open(r.period, c)}>{Number(c.slice(8))}</button>
+									<button type="button" class:has={dots.includes(c)} class:sel={c === r.date} disabled={c > r.today || (!!r.firstDate && periodEnd(c) < r.firstDate)} onclick={() => open(r.period, c)}>{Number(c.slice(8))}</button>
 								{:else}<span></span>{/if}
 							{/each}
 						</div>
@@ -187,6 +196,7 @@
 			</div>
 			<button class="k-btn" type="button" aria-label="Later" disabled={!canNext} onclick={() => open(r.period, shifted(1))}>›</button>
 			{#if r.date !== r.today}<button class="k-btn" type="button" onclick={() => open(r.period, r.today)}>Today</button>{/if}
+			</div>
 		</div>
 		<div class="k-row">
 			<span class="k-label">Show</span>
@@ -208,8 +218,9 @@
 		{#if !r.hasData}
 			<div class="k-card" data-testid="no-data">
 				<p class="empty">
-					{#if r.firstDate}No usage data was saved for {label}. Pick a day marked with a dot in the calendar.
-					{:else}No history yet. The server saves a reading of every account on its schedule; the report fills in from the first reading on.{/if}
+					{#if !r.firstDate}No history yet. The server saves a reading of every account on its schedule; the report fills in from the first reading on.
+					{:else if r.generatedUnix < r.from}This period has not started yet: it begins {whenLabel(r.from, r.timezone)}. Readings taken before then belong to the period before it.
+					{:else}No usage data was saved for {label}. Pick a day marked with a dot in the calendar.{/if}
 				</p>
 			</div>
 			<!-- no reading in the period, yet a limit reached earlier still held during it -->
@@ -234,14 +245,14 @@
 					<div class="k-cardhead"><h2>Usage by time slot</h2><span class="k-small k-muted">% of an hourly session</span></div>
 					<div class="k-only-wide">
 						<div class="chartbox">{@html slotSvg}</div>
-						<div class="legend">{#each r.accounts as a, i (a.id)}<span><i style:background="var(--series-{(i % 6) + 1})"></i>{a.name}</span>{/each}</div>
+						<div class="legend">{#each r.accounts as a, i (a.id)}<span><i class:alt={isOutlined(i)} style:--c="var(--series-{(i % 6) + 1})"></i>{a.name}</span>{/each}</div>
 					</div>
 					<div class="k-only-narrow">
 						{#each r.slots as s, si (si)}
 							<div class="grp">
 								<div class="grphead"><b>{slotName(s)}</b><span class="k-small k-muted">{s.name.trim() ? `${slotRange(s)} · ` : ''}{pct(r.slotTotals[si])}</span></div>
 								{#each r.accounts as a, i (a.id)}
-									<div class="hb"><span>{a.name}</span><div class="track"><div style:width="{Math.min(100, (a.slots[si] / maxSlot) * 100)}%" style:background="var(--series-{(i % 6) + 1})"></div></div><span class="k-num">{pct(a.slots[si])}</span></div>
+									<div class="hb"><span>{a.name}</span><div class="track"><div class:alt={isOutlined(i)} style:width="{Math.min(100, (a.slots[si] / maxSlot) * 100)}%" style:--c="var(--series-{(i % 6) + 1})"></div></div><span class="k-num">{pct(a.slots[si])}</span></div>
 								{/each}
 							</div>
 						{/each}
@@ -268,7 +279,7 @@
 					<div class="k-only-narrow">
 						{#each r.accounts as a (a.id)}
 							<div class="grp">
-								<div class="grphead"><b>{a.name}{#if a.provider === 'codex'} <span class="k-tag">Codex</span>{/if}{#if !a.current} <span class="k-small k-muted">(removed)</span>{/if}</b><b class="k-num">{pct(a.total)}</b></div>
+								<div class="grphead"><b>{a.name}{#if a.provider === 'codex'} <span class="k-tag">Codex</span>{/if}{#if !a.current}&nbsp;<span class="k-small k-muted">(removed)</span>{/if}</b><b class="k-num">{pct(a.total)}</b></div>
 								{#each r.slots as s, si (si)}<div class="kv slim"><span class="k-muted">{slotName(s)}</span><span class="k-num">{pct(a.slots[si])}</span></div>{/each}
 								{#if many}<div class="kv slim"><span class="k-muted">Days used</span><span class="k-num">{a.daysUsed} of {r.daysWithData}</span></div>{/if}
 							</div>
@@ -444,6 +455,9 @@
 	.calnote {
 		margin: 0.5rem 0 0;
 	}
+	.nav {
+		flex-wrap: nowrap;
+	}
 	.span {
 		margin: -0.35rem 0 0;
 	}
@@ -486,7 +500,14 @@
 		margin-top: 0.4rem;
 		font-size: 0.8rem;
 	}
+	/* past six accounts the colours come round again, drawn as outlines */
+	.legend i.alt,
+	.track div.alt {
+		background: color-mix(in srgb, var(--c) 28%, transparent);
+		box-shadow: inset 0 0 0 1.5px var(--c);
+	}
 	.legend i {
+		background: var(--c);
 		display: inline-block;
 		width: 0.7rem;
 		height: 0.7rem;
@@ -540,6 +561,7 @@
 		background: var(--track);
 	}
 	.track div {
+		background: var(--c);
 		height: 100%;
 		border-radius: 3px;
 	}
