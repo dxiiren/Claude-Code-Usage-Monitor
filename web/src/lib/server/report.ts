@@ -3,6 +3,13 @@
 // configured time slots when it is opened, which is why slots can change at any time.
 import { slotLength, type Slot } from '../slots';
 
+/** A limit that covers one model only, as one reading saw it. */
+export interface ModelLevel {
+	label: string;
+	pct: number;
+	reset: number | null;
+}
+
 /** One stored reading: the 5-hour ("hourly session") window, and the 7-day one when it was kept. */
 export interface Sample {
 	ts: number;
@@ -14,6 +21,8 @@ export interface Sample {
 	weekReset?: number | null;
 	/** paid extra usage left at this reading, kept only while a window was spent; null = none in force */
 	extraLeft?: number | null;
+	/** per-model limits of this reading; null or absent = the reading carried none */
+	models?: ModelLevel[] | null;
 }
 
 export interface ReportAccount {
@@ -207,6 +216,25 @@ export interface LimitSpell {
 export interface LimitHit extends Omit<LimitSpell, 'last'> {
 	accountId: string;
 	account: string;
+	/** set when the limit covers this one model only: the account's other models kept working */
+	model: string | null;
+}
+
+/**
+ * The readings as one series per model that has its own limit, in the shape limitHits reads as a
+ * weekly window. Only readings that carried per-model limits are used, so history from before they
+ * were kept does not read as "the model was free until now".
+ */
+function modelSeries(samples: Sample[]): Map<string, { label: string; samples: Sample[] }> {
+	const withModels = samples.filter((s) => s.models?.length);
+	const out = new Map<string, { label: string; samples: Sample[] }>();
+	for (const s of withModels) for (const m of s.models!) if (!out.has(m.label.toLowerCase())) out.set(m.label.toLowerCase(), { label: m.label, samples: [] });
+	for (const [key, series] of out)
+		for (const s of withModels) {
+			const m = s.models!.find((x) => x.label.toLowerCase() === key);
+			series.samples.push({ ts: s.ts, pct: null, reset: null, weekPct: m?.pct ?? null, weekReset: m?.reset ?? null });
+		}
+	return out;
 }
 
 /**
@@ -330,14 +358,17 @@ export function buildReport(input: ReportInput): Report {
 			if (!placed) outside += inc.use;
 		}
 		let limited = false;
-		for (const window of ['session', 'weekly'] as const)
-			for (const { last, ...h } of limitHits(all, input.limitAt, window)) {
+		const keep = (spells: LimitSpell[], model: string | null) => {
+			for (const { last, ...h } of spells) {
 				// In force at some moment of the period, whenever it began. A level only falls when the
 				// window resets, so the limit held until then even if the readings stopped earlier.
 				if (h.ts > range.to || Math.max(last, h.until ?? 0) <= range.from) continue;
-				hits.push({ ...h, accountId: a.id, account: a.name });
+				hits.push({ ...h, accountId: a.id, account: a.name, model });
 				limited = true;
 			}
+		};
+		for (const window of ['session', 'weekly'] as const) keep(limitHits(all, input.limitAt, window), null);
+		for (const m of modelSeries(all).values()) keep(limitHits(m.samples, input.limitAt, 'weekly'), m.label);
 		const total = perSlot.reduce((x, y) => x + y, 0);
 		return {
 			id: a.id,

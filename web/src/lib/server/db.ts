@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS usage_samples (
   w_pct         REAL,                      -- weekly (7-day) % used
   w_reset_unix  INTEGER,
   extra_left    REAL,                      -- paid extra usage left while a window was spent; NULL = none in force
+  models_json   TEXT,                      -- per-model limits of the reading: [{"label","pct","reset"}]; NULL = the answer carried none
   PRIMARY KEY (account_id, ts_unix)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS usage_samples_ts ON usage_samples (ts_unix);
@@ -142,6 +143,8 @@ CREATE TABLE IF NOT EXISTS meta (
 			// Readings from before paid extra usage was kept: add the column; NULL on old rows = none known.
 			const uc = (d.prepare('PRAGMA table_info(usage_samples)').all() as unknown as { name: string }[]).map((c) => c.name);
 			if (!uc.includes('extra_left')) d.exec('ALTER TABLE usage_samples ADD COLUMN extra_left REAL');
+			// ... and from before per-model limits were kept
+			if (!uc.includes('models_json')) d.exec('ALTER TABLE usage_samples ADD COLUMN models_json TEXT');
 		}
 		// Schema 1 DB (no provider column): add it; every existing row is Claude (the DEFAULT).
 		const cols = (d.prepare('PRAGMA table_info(accounts)').all() as unknown as { name: string }[]).map((c) => c.name);

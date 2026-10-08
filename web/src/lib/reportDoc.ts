@@ -78,13 +78,18 @@ type Hit = ReportPayload['hits'][number];
 
 /** When a limit was reached; "Before ..." when no reading saw the account get there. */
 export const reachedLabel = (h: Hit, timezone: string) => `${h.before ? 'Before ' : ''}${whenLabel(h.ts, timezone)}`;
+/** Which limit a row is about: one of the two windows by its name from Settings, or "Opus limit" for one model. */
+export const limitName = (h: Hit, labels: ReportPayload['labels']) => (h.model ? `${h.model} limit` : labels[h.window]);
+/** One model's own limit is used up: only that model stops, the account is not blocked. */
+export const modelOut = (h: Hit) => h.model !== null && h.pct >= 100;
 /** Past 100% on paid extra usage the whole time: the account kept working. */
-export const onExtra = (h: Hit) => h.pct >= 100 && h.extra === 'all';
-/** Only 100% blocks an account, and not while paid extra usage covers it; Settings can count a lower level as "limit reached". */
-export const isBlocked = (h: Hit) => h.pct >= 100 && h.extra !== 'all';
+export const onExtra = (h: Hit) => h.model === null && h.pct >= 100 && h.extra === 'all';
+/** Only 100% of a whole window blocks an account, and not while paid extra usage covers it; Settings can count a lower level as "limit reached". */
+export const isBlocked = (h: Hit) => h.model === null && h.pct >= 100 && h.extra !== 'all';
 /** "2 h 15 min"; "at least ..." when it was reached before the first reading that saw it. */
 export function blockedFor(h: Hit): string {
 	if (onExtra(h)) return 'not blocked (paid extra usage)';
+	if (modelOut(h)) return 'not blocked (other models still work)';
 	if (!isBlocked(h)) return `not blocked (${pct(h.pct)})`;
 	return `${h.before && h.blockedSeconds !== null ? 'at least ' : ''}${blockedLabel(h.blockedSeconds)}${h.extra === 'part' ? ' (the rest on paid extra usage)' : ''}`;
 }
@@ -92,6 +97,7 @@ export function blockedFor(h: Hit): string {
 export function hitState(h: Hit, timezone: string): string {
 	const resets = h.until === null ? '' : ` · resets ${whenLabel(h.until, timezone)}`;
 	if (onExtra(h)) return `not blocked: on paid extra usage${resets}`;
+	if (modelOut(h)) return `${h.model} used up, other models still work${resets}`;
 	if (!isBlocked(h)) return `reached ${pct(h.pct)}${resets}`;
 	if (h.until === null) return h.extra === 'part' ? 'blocked (part of the time on paid extra usage)' : 'blocked';
 	return `blocked ${blockedFor(h)} · until ${whenLabel(h.until, timezone)}`;
@@ -140,7 +146,9 @@ export function summaryLines(r: ReportPayload): string[] {
 	out.push(blocked.length ? `An account was blocked by a limit ${times(blocked.length)}: ${[...new Set(blocked.map((h) => h.account))].join(', ')}.` : 'No account was blocked by a limit.');
 	const paid = r.hits.filter(onExtra);
 	if (paid.length) out.push(`An account went past a limit and kept working on paid extra usage ${times(paid.length)}: ${[...new Set(paid.map((h) => h.account))].join(', ')}.`);
-	const near = r.hits.length - blocked.length - paid.length;
+	const models = r.hits.filter(modelOut);
+	if (models.length) out.push(`A limit on one model was reached ${times(models.length)}, with the other models still working: ${[...new Set(models.map((h) => `${h.account} (${h.model})`))].join(', ')}.`);
+	const near = r.hits.length - blocked.length - paid.length - models.length;
 	if (near) out.push(`An account reached ${r.limitAt}% of a limit without being blocked ${times(near)}.`);
 	if (r.idle.length) out.push(`${r.idleBelow > 1 ? `Used less than ${r.idleBelow}%` : 'Not used at all'}: ${r.idle.join(', ')}.`);
 	if (r.noReadings.length) out.push(`No readings were saved for: ${r.noReadings.join(', ')}. Their use in this period is not known.`);
@@ -162,7 +170,7 @@ export function buildDoc(r: ReportPayload, doc: DocSettings, view: View, prepare
 			? [
 					{
 						type: 'p',
-						text: `Each time an account was at a limit and could not be used until that limit reset. A limit reached before the period and still in force during it is listed too.${r.hits.some((h) => h.extra !== 'none') ? ' An account with paid extra usage kept working past its limit for as long as that lasted; that time is not counted as blocked.' : ''}${r.limitAt < 100 ? ` Settings counts ${r.limitAt}% as a limit reached; an account is only blocked at 100%.` : ''}`
+						text: `Each time an account was at a limit and could not be used until that limit reset. A limit reached before the period and still in force during it is listed too.${r.hits.some((h) => h.extra !== 'none') ? ' An account with paid extra usage kept working past its limit for as long as that lasted; that time is not counted as blocked.' : ''}${r.hits.some((h) => h.model !== null) ? ' A limit on one model stops that model only; the account itself is not blocked.' : ''}${r.limitAt < 100 ? ` Settings counts ${r.limitAt}% as a limit reached; an account is only blocked at 100%.` : ''}`
 					},
 					{
 						type: 'table',
@@ -170,7 +178,7 @@ export function buildDoc(r: ReportPayload, doc: DocSettings, view: View, prepare
 						rows: r.hits.map((h) => [
 							reachedLabel(h, r.timezone),
 							h.account,
-							r.labels[h.window],
+							limitName(h, r.labels),
 							blockedFor(h),
 							!isBlocked(h) ? '-' : h.until === null ? 'not known' : whenLabel(h.until, r.timezone)
 						]),

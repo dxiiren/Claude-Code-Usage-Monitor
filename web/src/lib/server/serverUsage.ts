@@ -6,7 +6,7 @@ import { refreshCodexTokenViaCli } from './codex';
 import { Poller, defaultUrls, type PollResult, type Usage } from './poller';
 import type { AccountUsage, UsageSnapshot } from './usage';
 import { getSettings, onSettingsChange } from './settings';
-import type { ReportAccount, Sample } from './report';
+import type { ModelLevel, ReportAccount, Sample } from './report';
 
 interface Row {
 	account_id: string;
@@ -51,8 +51,17 @@ function recordSample(id: string, usage: Usage, unix: number): void {
 	const s = win(usage.session);
 	const w = win(usage.weekly);
 	d.prepare(
-		'INSERT OR REPLACE INTO usage_samples (account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix, extra_left) VALUES (?, ?, ?, ?, ?, ?, ?)'
-	).run(id, unix, s.pct, s.reset, w.pct, w.reset, usage.extra ? usage.extra.remaining : null);
+		'INSERT OR REPLACE INTO usage_samples (account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix, extra_left, models_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+	).run(
+		id,
+		unix,
+		s.pct,
+		s.reset,
+		w.pct,
+		w.reset,
+		usage.extra ? usage.extra.remaining : null,
+		usage.models?.length ? JSON.stringify(usage.models.map((m) => ({ label: m.label, pct: m.percentage, reset: m.resets_at_unix }))) : null
+	);
 	// The account's current name, so a report can still name it after it is removed.
 	d.prepare(
 		`INSERT INTO report_accounts (account_id, name, provider) SELECT id, name, provider FROM accounts WHERE id = ?
@@ -70,11 +79,26 @@ export function pruneSamples(nowUnix: number, days = getSettings().historyDays):
 	return Number(database().prepare('DELETE FROM usage_samples WHERE ts_unix < ?').run(nowUnix - days * 86_400).changes);
 }
 
+/** The per-model limits kept with a reading; null when it carried none (or the text is not what we wrote). */
+function modelsOf(json: string | null): ModelLevel[] | null {
+	if (!json) return null;
+	try {
+		const list = JSON.parse(json) as unknown;
+		if (!Array.isArray(list)) return null;
+		const out = list
+			.filter((m): m is ModelLevel => !!m && typeof m.label === 'string' && typeof m.pct === 'number')
+			.map((m) => ({ label: m.label, pct: m.pct, reset: typeof m.reset === 'number' ? m.reset : null }));
+		return out.length ? out : null;
+	} catch {
+		return null;
+	}
+}
+
 /** Readings of both windows per account, oldest first, for from <= ts <= to. */
 export function samplesBetween(from: number, to: number): Map<string, Sample[]> {
 	const rows = database()
 		.prepare(
-			'SELECT account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix, extra_left FROM usage_samples WHERE ts_unix >= ? AND ts_unix <= ? ORDER BY account_id, ts_unix'
+			'SELECT account_id, ts_unix, s_pct, s_reset_unix, w_pct, w_reset_unix, extra_left, models_json FROM usage_samples WHERE ts_unix >= ? AND ts_unix <= ? ORDER BY account_id, ts_unix'
 		)
 		.all(from, to) as unknown as {
 		account_id: string;
@@ -84,12 +108,13 @@ export function samplesBetween(from: number, to: number): Map<string, Sample[]> 
 		w_pct: number | null;
 		w_reset_unix: number | null;
 		extra_left: number | null;
+		models_json: string | null;
 	}[];
 	const out = new Map<string, Sample[]>();
 	for (const r of rows) {
 		let list = out.get(r.account_id);
 		if (!list) out.set(r.account_id, (list = []));
-		list.push({ ts: r.ts_unix, pct: r.s_pct, reset: r.s_reset_unix, weekPct: r.w_pct, weekReset: r.w_reset_unix, extraLeft: r.extra_left });
+		list.push({ ts: r.ts_unix, pct: r.s_pct, reset: r.s_reset_unix, weekPct: r.w_pct, weekReset: r.w_reset_unix, extraLeft: r.extra_left, models: modelsOf(r.models_json) });
 	}
 	return out;
 }

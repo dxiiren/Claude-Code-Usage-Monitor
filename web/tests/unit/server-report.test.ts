@@ -190,7 +190,7 @@ describe('limits', () => {
 	it('lists each time a limit was reached, with how long it stayed blocked', () => {
 		const r = report([s('2026-10-06', '09:00', 80), s('2026-10-06', '09:30', 100, 2 * 3600), s('2026-10-06', '09:35', 100, 2 * 3600 - 300)]);
 		expect(r.hits).toEqual([
-			{ ts: kl('2026-10-06', '09:30'), window: 'session', pct: 100, before: false, until: kl('2026-10-06', '11:30'), blockedSeconds: 7200, extra: 'none', accountId: 'a', account: 'Alpha' }
+			{ ts: kl('2026-10-06', '09:30'), window: 'session', pct: 100, before: false, until: kl('2026-10-06', '11:30'), blockedSeconds: 7200, extra: 'none', accountId: 'a', account: 'Alpha', model: null }
 		]);
 	});
 	it('a session that resets and fills again is two hits', () => {
@@ -203,7 +203,7 @@ describe('limits', () => {
 	it('a weekly limit counts even when the hourly session was never touched', () => {
 		const r = report([sw('2026-10-06', '09:00', 0, 96, 2 * DAY_S), sw('2026-10-06', '09:30', 0, 100, 2 * DAY_S - 1800), sw('2026-10-06', '09:35', 0, 100, 2 * DAY_S - 2100)]);
 		expect(r.hits).toEqual([
-			{ ts: kl('2026-10-06', '09:30'), window: 'weekly', pct: 100, before: false, until: kl('2026-10-08', '09:00'), blockedSeconds: 2 * DAY_S - 1800, extra: 'none', accountId: 'a', account: 'Alpha' }
+			{ ts: kl('2026-10-06', '09:30'), window: 'weekly', pct: 100, before: false, until: kl('2026-10-08', '09:00'), blockedSeconds: 2 * DAY_S - 1800, extra: 'none', accountId: 'a', account: 'Alpha', model: null }
 		]);
 		// blocked is not the same as not used
 		expect(r.accounts[0].total).toBe(0);
@@ -304,6 +304,44 @@ describe('limits', () => {
 			expect(limitHits(both, 90, 'session')).toMatchObject([{ pct: 100, extra: 'all' }]);
 		});
 	});
+	describe('a limit on one model', () => {
+		const RESET = kl('2026-10-09', '09:00');
+		/** A reading with room in both windows and the given per-model levels (null = the answer carried none). */
+		const m = (date: string, hhmm: string, models: Record<string, number> | null): Sample => ({
+			...sw(date, hhmm, 20, 40, 3 * DAY_S),
+			models: models && Object.entries(models).map(([label, pct]) => ({ label, pct, reset: RESET }))
+		});
+		it('is listed for the model that ran out, while both windows have room', () => {
+			const r = report([m('2026-10-06', '09:00', { Opus: 80, Sonnet: 10 }), m('2026-10-06', '10:00', { Opus: 100, Sonnet: 12 }), m('2026-10-06', '11:00', { Opus: 100, Sonnet: 12 })]);
+			expect(r.hits).toMatchObject([{ ts: kl('2026-10-06', '10:00'), model: 'Opus', pct: 100, before: false, until: RESET, accountId: 'a' }]);
+			// out of one model is not "not used"
+			expect(r.idle).toEqual([]);
+		});
+		it('history from before per-model limits were kept does not date the limit', () => {
+			const r = report([m('2026-10-06', '09:00', null), m('2026-10-06', '10:00', { Opus: 100 }), m('2026-10-06', '11:00', { Opus: 100 })]);
+			expect(r.hits).toMatchObject([{ ts: kl('2026-10-06', '10:00'), model: 'Opus', before: true }]);
+		});
+		it('a reading without per-model limits in the middle does not split the stretch', () => {
+			const r = report([m('2026-10-06', '09:00', { Opus: 100 }), m('2026-10-06', '10:00', null), m('2026-10-06', '11:00', { Opus: 100 })]);
+			expect(r.hits).toHaveLength(1);
+		});
+		it('the same model under another spelling is one limit; two models are two', () => {
+			const r = report([m('2026-10-06', '09:00', { Opus: 100, Fable: 100 }), m('2026-10-06', '10:00', { opus: 100, Fable: 100 })]);
+			expect(r.hits.map((h) => h.model).sort()).toEqual(['Fable', 'Opus']);
+		});
+		it('a window limit and a model limit at the same time are both listed, apart', () => {
+			const both: Sample = { ...sw('2026-10-06', '10:00', 20, 100, 3 * DAY_S), models: [{ label: 'Opus', pct: 100, reset: RESET }] };
+			const r = report([m('2026-10-06', '09:00', { Opus: 90 }), both]);
+			expect(r.hits.map((h) => [h.window, h.model])).toEqual([
+				['weekly', null],
+				['weekly', 'Opus']
+			]);
+		});
+		it('a limit reached before the period and still in force is listed', () => {
+			const r = report([m('2026-10-05', '10:00', { Opus: 50 }), m('2026-10-05', '11:00', { Opus: 100 })], { date: '2026-10-07' });
+			expect(r.hits).toMatchObject([{ model: 'Opus', ts: kl('2026-10-05', '11:00') }]);
+		});
+	});
 	it('reads one reset time, whichever second the provider reports it at', () => {
 		const at = kl('2026-10-08', '13:00');
 		const wobble = [at - 1, at, at - 1].map((weekReset, i) => ({ ...s('2026-10-06', `12:2${2 + i * 2}`, 0), weekPct: 100, weekReset }));
@@ -359,6 +397,25 @@ describe('the limits in the document', () => {
 		]);
 		expect(summaryLines(out)).toContain('An account was blocked by a limit 1 time: Alpha.');
 		expect(hitState(out.hits[0], KL)).toBe(`blocked 3 h 0 min (the rest on paid extra usage) · until ${whenLabel(kl('2026-10-06', '14:00'), KL)}`);
+	});
+	it('a limit on one model is named, and never reads as the account being blocked', () => {
+		const reset = kl('2026-10-09', '09:00');
+		const at = (hhmm: string, opus: number): Sample => ({ ...s('2026-10-06', hhmm, 20), weekPct: 40, weekReset: reset, models: [{ label: 'Opus', pct: opus, reset }] });
+		const r = payload([at('09:00', 80), at('10:00', 100), at('11:00', 100)]);
+		const blocks = limitsOf(r);
+		expect((blocks[0] as { text: string }).text).toContain('A limit on one model stops that model only');
+		expect((blocks.find((b) => b.type === 'table') as { rows: string[][] }).rows).toEqual([
+			[whenLabel(kl('2026-10-06', '10:00'), KL), 'Alpha', 'Opus limit', 'not blocked (other models still work)', '-']
+		]);
+		expect(summaryLines(r)).toContain('No account was blocked by a limit.');
+		expect(summaryLines(r)).toContain('A limit on one model was reached 1 time, with the other models still working: Alpha (Opus).');
+		expect(summaryLines(r).join(' ')).not.toMatch(/without being blocked|Not used/);
+		expect(hitState(r.hits[0], KL)).toBe(`Opus used up, other models still work · resets ${whenLabel(reset, KL)}`);
+		expect(isBlocked(r.hits[0])).toBe(false);
+		// a lower "limit reached" level: a model at 92% is listed as reached, not as used up
+		const near = payload([at('09:00', 80), at('10:00', 92)], 90);
+		expect(hitState(near.hits[0], KL)).toBe(`reached 92% · resets ${whenLabel(reset, KL)}`);
+		expect(summaryLines(near)).toContain('An account reached 90% of a limit without being blocked 1 time.');
 	});
 	it('says so when no account was blocked', () => {
 		const r = payload([s('2026-10-06', '09:00', 10), s('2026-10-06', '10:00', 30)]);
