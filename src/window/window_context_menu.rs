@@ -30,8 +30,13 @@ pub(super) fn show_context_menu_document(
             origin.as_ref(),
             &mut actions,
         );
+        // A right-click menu opens where the click landed (on that window's own
+        // screen); other callers fall back to the cursor.
         let mut point = POINT::default();
         let _ = GetCursorPos(&mut point);
+        if let Some(anchor) = take_menu_anchor() {
+            point = anchor;
+        }
         let _ = SetForegroundWindow(hwnd);
         let selected = TrackPopupMenu(
             menu,
@@ -413,4 +418,15 @@ mod tests {
             }
         }
     }
+}
+
+static MENU_ANCHOR: Mutex<Option<POINT>> = Mutex::new(None);
+
+/// Remember where a right-click landed, for the menu it is about to open.
+pub(super) fn set_menu_anchor(point: POINT) {
+    *MENU_ANCHOR.lock().unwrap_or_else(|e| e.into_inner()) = Some(point);
+}
+
+fn take_menu_anchor() -> Option<POINT> {
+    MENU_ANCHOR.lock().unwrap_or_else(|e| e.into_inner()).take()
 }

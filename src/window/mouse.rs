@@ -24,6 +24,48 @@ pub(super) fn mouse_client_point(lparam: LPARAM) -> (f64, f64) {
     (x, y)
 }
 
+/// The pointer's screen position for a mouse message (see `drag_pointer`).
+pub(super) fn pointer_screen_point(hwnd: HWND, lparam: LPARAM) -> POINT {
+    let mut cursor = POINT::default();
+    let _ = unsafe { GetCursorPos(&mut cursor) };
+    let (x, y) = mouse_client_point(lparam);
+    let mut from_message = POINT {
+        x: x as i32,
+        y: y as i32,
+    };
+    // Mid-drag the window follows the pointer, so coordinates are read against
+    // where it was grabbed, not against where it has moved to.
+    let grabbed_at = lock_state()
+        .as_ref()
+        .filter(|s| s.pending_drag || s.dragging)
+        .map(|s| s.drag_start_origin);
+    match grabbed_at {
+        Some(origin) => {
+            from_message.x += origin.x;
+            from_message.y += origin.y;
+        }
+        None => {
+            let _ = unsafe { ClientToScreen(hwnd, &mut from_message) };
+        }
+    }
+    positioning::drag_pointer(cursor, from_message)
+}
+
+/// Whether theme surface `surface_index` is a card or a taskbar copy.
+pub(super) fn surface_is_draggable(state: &AppState, surface_index: usize) -> bool {
+    effective_theme_from_state(state)
+        .and_then(|theme| {
+            theme.surfaces.get(surface_index).map(|surface| {
+                surface
+                    .placement
+                    .nest
+                    .resolve(surface.placement.reference.region)
+                    != SurfaceNest::Desktop
+            })
+        })
+        .unwrap_or(false)
+}
+
 pub(super) fn mouse_target_at(hwnd: HWND, lparam: LPARAM) -> Option<(usize, String)> {
     let state = lock_state();
     let state = state.as_ref()?;
@@ -51,7 +93,9 @@ pub(super) fn mouse_handler_exists(
     let state = lock_state();
     state.as_ref().is_some_and(|state| {
         state.active_theme.as_ref().is_some_and(|theme| {
-            theme_engine::mouse_event_script(theme, surface_index, object_id, event).is_some()
+            let theme =
+                theme_with_taskbar_copies(theme, state.show_on_all_taskbars, &taskbar_displays());
+            theme_engine::mouse_event_script(&theme, surface_index, object_id, event).is_some()
         })
     })
 }
@@ -66,11 +110,14 @@ pub(super) fn dispatch_mouse_event(
         let Some(state) = state.as_ref() else {
             return false;
         };
-        let Some(theme) = state.active_theme.as_ref() else {
+        let Some(theme) = state.active_theme.as_ref().map(|theme| {
+            theme_with_taskbar_copies(theme, state.show_on_all_taskbars, &taskbar_displays())
+        }) else {
             return false;
         };
-        let Some(source) = theme_engine::mouse_event_script(theme, surface_index, object_id, event)
-            .map(str::to_string)
+        let Some(source) =
+            theme_engine::mouse_event_script(&theme, surface_index, object_id, event)
+                .map(str::to_string)
         else {
             return false;
         };
@@ -89,7 +136,9 @@ pub(super) fn execute_mouse_action_source(
         let Some(state) = state.as_mut() else {
             return false;
         };
-        let Some(theme) = state.active_theme.clone() else {
+        let Some(theme) = state.active_theme.as_ref().map(|theme| {
+            theme_with_taskbar_copies(theme, state.show_on_all_taskbars, &taskbar_displays())
+        }) else {
             return false;
         };
         let data = state.data.clone();

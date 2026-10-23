@@ -1074,3 +1074,53 @@ pub(super) fn place_floating(hwnd: HWND, x: i32, y: i32, width: i32, height: i32
 pub(super) fn drag_allowed(lock_position: bool) -> bool {
     !lock_position
 }
+
+/// Whether a press on theme surface `surface_index` may start a drag. The primary
+/// strip (index 0) drags between the taskbar and the desktop; any other surface
+/// drags only when it is a free-floating card.
+pub(super) fn surface_drag_allowed(
+    lock_position: bool,
+    surface_index: usize,
+    surface_is_floating: bool,
+) -> bool {
+    drag_allowed(lock_position) && (surface_index == 0 || surface_is_floating)
+}
+
+/// The pointer position a drag follows. The system cursor is the truth for real
+/// mouse input; pen, touch and remote input do not always move it, so a message
+/// that places the pointer far from the cursor is trusted instead.
+pub(super) fn drag_pointer(cursor: POINT, from_message: POINT) -> POINT {
+    const SAME_POINTER: i32 = 64;
+    if (cursor.x - from_message.x).abs() <= SAME_POINTER
+        && (cursor.y - from_message.y).abs() <= SAME_POINTER
+    {
+        cursor
+    } else {
+        from_message
+    }
+}
+
+/// The saved offset of a card after it moved by `delta` physical pixels.
+pub(super) fn card_offset_after_drag(old: (i32, i32), delta: (i32, i32), scale: f64) -> (i32, i32) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    (
+        old.0 + (delta.0 as f64 / scale).round() as i32,
+        old.1 + (delta.1 as f64 / scale).round() as i32,
+    )
+}
+
+/// Keep a dragged card fully inside the display it is on.
+pub(super) fn clamp_card_origin(origin: POINT, size: (i32, i32), display: RECT) -> POINT {
+    POINT {
+        x: origin
+            .x
+            .clamp(display.left, (display.right - size.0).max(display.left)),
+        y: origin
+            .y
+            .clamp(display.top, (display.bottom - size.1).max(display.top)),
+    }
+}

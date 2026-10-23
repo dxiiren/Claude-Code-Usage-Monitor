@@ -37,6 +37,8 @@ fn state_for(theme: ThemeDocument, placement: PlacementOverride) -> AppState {
         is_switching_window_style: false,
         is_snapped: false,
         placement_override: Some(placement),
+        surface_offsets: Default::default(),
+        drag_surface: None,
         floating_card_opacity: None,
         window_state_timer_active: false,
         custom_theme_enabled: true,
