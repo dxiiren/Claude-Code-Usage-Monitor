@@ -1019,3 +1019,8 @@ pub(super) fn taskbar_free_dock_slot(
                 .total_cmp(&calculate_rect_overlap_ratio(widget, *b))
         })
 }
+
+/// Whether a mouse press may begin dragging the widget (it may not while pinned).
+pub(super) fn drag_allowed(lock_position: bool) -> bool {
+    !lock_position
+}

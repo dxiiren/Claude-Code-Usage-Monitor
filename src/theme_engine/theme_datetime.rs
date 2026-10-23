@@ -38,13 +38,21 @@ pub(super) fn timestamp_parts(unix: f64, local: bool) -> Option<DateTimeParts> {
 
 pub(super) fn format_timestamp(unix: f64, format: &str, context: &DataContext) -> Option<String> {
     let normalized = format.trim().to_ascii_lowercase();
-    let (utc, format) = normalized
-        .strip_prefix("utc_")
-        .map_or((false, normalized.as_str()), |format| (true, format));
+    let (zone, format) = if let Some(rest) = normalized.strip_prefix("utc_") {
+        (TimeZoneChoice::Utc, rest)
+    } else if let Some(rest) = normalized.strip_prefix("myt_") {
+        (TimeZoneChoice::Myt, rest)
+    } else {
+        (TimeZoneChoice::Local, normalized.as_str())
+    };
+    let utc = zone == TimeZoneChoice::Utc;
     if !is_timestamp_format(format) {
         return None;
     }
-    let Some(value) = timestamp_system_time(unix, !utc) else {
+    let Some(value) = (match zone {
+        TimeZoneChoice::Myt => timestamp_system_time_myt(unix),
+        _ => timestamp_system_time(unix, !utc),
+    }) else {
         return Some("--".into());
     };
     let locale = context.get_string("i18n.locale").unwrap_or("en");
@@ -79,6 +87,10 @@ pub(super) fn format_timestamp(unix: f64, format: &str, context: &DataContext) -
             date_default(&value, DATE_LONGDATE, locale),
             time_default(&value, TIME_FORMAT_FLAGS(0), locale),
         ),
+        "dm_hm" => Some(format!(
+            "{:02}/{:02} {:02}:{:02}",
+            value.wDay, value.wMonth, value.wHour, value.wMinute
+        )),
         "iso_date" => Some(format!(
             "{:04}-{:02}-{:02}",
             value.wYear, value.wMonth, value.wDay
@@ -130,10 +142,30 @@ fn is_timestamp_format(format: &str) -> bool {
             | "datetime"
             | "datetime_short"
             | "datetime_long"
+            | "dm_hm"
             | "iso_date"
             | "iso_time"
             | "iso_datetime"
     )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TimeZoneChoice {
+    Local,
+    Utc,
+    /// Malaysia Time, a fixed UTC+8 with no daylight saving.
+    Myt,
+}
+
+const MYT_OFFSET_SECONDS: f64 = 8.0 * 3600.0;
+
+/// Broken-down Malaysia Time (UTC+8) for a Unix timestamp, whatever the PC's zone.
+fn timestamp_system_time_myt(unix: f64) -> Option<SYSTEMTIME> {
+    if !unix.is_finite() || unix <= 0.0 {
+        return None;
+    }
+    // Shift the instant, then read the shifted value as UTC.
+    timestamp_system_time(unix + MYT_OFFSET_SECONDS, false)
 }
 
 fn timestamp_system_time(unix: f64, local: bool) -> Option<SYSTEMTIME> {

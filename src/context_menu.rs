@@ -65,6 +65,8 @@ pub enum ContextMenuAction {
         provider: ContextMenuProvider,
     },
     ToggleStartup,
+    /// Pin the widget: it can no longer be dragged away from where it is.
+    ToggleLockPosition,
     ToggleWidget,
     /// Accepted only so menus saved by older versions can be loaded and
     /// cleaned up. New menus cannot create or execute this legacy action.
@@ -454,6 +456,7 @@ pub fn classic_context_menu() -> ContextMenuDocument {
                 "Start with Windows",
                 Action::ToggleStartup,
             ),
+            ContextMenuItem::action("lock-position", "Lock position", Action::ToggleLockPosition),
             ContextMenuItem::submenu("language", "Language", languages),
             ContextMenuItem::separator("settings-separator"),
             ContextMenuItem::action(

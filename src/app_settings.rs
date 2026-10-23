@@ -66,6 +66,9 @@ pub struct SettingsFile {
     /// the widget counts down towards a limit rather than up from zero.
     #[serde(default)]
     pub usage_countdown: bool,
+    /// Pin the widget where it is: dragging is ignored while this is on.
+    #[serde(default)]
+    pub lock_position: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_theme_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -129,6 +132,7 @@ impl Default for SettingsFile {
             show_grok: false,
             custom_theme_enabled: true,
             usage_countdown: false,
+            lock_position: false,
             active_theme_path: None,
             dashboard_width: None,
             dashboard_height: None,
@@ -577,6 +581,33 @@ mod tests {
         let mut settings = SettingsFile::default();
         assert!(!settings.toggle_provider(ProviderId::Claude));
         assert_eq!(settings.enabled_providers(), ProviderSet::default());
+    }
+
+    #[test]
+    fn lock_position_defaults_off_and_the_saved_position_round_trips() {
+        let settings = SettingsFile::default();
+        assert!(!settings.lock_position);
+        assert!(
+            !decode_settings(r#"{"poll_interval_ms":900000}"#)
+                .unwrap()
+                .lock_position
+        );
+
+        let mut locked = decode_settings(r#"{"lock_position":true}"#).unwrap();
+        assert!(locked.lock_position);
+        locked.placement_override = Some(PlacementOverride {
+            nest: "floating".into(),
+            monitor_index: 1,
+            screen_x: 2096,
+            screen_y: 552,
+            tray_offset: 0,
+            floating_host: None,
+        });
+        let json = settings_json(&locked);
+        assert_eq!(json["lock_position"], true);
+        let restored = decode_settings(&json.to_string()).unwrap();
+        assert!(restored.lock_position);
+        assert_eq!(restored.placement_override, locked.placement_override);
     }
 
     #[test]

@@ -210,7 +210,8 @@ pub(super) unsafe extern "system" fn wnd_proc(
             let rect = native_interop::get_window_rect_safe(hwnd).unwrap_or_default();
             let mut state = lock_state();
             if let Some(s) = state.as_mut() {
-                s.pending_drag = true;
+                // A pinned widget never starts a drag, so it stays exactly put.
+                s.pending_drag = positioning::drag_allowed(s.lock_position);
                 s.is_snapped = false;
                 s.drag_start_cursor = pt;
                 s.drag_start_origin = POINT {
@@ -733,6 +734,15 @@ pub(super) unsafe extern "system" fn wnd_proc(
                 }
                 IDM_START_WITH_WINDOWS => {
                     set_startup_enabled(!is_startup_enabled());
+                }
+                IDM_LOCK_POSITION => {
+                    {
+                        let mut state = lock_state();
+                        if let Some(s) = state.as_mut() {
+                            s.lock_position = !s.lock_position;
+                        }
+                    }
+                    save_state_settings();
                 }
                 IDM_FREQ_1MIN | IDM_FREQ_5MIN | IDM_FREQ_15MIN | IDM_FREQ_1HOUR => {
                     let new_interval = match id {

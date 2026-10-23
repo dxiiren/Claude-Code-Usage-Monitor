@@ -223,6 +223,13 @@ const MENU_ACTIONS: &[ActionSpec] = &[
         "toggle_startup",
     ),
     (
+        "toggle_lock_position",
+        APP,
+        "Toggle Lock position",
+        "toggle_lock_position()",
+        "toggle_lock_position",
+    ),
+    (
         "check_for_updates",
         APP,
         "Check for updates",
@@ -1363,6 +1370,7 @@ fn menu_action_details(
         "refresh" => ContextMenuAction::Refresh,
         "toggle_widget" => ContextMenuAction::ToggleWidget,
         "toggle_startup" => ContextMenuAction::ToggleStartup,
+        "toggle_lock_position" => ContextMenuAction::ToggleLockPosition,
         "check_for_updates" => ContextMenuAction::CheckForUpdates,
         "exit" => ContextMenuAction::Exit,
         "set_update_frequency" => {

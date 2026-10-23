@@ -128,6 +128,8 @@ struct AppState {
 
     custom_theme_enabled: bool,
     usage_countdown: bool,
+    /// Pinned: mouse drags do not move the widget (settings `lock_position`).
+    lock_position: bool,
     active_theme_path: Option<PathBuf>,
     active_theme: Option<ThemeDocument>,
     theme_clock_interval: Option<Duration>,
@@ -203,6 +205,7 @@ const IDM_FREQ_5MIN: u16 = 11;
 const IDM_FREQ_15MIN: u16 = 12;
 const IDM_FREQ_1HOUR: u16 = 13;
 const IDM_START_WITH_WINDOWS: u16 = 20;
+const IDM_LOCK_POSITION: u16 = 21;
 const IDM_VERSION_ACTION: u16 = 31;
 const IDM_LANG_SYSTEM: u16 = 100;
 const IDM_LANG_FIRST: u16 = 101;
@@ -809,6 +812,7 @@ fn save_state_settings() {
             .as_ref()
             .map(|path| path.to_string_lossy().to_string());
         persisted.placement_override = s.placement_override.clone();
+        persisted.lock_position = s.lock_position;
         persisted.floating_card_opacity = s.floating_card_opacity;
         // The dashboard process owns its dimensions, so leave the freshly
         // loaded values unchanged when monitor actions persist settings.
@@ -2120,6 +2124,7 @@ pub fn run() {
                 window_state_timer_active: false,
                 custom_theme_enabled,
                 usage_countdown: settings.usage_countdown,
+                lock_position: settings.lock_position,
                 active_theme_path,
                 active_theme,
                 theme_clock_interval,
@@ -2920,6 +2925,7 @@ fn reload_settings_and_theme(hwnd: HWND, force_poll: bool) {
         state.poll_interval_ms = settings.poll_interval_ms;
         state.providers = settings.enabled_providers();
         state.usage_countdown = settings.usage_countdown;
+        state.lock_position = settings.lock_position;
         state.taskbar_index = settings.taskbar_index;
         state.tray_offset = settings.tray_offset;
         state.placement_override = settings.placement_override;

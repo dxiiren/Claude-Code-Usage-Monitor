@@ -163,6 +163,112 @@ function Set-PollInterval([int]$Minutes) {
     Write-Ok "Widget fetches usage every $Minutes minute(s)"
 }
 
+# ---------- Compact taskbar strip (opt-in) ----------
+
+# One strip per account, three short lines each (name, 5h, 7d), reset times in Kuala Lumpur time (MYT, UTC+8):
+#   BA
+#   5h 42% 23/10 14:30
+#   7d 61% 27/10 09:00
+# Writes themes\compact-usage-myt.json from the account list (the Account Manager's list in
+# remote mode, else settings.json profiles), makes it the active theme, docks it at the
+# left or right end of the taskbar, then restarts the widget. `-Side off` goes back to the
+# built-in widget. Nothing changes unless this is run.
+function Set-CompactTaskbar([ValidateSet('left','right','off')][string]$Side = 'left') {
+    $file = Join-Path $script:AppDataDir 'settings.json'
+    if (-not (Test-Path $file)) { throw "Widget settings not found; start the widget once first." }
+    Stop-Monitor
+    $s = Get-Content $file -Raw | ConvertFrom-Json
+    $set = {
+        param($name, $value)
+        if ($s.PSObject.Properties[$name]) { $s.$name = $value }
+        else { $s | Add-Member -NotePropertyName $name -NotePropertyValue $value }
+    }
+    if ($Side -eq 'off') {
+        & $set 'custom_theme_enabled' $false
+        & $set 'active_theme_path' $null
+        [IO.File]::WriteAllText($file, (ConvertTo-Json $s -Depth 20), (New-Object System.Text.UTF8Encoding $false))
+        Start-Monitor
+        Write-Ok "Compact taskbar strip off (built-in widget)"
+        return
+    }
+    $accounts = @()
+    $remote = Join-Path $script:AppDataDir 'remote-accounts.json'
+    if ($s.remote_server_url -and (Test-Path $remote)) {
+        foreach ($a in @((Get-Content $remote -Raw | ConvertFrom-Json).accounts)) {
+            $accounts += [pscustomobject]@{ Provider = $a.provider; Id = $a.id; Name = $a.name }
+        }
+    } else {
+        foreach ($prov in 'claude', 'codex') {
+            $block = $s.accounts.$prov
+            if ($block) { foreach ($a in @($block.profiles)) { if ($a.enabled) { $accounts += [pscustomobject]@{ Provider = $prov; Id = $a.id; Name = $a.name } } } }
+        }
+    }
+    if ($accounts.Count -eq 0) { throw "No accounts found to show." }
+    $children = New-Object System.Collections.ArrayList
+    $text = {
+        param($id, $x, $y, $w, $h, $render, $template, $weight, $size)
+        foreach ($mode in @(@('dark', 'system.dark', '#F1F5F9FF'), @('light', '1 - system.dark', '#111827FF'))) {
+            [void]$children.Add([ordered]@{
+                id = "$id-$($mode[0])"; name = "$id $($mode[0])"
+                render = "($render) * ($($mode[1]))"; visibility = '100'
+                x = "$x"; y = "$y"; width = "$w"; height = "$h"
+                background = @{ type = 'none' }; border = $null; corner_radius = '0'
+                layout = 'freeform'; align = 'start'; gap = '0'
+                content = [ordered]@{
+                    type = 'text'; template = $template; font_family = 'Segoe UI'; font_size = "$size"
+                    weight = $weight; rendering = 'clear_type'; contrast = '1'; align = 'left'
+                    color = @{ color = $mode[2]; opacity = '1' }
+                }
+            })
+        }
+    }
+    $x = 0
+    $n = 0
+    foreach ($a in $accounts) {
+        $n++
+        $p = "accounts.$($a.Provider).$($a.Id)"
+        $ok = "1 - $p.login_required"
+        $colW = 106
+        $tpl5 = "5h {$p.five_hour.percentage:0}% {$p.five_hour.reset.unix:myt_dm_hm}"
+        $tpl7 = "7d {$p.weekly.percentage:0}% {$p.weekly.reset.unix:myt_dm_hm}"
+        & $text "n$n" $x 1 $colW 14 '1' $a.Name 'semibold' 10
+        & $text "a$n" $x 15 $colW 14 $ok $tpl5 'medium' 10.5
+        & $text "b$n" $x 29 $colW 14 $ok $tpl7 'medium' 10.5
+        & $text "x$n" $x 15 $colW 14 "$p.login_required" 'Expired - re-login' 'semibold' 10.5
+        $x = $x + $colW + 6
+    }
+    $horizontal = if ($Side -eq 'left') { 'left' } else { 'right' }
+    $theme = [ordered]@{
+        schema_version = 1; id = 'compact-usage-myt'; name = 'Compact usage (MYT)'
+        surfaces = @([ordered]@{
+            id = 'main'; name = 'Compact taskbar strip'; render = '1'; visibility = '100'
+            placement = [ordered]@{
+                reference = @{ region = $(if ($Side -eq 'left') { 'taskbar' } else { 'system_tray' }); display = 0 }
+                nest = 'taskbar'; horizontal = $horizontal; vertical = 'bottom'
+                surface_horizontal = $horizontal; surface_vertical = 'bottom'
+                offset_x = $(if ($Side -eq 'left') { 8 } else { -6 }); offset_y = 0
+            }
+            width = "$($x - 6)"; height = '46'
+            background = @{ type = 'none' }; border = $null
+            mouse_events = [ordered]@{ double_click = 'show_dashboard()'; right_click = 'show_context_menu("classic-v1")' }
+            corner_radius = '0'; layout = 'freeform'; align = 'start'; gap = '0'
+            content = @{ type = 'none' }
+            children = @($children)
+        })
+    }
+    $dir = Join-Path $script:AppDataDir 'themes'
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    $themeFile = Join-Path $dir 'compact-usage-myt.json'
+    [IO.File]::WriteAllText($themeFile, (ConvertTo-Json $theme -Depth 30), (New-Object System.Text.UTF8Encoding $false))
+    & $set 'active_theme_path' $themeFile
+    & $set 'custom_theme_enabled' $true
+    # Drop any saved drag/float position so the theme's own placement applies.
+    if ($s.PSObject.Properties['placement_override']) { $s.PSObject.Properties.Remove('placement_override') }
+    [IO.File]::WriteAllText($file, (ConvertTo-Json $s -Depth 20), (New-Object System.Text.UTF8Encoding $false))
+    Start-Monitor
+    Write-Ok "Compact taskbar strip on the $Side of the taskbar for $($accounts.Count) account(s) (reset times in MYT)"
+}
+
 # ---------- Startup + shortcuts ----------
 
 function Enable-Startup {
@@ -202,4 +308,4 @@ function Install-CloseMenu {
 Export-ModuleMember -Function Write-Ok, Write-Info, Write-Warn, Write-Fail, Get-MonitorExe, Get-UpstreamMonitorExe,
     Stop-Monitor, Start-Monitor, Install-MonitorRelease, Install-MonitorFromSource, Install-ManagerApp,
     Get-ManagerProcess, Stop-Manager, Test-ManagerUp, Start-Manager, Enable-Startup, Disable-Startup, New-Shortcuts,
-    Install-CloseMenu, Set-RemoteServer, Set-PollInterval
+    Install-CloseMenu, Set-RemoteServer, Set-PollInterval, Set-CompactTaskbar

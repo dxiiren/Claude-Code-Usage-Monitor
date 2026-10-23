@@ -574,6 +574,7 @@ pub(super) fn context_menu_preview_action_checked(
         }
         ContextMenuAction::ToggleProvider { provider } => settings.provider_enabled(*provider),
         ContextMenuAction::ToggleStartup => startup_enabled,
+        ContextMenuAction::ToggleLockPosition => settings.lock_position,
         ContextMenuAction::ToggleWidget => theme
             .surfaces
             .iter()
