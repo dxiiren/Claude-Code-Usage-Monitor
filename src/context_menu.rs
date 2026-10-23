@@ -324,33 +324,7 @@ pub fn rendered_label(
     label: &str,
     context: &crate::theme_engine::DataContext,
 ) -> String {
-    let translated = match label {
-        "Settings" => language.text("Settings"),
-        "Update frequency" => language.text("Update frequency"),
-        "Start with Windows" => language.text("Start with Windows"),
-        "Language" => language.text("Language"),
-        "System default" => language.text("System default"),
-        "Refresh" => language.text("Refresh"),
-        "Exit" => language.text("Exit"),
-        "Claude Code" => language.text("Claude Code"),
-        "Codex" => language.text("Codex"),
-        "Antigravity" => language.text("Antigravity"),
-        "OpenCode" => language.text("OpenCode"),
-        "Cursor" => language.text("Cursor"),
-        "Grok" => language.text("Grok"),
-        "Open Dashboard" => language.text("Open Dashboard"),
-        "Every minute" => language.text("Every minute"),
-        "Every 5 minutes" => language.text("Every 5 minutes"),
-        "Every 15 minutes" => language.text("Every 15 minutes"),
-        "Every hour" => language.text("Every hour"),
-        "Providers" => language.text("Providers"),
-        "Check for updates" => language.text("Check for updates"),
-        "Show widget" => language.text("Show widget"),
-        "Show taskbar window" => language.text("Show taskbar window"),
-        "Show main window" => language.text("Show main window"),
-        "Manage accounts" => language.text("Manage accounts"),
-        _ => label,
-    };
+    let translated = language.lookup(label).unwrap_or(label);
     crate::theme_engine::format_template(translated, context)
 }
 
@@ -512,9 +486,21 @@ pub fn classic_context_menu() -> ContextMenuDocument {
                 "card-size",
                 "Card size",
                 vec![
-                    ContextMenuItem::action("size-small", "Small", Action::SetCardSize { percent: 75 }),
-                    ContextMenuItem::action("size-medium", "Medium", Action::SetCardSize { percent: 100 }),
-                    ContextMenuItem::action("size-large", "Large", Action::SetCardSize { percent: 150 }),
+                    ContextMenuItem::action(
+                        "size-small",
+                        "Small card",
+                        Action::SetCardSize { percent: 75 },
+                    ),
+                    ContextMenuItem::action(
+                        "size-medium",
+                        "Medium card",
+                        Action::SetCardSize { percent: 100 },
+                    ),
+                    ContextMenuItem::action(
+                        "size-large",
+                        "Large card",
+                        Action::SetCardSize { percent: 150 },
+                    ),
                 ],
             ),
             ContextMenuItem::submenu("language", "Language", languages),
