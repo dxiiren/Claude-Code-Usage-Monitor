@@ -815,6 +815,7 @@ fn set_window_state_timer(hwnd: HWND, required: bool) {
 }
 
 fn save_state_settings() {
+    drag_stats::bump(&drag_stats::SETTINGS_WRITES);
     let state = lock_state();
     if let Some(s) = state.as_ref() {
         let mut persisted = load_settings();
@@ -1831,6 +1832,7 @@ unsafe extern "system" fn mirror_wnd_proc(
             LRESULT(0)
         }
         WM_PAINT => {
+            drag_stats::bump(&drag_stats::PAINTS);
             let mut paint = PAINTSTRUCT::default();
             let _ = BeginPaint(hwnd, &mut paint);
             let _ = EndPaint(hwnd, &paint);
@@ -2246,6 +2248,13 @@ pub fn run() {
 /// Render every theme surface, then dispatch it to the presenter selected by
 /// its nest: DirectComposition for desktop and layered windows elsewhere.
 fn render_layered() {
+    // A drag only moves the window. Redrawing it (and re-placing it from the
+    // saved position) mid-drag is what made it flicker and trail the pointer;
+    // the release renders once at the final position.
+    if lock_state().as_ref().is_some_and(|s| s.dragging) {
+        return;
+    }
+    drag_stats::bump(&drag_stats::RENDERS);
     refresh_dpi();
     sync_custom_mirrors();
     let (hwnd_val, active_theme, usage_data, runtime, mirror_hwnds, desktop_hwnds) = {
@@ -2995,6 +3004,7 @@ fn tray_reposition_is_suppressed() -> bool {
     }
 }
 
+mod drag_stats;
 mod host_geometry;
 mod message_loop;
 use host_geometry::*;
