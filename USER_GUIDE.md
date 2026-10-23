@@ -121,6 +121,8 @@ BA
 7d 61% 09:00 27/10
 ```
 
+`just widget-compact left grid` gives an aligned grid instead: one block per account with a dim `5h`/`7d` label, the percent right-aligned (amber from 60, red above 85), the reset time, and the date on the 7d row.
+
 It reads the account list from the Account Manager (remote mode) or from the widget's
 settings, restarts the widget, and changes nothing until you run it. `just widget-compact off`
 returns to the built-in widget. In your own themes, `{account.weekly.reset.unix:myt_hm_dm}`

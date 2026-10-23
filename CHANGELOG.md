@@ -13,6 +13,7 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 - Lock position: a "Lock position" item in the Settings menu (setting `lock_position`, off by default) pins the widget so mouse drags no longer move it.
 - Compact strip: a left click opens the Account Manager (`http://127.0.0.1:47291/`) in the default browser; right click keeps the menu. Reset times read time first, then date (`14:30 23/10`).
 - Floating card stacking: Settings > Floating card (setting `floating_z_order`): Normal, Always on top (default, unchanged) or Pin to desktop (behind every window, still visible after Win+D).
+- Compact strip grid style: `just widget-compact left grid` draws identical aligned blocks per account (dim `5h`/`7d` label, right-aligned percent coloured amber above 60 and red above 85, time, and the date on the 7d row). `lines` stays the default. In local mode the strip uses the Account Manager's account list.
 - Lock position no longer swallows clicks: a pinned widget still reacts to a click, it just cannot be dragged.
 
 ## [2.16.0] - 2026-10-06
