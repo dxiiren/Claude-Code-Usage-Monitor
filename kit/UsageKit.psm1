@@ -198,6 +198,16 @@ function Set-CompactTaskbar([ValidateSet('left','right','off')][string]$Side = '
             $accounts += [pscustomobject]@{ Provider = $a.provider; Id = $a.id; Name = $a.name }
         }
     } else {
+        # Local mode: the Account Manager's own list (accounts.db) is what the widget shows,
+        # so ask it first; fall back to the widget's settings.json profiles.
+        try {
+            $api = Invoke-RestMethod 'http://127.0.0.1:47291/api/accounts' -TimeoutSec 5
+            foreach ($a in @($api.accounts)) {
+                if ($a.enabled -ne $false -and $a.id) { $accounts += [pscustomobject]@{ Provider = $a.provider; Id = $a.id; Name = $a.name } }
+            }
+        } catch { }
+    }
+    if ($accounts.Count -eq 0 -and -not ($s.remote_server_url -and (Test-Path $remote))) {
         foreach ($prov in 'claude', 'codex') {
             $block = $s.accounts.$prov
             if ($block) { foreach ($a in @($block.profiles)) { if ($a.enabled) { $accounts += [pscustomobject]@{ Provider = $prov; Id = $a.id; Name = $a.name } } } }
