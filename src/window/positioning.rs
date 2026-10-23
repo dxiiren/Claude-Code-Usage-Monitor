@@ -1025,6 +1025,63 @@ pub(super) fn set_floating_z(mode: app_settings::FloatingZOrder) {
     FLOATING_Z.store(value, Ordering::Relaxed);
 }
 
+/// Re-stack every floating card in the chosen z-order right now, without
+/// moving or resizing it, so a menu change needs no restart.
+pub(super) fn apply_floating_z_now() {
+    let windows = {
+        let state = lock_state();
+        let Some(state) = state.as_ref() else {
+            return;
+        };
+        let nests: Vec<SurfaceNest> = effective_theme_from_state(state)
+            .map(|theme| {
+                theme
+                    .surfaces
+                    .iter()
+                    .map(|surface| {
+                        surface
+                            .placement
+                            .nest
+                            .resolve(surface.placement.reference.region)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        std::iter::once(state.hwnd)
+            .chain(state.mirror_hwnds.iter().copied())
+            .enumerate()
+            .filter(|(index, _)| {
+                nests.get(*index).copied().unwrap_or(SurfaceNest::Floating) == SurfaceNest::Floating
+            })
+            .map(|(_, hwnd)| hwnd)
+            .collect::<Vec<_>>()
+    };
+    let mode = floating_z();
+    for window in windows {
+        let hwnd = window.to_hwnd();
+        unsafe {
+            if !IsWindow(Some(hwnd)).as_bool() {
+                continue;
+            }
+            let (topmost, after) = match mode {
+                app_settings::FloatingZOrder::Top => (true, HWND_TOPMOST),
+                app_settings::FloatingZOrder::Normal => (false, HWND_NOTOPMOST),
+                app_settings::FloatingZOrder::Desktop => (false, HWND_BOTTOM),
+            };
+            native_interop::make_popup(hwnd, topmost);
+            let _ = SetWindowPos(
+                hwnd,
+                Some(after),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
 pub(super) fn floating_z() -> app_settings::FloatingZOrder {
     match FLOATING_Z.load(Ordering::Relaxed) {
         0 => app_settings::FloatingZOrder::Normal,

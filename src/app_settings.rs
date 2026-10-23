@@ -122,6 +122,24 @@ pub enum FloatingZOrder {
     Top,
 }
 
+/// Whether the "Show taskbar window" / "Show main window" switch may be turned
+/// off. The taskbar strip is the one always-clickable surface, so it may only
+/// go while the main window stays visible and can be reached (not pinned
+/// behind every window on the desktop); the main window may only go while the
+/// taskbar strip is still shown. Turning a switch ON is always allowed.
+pub fn window_switch_off_allowed(
+    turning_off_taskbar: bool,
+    show_taskbar_window: bool,
+    show_main_window: bool,
+    z_order: FloatingZOrder,
+) -> bool {
+    if turning_off_taskbar {
+        show_main_window && z_order != FloatingZOrder::Desktop
+    } else {
+        show_taskbar_window
+    }
+}
+
 impl FloatingZOrder {
     pub fn key(self) -> &'static str {
         match self {
@@ -858,5 +876,16 @@ mod tests {
             decode_settings(&json).unwrap().surface_offsets["card"],
             (-40, 12)
         );
+    }
+
+    #[test]
+    fn window_switches_never_leave_nothing_reachable() {
+        use FloatingZOrder::*;
+        assert!(window_switch_off_allowed(true, true, true, Top));
+        assert!(window_switch_off_allowed(true, true, true, Normal));
+        assert!(!window_switch_off_allowed(true, true, false, Top));
+        assert!(!window_switch_off_allowed(true, true, true, Desktop));
+        assert!(window_switch_off_allowed(false, true, true, Desktop));
+        assert!(!window_switch_off_allowed(false, false, true, Top));
     }
 }
