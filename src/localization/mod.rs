@@ -57,12 +57,18 @@ impl LanguageId {
     /// deliberately fall back to that key while a specialist term is awaiting
     /// a reviewed translation.
     pub fn text(self, english: &'static str) -> &'static str {
+        self.lookup(english).unwrap_or(english)
+    }
+
+    /// Catalogue lookup for text that is not a `'static` literal, such as a
+    /// context menu label. `None` when this language has no entry.
+    pub fn lookup(self, english: &str) -> Option<&'static str> {
         let locale = self.locale();
         locale
             .translations
             .binary_search_by(|(key, _)| (*key).cmp(english))
+            .ok()
             .map(|index| locale.translations[index].1)
-            .unwrap_or(english)
     }
 
     pub fn update_via_winget_label(self) -> &'static str {
@@ -391,5 +397,86 @@ mod tests {
                 .iter()
                 .all(|(_, value)| !value.trim().is_empty()));
         }
+    }
+
+    fn collect_menu_labels(items: &[crate::context_menu::ContextMenuItem], out: &mut Vec<String>) {
+        use crate::context_menu::ContextMenuItemKind;
+        for item in items {
+            if !item.label.is_empty() {
+                out.push(item.label.clone());
+            }
+            if let ContextMenuItemKind::Submenu { items } = &item.kind {
+                collect_menu_labels(items, out);
+            }
+        }
+    }
+
+    #[test]
+    fn every_locale_has_exactly_the_english_keys() {
+        let english: Vec<&str> = LanguageId::English
+            .locale()
+            .translations
+            .iter()
+            .map(|(key, _)| *key)
+            .collect();
+        for language in LanguageId::ALL {
+            let keys: Vec<&str> = language
+                .locale()
+                .translations
+                .iter()
+                .map(|(key, _)| *key)
+                .collect();
+            let missing: Vec<&&str> = english.iter().filter(|key| !keys.contains(key)).collect();
+            let extra: Vec<&&str> = keys.iter().filter(|key| !english.contains(key)).collect();
+            assert!(
+                missing.is_empty() && extra.is_empty(),
+                "{}: missing {missing:?}, extra {extra:?}",
+                language.code()
+            );
+        }
+    }
+
+    #[test]
+    fn every_built_in_menu_label_is_in_every_locale_and_translated() {
+        let mut labels = Vec::new();
+        for menu in [
+            crate::context_menu::classic_context_menu(),
+            crate::context_menu::dashboard_v2_context_menu(),
+        ] {
+            collect_menu_labels(&menu.items, &mut labels);
+        }
+        // Names that are the same word in every language (nl also writes "Providers").
+        let proper_names = [
+            "Claude Code",
+            "Codex",
+            "Antigravity",
+            "OpenCode",
+            "Cursor",
+            "Grok",
+            "Normal",
+        ];
+        let mut untranslated = Vec::new();
+        for language in LanguageId::ALL {
+            for label in &labels {
+                // Language names are native names, not catalogue keys.
+                if LanguageId::ALL.iter().any(|l| l.native_name() == label) {
+                    continue;
+                }
+                let translated = language.lookup(label).unwrap_or_else(|| {
+                    panic!("{} has no entry for menu label {label:?}", language.code())
+                });
+                if language != LanguageId::English
+                    && !proper_names.contains(&label.as_str())
+                    && translated == label
+                    && !(language.code() == "nl" && label == "Providers")
+                {
+                    untranslated.push(format!("{}:{label}", language.code()));
+                }
+            }
+        }
+        assert!(
+            untranslated.is_empty(),
+            "menu labels left in English: {untranslated:?}"
+        );
     }
 }
