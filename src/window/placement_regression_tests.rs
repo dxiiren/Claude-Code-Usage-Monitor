@@ -847,5 +847,6 @@ fn collision_fixture(
         bounds,
         occupied,
         reserved: tray.into_iter().collect(),
+        clock: None,
     }
 }

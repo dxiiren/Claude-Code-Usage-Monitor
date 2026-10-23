@@ -137,10 +137,12 @@ pub(super) fn replicate_taskbar_surfaces(theme: &mut ThemeDocument, displays: &[
             // not inherit the primary strip's saved offset (measured against the primary
             // taskbar) or the strip's tray anchor; a drag is stored per display under the
             // copy's own surface id.
-            let scale = display_scale(display);
+            // The strip is drawn at the display scale times its fit percent, so the
+            // logical margin is divided by both to land on the physical left gap.
+            let scale = display_scale(display) * strip_fit::percent(display) as f64 / 100.0;
             copy.placement = positioning::taskbar_dock_placement(
                 display,
-                strip_fit::left_edge(display, scale),
+                strip_fit::left_edge(display, display_scale(display)),
                 scale,
                 taskbar_is_horizontal(display),
             );

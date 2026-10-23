@@ -604,6 +604,7 @@ fn can_redock_at_tray(free_space: i32, width: i32) -> bool {
             tray,
         ],
         reserved: vec![tray],
+        clock: None,
     };
     let widget = RECT {
         left: free_space - width,
