@@ -69,6 +69,9 @@ pub struct SettingsFile {
     /// Pin the widget where it is: dragging is ignored while this is on.
     #[serde(default)]
     pub lock_position: bool,
+    /// Size of the floating or desktop card as a percentage of its authored size.
+    #[serde(default = "default_card_scale_percent")]
+    pub card_scale_percent: u32,
     /// Show the taskbar window(s): every surface docked in a taskbar, on each display.
     #[serde(default = "default_true")]
     pub show_taskbar_window: bool,
@@ -180,6 +183,7 @@ impl Default for SettingsFile {
             custom_theme_enabled: true,
             usage_countdown: false,
             lock_position: false,
+            card_scale_percent: 100,
             show_taskbar_window: true,
             show_on_all_taskbars: false,
             show_main_window: true,
@@ -482,6 +486,13 @@ fn wide_path(path: &Path) -> Vec<u16> {
 fn default_poll_interval() -> u32 {
     POLL_15_MIN
 }
+pub const CARD_SCALE_MIN_PERCENT: u32 = 50;
+pub const CARD_SCALE_MAX_PERCENT: u32 = 300;
+
+fn default_card_scale_percent() -> u32 {
+    100
+}
+
 fn default_true() -> bool {
     true
 }
@@ -689,6 +700,14 @@ mod tests {
             assert_eq!(restored.show_main_window, main);
             assert_eq!(restored.show_on_all_taskbars, all);
         }
+    }
+
+    #[test]
+    fn card_size_defaults_to_full_and_round_trips() {
+        assert_eq!(SettingsFile::default().card_scale_percent, 100);
+        assert_eq!(decode_settings("{}").unwrap().card_scale_percent, 100);
+        let restored = decode_settings(r#"{"card_scale_percent":150}"#).unwrap();
+        assert_eq!(restored.card_scale_percent, 150);
     }
 
     #[test]

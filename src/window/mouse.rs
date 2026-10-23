@@ -33,21 +33,12 @@ pub(super) fn pointer_screen_point(hwnd: HWND, lparam: LPARAM) -> POINT {
         x: x as i32,
         y: y as i32,
     };
-    // Mid-drag the window follows the pointer, so coordinates are read against
-    // where it was grabbed, not against where it has moved to.
-    let grabbed_at = lock_state()
-        .as_ref()
-        .filter(|s| s.pending_drag || s.dragging)
-        .map(|s| s.drag_start_origin);
-    match grabbed_at {
-        Some(origin) => {
-            from_message.x += origin.x;
-            from_message.y += origin.y;
-        }
-        None => {
-            let _ = unsafe { ClientToScreen(hwnd, &mut from_message) };
-        }
-    }
+    // The message point is relative to the window as it is NOW. Mid-drag the window
+    // has already followed the pointer, so it must be mapped through the window's
+    // current origin; mapping it through the origin it had when grabbed gave a
+    // point near the grab position on every other move, and the card flickered
+    // between the pointer and its old place (and ended back there on release).
+    let _ = unsafe { ClientToScreen(hwnd, &mut from_message) };
     positioning::drag_pointer(cursor, from_message)
 }
 

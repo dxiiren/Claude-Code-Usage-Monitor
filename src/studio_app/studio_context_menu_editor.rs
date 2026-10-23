@@ -326,6 +326,7 @@ pub(super) fn context_menu_action_script(action: &ContextMenuAction) -> String {
         ContextMenuAction::SetFloatingZOrder { mode } => {
             format!("set_floating_z_order({})", string_arg(mode))
         }
+        ContextMenuAction::SetCardSize { percent } => format!("set_card_size({percent})"),
         ContextMenuAction::ToggleWidget => "toggle_widget()".into(),
         ContextMenuAction::ToggleTaskbarWindow => "toggle_taskbar_window()".into(),
         ContextMenuAction::ToggleMainWindow => "toggle_main_window()".into(),
@@ -419,6 +420,18 @@ pub(super) fn parse_context_menu_action_script(script: &str) -> Result<ContextMe
             return Err("Choose normal, top or desktop".into());
         }
         return Ok(ContextMenuAction::SetFloatingZOrder { mode });
+    }
+    if let Some(value) = call_arg("set_card_size") {
+        let percent: u32 = value
+            .trim()
+            .parse()
+            .map_err(|_| "Choose a size from 50 to 300".to_string())?;
+        if !(crate::app_settings::CARD_SCALE_MIN_PERCENT..=crate::app_settings::CARD_SCALE_MAX_PERCENT)
+            .contains(&percent)
+        {
+            return Err("Choose a size from 50 to 300".into());
+        }
+        return Ok(ContextMenuAction::SetCardSize { percent });
     }
     if call_arg("set_language").is_some() {
         return Ok(ContextMenuAction::SetLanguage {

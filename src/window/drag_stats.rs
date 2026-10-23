@@ -43,3 +43,27 @@ pub(super) fn report(label: &str) {
         }
     }
 }
+
+/// Message and placement trace for diagnosing a real-mouse drag. Off unless the
+/// `CCUM_DRAG_TRACE` environment variable names a file; one line per event with
+/// a millisecond timestamp.
+pub(super) fn trace(line: impl FnOnce() -> String) {
+    use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
+    static SINK: OnceLock<Option<Mutex<(std::fs::File, std::time::Instant)>>> = OnceLock::new();
+    let sink = SINK.get_or_init(|| {
+        let path = std::env::var_os("CCUM_DRAG_TRACE")?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok()?;
+        Some(Mutex::new((file, std::time::Instant::now())))
+    });
+    if let Some(sink) = sink {
+        if let Ok(mut guard) = sink.lock() {
+            let ms = guard.1.elapsed().as_millis();
+            let _ = writeln!(guard.0, "{ms:>8} {}", line());
+        }
+    }
+}
