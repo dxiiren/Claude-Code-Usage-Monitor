@@ -265,7 +265,6 @@ export function screensFor(method: string, pathname: string): Screen[] {
 	if (pathname === '/account' || pathname === '/logout' || under('/api/account')) return [];
 	if (pathname === '/api/accounts' && read) return ['accounts', 'usage']; // both pages read the account list
 	if (pathname === '/') return ['accounts'];
-	if (pathname === '/api/pool' && read) return ['accounts', 'usage']; // read-only pool panel on the Accounts page
 	if (under('/api/accounts') || under('/api/login') || pathname === '/api/settings' || under('/api/widget')) return ['accounts'];
 	if (pathname === '/usage') return ['usage'];
 	if (under('/api/usage')) return ['usage', 'accounts']; // Refresh now sits on both pages
