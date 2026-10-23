@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import UsageBar from '$lib/UsageBar.svelte';
+	import PoolPanel from '$lib/PoolPanel.svelte';
 	import LoginPanel, { type LoginInfo } from '$lib/LoginPanel.svelte';
 	import { ago, needsLogin, post, refreshSummary, resetsIn, windowFull } from '$lib/format';
 	import { atLimit, onExtra } from '$lib/headline';
@@ -331,6 +332,11 @@
 			</li>
 		{/each}
 	</ul>
+{/if}
+
+<!-- Local only: the pool ledger is a file on THIS PC. -->
+{#if !server}
+	<PoolPanel />
 {/if}
 
 <section class="widget">
