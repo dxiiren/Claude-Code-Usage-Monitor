@@ -666,7 +666,11 @@ fn strip_fit_plans(state: &AppState) -> Vec<(usize, strip_fit::Fit)> {
             positioning::widget_frame(&theme, state.data.as_ref(), runtime, display_scale(display))
                 .width;
         let saved = (display == primary).then_some(saved).flatten();
-        if let Some(fit) = strip_fit::plan(gap.right - taskbar.rect.left, width, saved) {
+        // Left gap = the clock's gap to the taskbar's right edge, so both ends match.
+        let left_edge = native_interop::clock_edge_gap(taskbar.hwnd, taskbar.rect)
+            .unwrap_or_else(|| strip_fit::fallback_edge(display_scale(display)));
+        if let Some(fit) = strip_fit::plan(gap.right - taskbar.rect.left, width, saved, left_edge)
+        {
             plans.push((display, fit));
         }
     }
@@ -1207,8 +1211,12 @@ fn sync_tray_icon(hwnd: HWND) {
                     })
                 })
                 .collect::<Vec<_>>();
-            tray_icon::sync_themed(hwnd, &icons);
-            return;
+            // A theme whose tray icons all fail to render must not leave the
+            // app without a notification-area entry point.
+            if !icons.is_empty() {
+                tray_icon::sync_themed(hwnd, &icons);
+                return;
+            }
         }
     }
     tray_icon::sync(hwnd, &tray_icon_tooltip_from_state());
@@ -1972,6 +1980,7 @@ unsafe extern "system" fn mirror_wnd_proc(
     match msg {
         WM_NCHITTEST => LRESULT(HTCLIENT as isize),
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_SETCURSOR if message_loop::card_resize_cursor(hwnd) => LRESULT(1),
         WM_SETCURSOR if set_surface_cursor(hwnd) => LRESULT(1),
         // Press, move, release and capture loss behave exactly as on the primary
         // window (drag rules, lock, clicks), so a card or a taskbar copy is never

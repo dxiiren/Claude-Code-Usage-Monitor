@@ -181,6 +181,18 @@ pub fn find_child_window(parent: HWND, class_name: &str) -> Option<HWND> {
     }
 }
 
+/// Physical gap between the taskbar's right edge and the right edge of its
+/// clock (or, when no clock window exists, its notification area). `None` when
+/// neither can be read or the gap is under 4 px (Windows 11 draws the clock's
+/// padding inside one window, so its rect carries no usable gap).
+pub fn clock_edge_gap(taskbar: HWND, taskbar_rect: RECT) -> Option<i32> {
+    let tray = find_child_window(taskbar, "TrayNotifyWnd")?;
+    let clock = find_child_window(tray, "TrayClockWClass").unwrap_or(tray);
+    let rect = get_window_rect_safe(clock)?;
+    let gap = taskbar_rect.right - rect.right;
+    (gap >= 4).then_some(gap)
+}
+
 /// Get taskbar position safely.
 /// We use get_window_rect_safe directly because GetWindowRect is a non-blocking
 /// kernel-mode query that returns immediately even if explorer.exe is hung or unresponsive.

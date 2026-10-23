@@ -114,9 +114,6 @@ pub(super) fn taskbar_displays() -> Vec<usize> {
 /// Repeat the first taskbar-docked surface once for every other display that
 /// has a taskbar. The copies are ordinary surfaces, so the existing mirror
 /// windows host them and a display change only has to rebuild this list.
-/// Gap, in logical pixels, between a taskbar copy and the left edge of its taskbar.
-const COPY_LEFT_MARGIN: i32 = 4;
-
 pub(super) fn replicate_taskbar_surfaces(theme: &mut ThemeDocument, displays: &[usize]) {
     let Some(source) = theme.surfaces.iter().find(|surface| {
         surface
@@ -140,10 +137,11 @@ pub(super) fn replicate_taskbar_surfaces(theme: &mut ThemeDocument, displays: &[
             // not inherit the primary strip's saved offset (measured against the primary
             // taskbar) or the strip's tray anchor; a drag is stored per display under the
             // copy's own surface id.
+            let scale = display_scale(display);
             copy.placement = positioning::taskbar_dock_placement(
                 display,
-                COPY_LEFT_MARGIN,
-                1.0,
+                strip_fit::left_edge(display, scale),
+                scale,
                 taskbar_is_horizontal(display),
             );
             copy
@@ -299,7 +297,9 @@ mod tests {
         theme.surfaces[0].placement.offset_y = 7;
         replicate_taskbar_surfaces(&mut theme, &[0, 1]);
         let copy = &theme.surfaces[1].placement;
-        assert_eq!((copy.offset_x, copy.offset_y), (COPY_LEFT_MARGIN, 0));
+        let scale = display_scale(1);
+        let expected_margin = (strip_fit::left_edge(1, scale) as f64 / scale).round() as i32;
+        assert_eq!((copy.offset_x, copy.offset_y), (expected_margin, 0));
         let monitor = RECT {
             left: -1920,
             top: 0,
@@ -327,7 +327,7 @@ mod tests {
             Some(taskbar),
             Some(tray),
         );
-        assert_eq!(rect.left, -1920 + COPY_LEFT_MARGIN);
+        assert_eq!(rect.left, -1920 + expected_margin);
     }
 
     #[test]

@@ -186,7 +186,7 @@ fn is_card_window(hwnd: HWND) -> bool {
 }
 
 /// Shows the diagonal resize arrow while the pointer is on a card's bottom-right grip.
-fn card_resize_cursor(hwnd: HWND) -> bool {
+pub(super) fn card_resize_cursor(hwnd: HWND) -> bool {
     if lock_state().as_ref().is_none_or(|s| s.lock_position) || !is_card_window(hwnd) {
         return false;
     }
@@ -1174,10 +1174,27 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                     {
                         let mut state = lock_state();
                         if let Some(s) = state.as_mut() {
-                            if id == IDM_SHOW_TASKBAR_WINDOW {
-                                s.show_taskbar_window = !s.show_taskbar_window;
+                            let taskbar = id == IDM_SHOW_TASKBAR_WINDOW;
+                            let currently_on = if taskbar {
+                                s.show_taskbar_window
                             } else {
-                                s.show_main_window = !s.show_main_window;
+                                s.show_main_window
+                            };
+                            // Turning a switch off is refused when it would leave
+                            // no reachable window to turn it back on.
+                            if !currently_on
+                                || app_settings::window_switch_off_allowed(
+                                    taskbar,
+                                    s.show_taskbar_window,
+                                    s.show_main_window,
+                                    positioning::floating_z(),
+                                )
+                            {
+                                if taskbar {
+                                    s.show_taskbar_window = !s.show_taskbar_window;
+                                } else {
+                                    s.show_main_window = !s.show_main_window;
+                                }
                             }
                         }
                     }
@@ -1205,7 +1222,8 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                         _ => app_settings::FloatingZOrder::Top,
                     });
                     save_state_settings();
-                    // Re-place the card now so the change is visible at once.
+                    // Re-stack the live cards now so the change is visible at once.
+                    positioning::apply_floating_z_now();
                     let floating = lock_state().as_ref().is_some_and(|s| {
                         s.auto_ejected
                             || s.placement_override
