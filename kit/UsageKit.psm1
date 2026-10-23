@@ -229,8 +229,8 @@ function Set-CompactTaskbar([ValidateSet('left','right','off')][string]$Side = '
         $p = "accounts.$($a.Provider).$($a.Id)"
         $ok = "1 - $p.login_required"
         $colW = 106
-        $tpl5 = "5h {$p.five_hour.percentage:0}% {$p.five_hour.reset.unix:myt_dm_hm}"
-        $tpl7 = "7d {$p.weekly.percentage:0}% {$p.weekly.reset.unix:myt_dm_hm}"
+        $tpl5 = "5h {$p.five_hour.percentage:0}% {$p.five_hour.reset.unix:myt_hm_dm}"
+        $tpl7 = "7d {$p.weekly.percentage:0}% {$p.weekly.reset.unix:myt_hm_dm}"
         & $text "n$n" $x 1 $colW 14 '1' $a.Name 'semibold' 10
         & $text "a$n" $x 15 $colW 14 $ok $tpl5 'medium' 10.5
         & $text "b$n" $x 29 $colW 14 $ok $tpl7 'medium' 10.5
@@ -250,7 +250,7 @@ function Set-CompactTaskbar([ValidateSet('left','right','off')][string]$Side = '
             }
             width = "$($x - 6)"; height = '46'
             background = @{ type = 'none' }; border = $null
-            mouse_events = [ordered]@{ double_click = 'show_dashboard()'; right_click = 'show_context_menu("classic-v1")' }
+            mouse_events = [ordered]@{ click = 'open_url("http://127.0.0.1:47291/")'; right_click = 'show_context_menu("classic-v1")' }
             corner_radius = '0'; layout = 'freeform'; align = 'start'; gap = '0'
             content = @{ type = 'none' }
             children = @($children)

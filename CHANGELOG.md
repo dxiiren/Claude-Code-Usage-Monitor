@@ -8,9 +8,12 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
 ### Added
 
-- Theme text: `myt_` timestamp formats (for example `{account.weekly.reset.unix:myt_dm_hm}`) show a time in Malaysia Time (UTC+8) whatever the PC's time zone, plus a `dm_hm` format (`23/10 14:30`) that works with the local, `utc_` and `myt_` forms.
+- Theme text: `myt_` timestamp formats (for example `{account.weekly.reset.unix:myt_hm_dm}`) show a time in Malaysia Time (UTC+8) whatever the PC's time zone, plus `dm_hm` (`23/10 14:30`) and `hm_dm` (`14:30 23/10`) formats that work with the local, `utc_` and `myt_` forms.
 - Opt-in compact taskbar strip: `just widget-compact [left|right|off]` writes a theme with one block per account, 5h and 7d usage percent with their reset date and time in Kuala Lumpur time, and docks it at the left or right end of the taskbar. Nothing changes unless you run it.
 - Lock position: a "Lock position" item in the Settings menu (setting `lock_position`, off by default) pins the widget so mouse drags no longer move it.
+- Compact strip: a left click opens the Account Manager (`http://127.0.0.1:47291/`) in the default browser; right click keeps the menu. Reset times read time first, then date (`14:30 23/10`).
+- Floating card stacking: Settings > Floating card (setting `floating_z_order`): Normal, Always on top (default, unchanged) or Pin to desktop (behind every window, still visible after Win+D).
+- Lock position no longer swallows clicks: a pinned widget still reacts to a click, it just cannot be dragged.
 
 ## [2.16.0] - 2026-10-06
 

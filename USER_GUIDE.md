@@ -113,17 +113,17 @@ theme that always displays consumed usage may stay unchanged. See the
 `just widget-compact` (or `just widget-compact right`) writes a theme with one block per
 account and docks it at the left (default) or right end of the taskbar. Each block shows the
 account name, then the 5-hour and the weekly window, each with its usage percent and the
-reset as a date and time in Kuala Lumpur time (UTC+8), for example:
+reset as a time then a date in Kuala Lumpur time (UTC+8), for example:
 
 ```text
 BA
-5h 42% 23/10 14:30
-7d 61% 27/10 09:00
+5h 42% 14:30 23/10
+7d 61% 09:00 27/10
 ```
 
 It reads the account list from the Account Manager (remote mode) or from the widget's
 settings, restarts the widget, and changes nothing until you run it. `just widget-compact off`
-returns to the built-in widget. In your own themes, `{account.weekly.reset.unix:myt_dm_hm}`
+returns to the built-in widget. In your own themes, `{account.weekly.reset.unix:myt_hm_dm}`
 gives the same Malaysia Time text; `myt_` works with every timestamp format.
 
 ## Claude extra limits in custom themes

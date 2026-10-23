@@ -210,8 +210,9 @@ pub(super) unsafe extern "system" fn wnd_proc(
             let rect = native_interop::get_window_rect_safe(hwnd).unwrap_or_default();
             let mut state = lock_state();
             if let Some(s) = state.as_mut() {
-                // A pinned widget never starts a drag, so it stays exactly put.
-                s.pending_drag = positioning::drag_allowed(s.lock_position);
+                // The press stays a candidate click; a pinned widget refuses the drag
+                // part in WM_MOUSEMOVE, so it stays exactly put.
+                s.pending_drag = true;
                 s.is_snapped = false;
                 s.drag_start_cursor = pt;
                 s.drag_start_origin = POINT {
@@ -235,7 +236,13 @@ pub(super) unsafe extern "system" fn wnd_proc(
                         let dx = (pt.x - s.drag_start_cursor.x).abs();
                         let dy = (pt.y - s.drag_start_cursor.y).abs();
                         if dx >= cx_drag || dy >= cy_drag {
-                            (true, false)
+                            if positioning::drag_allowed(s.lock_position) {
+                                (true, false)
+                            } else {
+                                // Pinned: a press that moved is neither a drag nor a click.
+                                s.pending_drag = false;
+                                (false, false)
+                            }
                         } else {
                             (false, false)
                         }
@@ -575,17 +582,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                         }
                     }
                     save_state_settings();
-                    unsafe {
-                        let _ = SetWindowPos(
-                            hwnd,
-                            Some(HWND_TOPMOST),
-                            clamped_x,
-                            clamped_y,
-                            widget_w,
-                            widget_h,
-                            SWP_NOACTIVATE,
-                        );
-                    }
+                    positioning::place_floating(hwnd, clamped_x, clamped_y, widget_w, widget_h);
                     render_layered();
                 }
             } else if released.pending {
@@ -672,17 +669,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     s.is_switching_window_style = false;
                 }
 
-                unsafe {
-                    let _ = SetWindowPos(
-                        hwnd,
-                        Some(HWND_TOPMOST),
-                        pt.x,
-                        pt.y,
-                        widget_w,
-                        widget_h,
-                        SWP_NOACTIVATE,
-                    );
-                }
+                positioning::place_floating(hwnd, pt.x, pt.y, widget_w, widget_h);
                 diagnose::log("taskbar collision: auto-ejected widget to floating");
                 render_layered();
             } else if action == 0 && s.auto_ejected {
@@ -743,6 +730,26 @@ pub(super) unsafe extern "system" fn wnd_proc(
                         }
                     }
                     save_state_settings();
+                }
+                IDM_Z_NORMAL | IDM_Z_TOP | IDM_Z_DESKTOP => {
+                    positioning::set_floating_z(match id {
+                        IDM_Z_NORMAL => app_settings::FloatingZOrder::Normal,
+                        IDM_Z_DESKTOP => app_settings::FloatingZOrder::Desktop,
+                        _ => app_settings::FloatingZOrder::Top,
+                    });
+                    save_state_settings();
+                    // Re-place the card now so the change is visible at once.
+                    let floating = lock_state().as_ref().is_some_and(|s| {
+                        s.auto_ejected
+                            || s.placement_override
+                                .as_ref()
+                                .is_some_and(|p| p.nest == "floating")
+                    });
+                    if floating {
+                        sync_custom_mirrors();
+                        position_at_taskbar();
+                        render_layered();
+                    }
                 }
                 IDM_FREQ_1MIN | IDM_FREQ_5MIN | IDM_FREQ_15MIN | IDM_FREQ_1HOUR => {
                     let new_interval = match id {

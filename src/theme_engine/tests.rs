@@ -625,6 +625,7 @@ fn timestamps_support_localized_and_iso_date_time_formats() {
         "iso_time",
         "iso_datetime",
         "dm_hm",
+        "hm_dm",
     ] {
         let template = format!("{{timestamp:utc_{format}}}");
         let rendered = format_template(&template, &context);
@@ -665,6 +666,28 @@ fn myt_timestamps_are_utc_plus_8_whatever_the_pc_zone() {
     );
     context.insert("none", 0.0);
     assert_eq!(format_template("{none:myt_dm_hm}", &context), "--");
+}
+
+#[test]
+fn hm_dm_puts_the_time_before_the_date() {
+    let mut context = DataContext::default();
+    context.insert_string("i18n.locale", "en-US");
+    context.insert("same_day", 1792737000.0);
+    context.insert("next_day", 1792787400.0);
+    assert_eq!(
+        format_template("{same_day:myt_hm_dm}", &context),
+        "14:30 23/10"
+    );
+    assert_eq!(
+        format_template("{next_day:myt_hm_dm}", &context),
+        "04:30 24/10"
+    );
+    assert_eq!(
+        format_template("{next_day:utc_hm_dm}", &context),
+        "20:30 23/10"
+    );
+    context.insert("none", 0.0);
+    assert_eq!(format_template("{none:myt_hm_dm}", &context), "--");
 }
 
 #[test]

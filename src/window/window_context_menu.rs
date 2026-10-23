@@ -147,6 +147,9 @@ pub(super) fn context_menu_action_flags(
         ContextMenuAction::ToggleProvider { provider } => state.providers.contains(*provider),
         ContextMenuAction::ToggleStartup => is_startup_enabled(),
         ContextMenuAction::ToggleLockPosition => state.lock_position,
+        ContextMenuAction::SetFloatingZOrder { mode } => {
+            app_settings::FloatingZOrder::from_key(mode) == Some(positioning::floating_z())
+        }
         ContextMenuAction::ToggleWidget => state
             .active_theme
             .as_ref()
@@ -269,6 +272,14 @@ pub(super) fn execute_context_menu_action(
         }
         ContextMenuAction::ToggleStartup => Some(IDM_START_WITH_WINDOWS),
         ContextMenuAction::ToggleLockPosition => Some(IDM_LOCK_POSITION),
+        ContextMenuAction::SetFloatingZOrder { mode } => {
+            match app_settings::FloatingZOrder::from_key(mode) {
+                Some(app_settings::FloatingZOrder::Normal) => Some(IDM_Z_NORMAL),
+                Some(app_settings::FloatingZOrder::Top) => Some(IDM_Z_TOP),
+                Some(app_settings::FloatingZOrder::Desktop) => Some(IDM_Z_DESKTOP),
+                None => None,
+            }
+        }
         ContextMenuAction::SetLanguage { language } => {
             if language.eq_ignore_ascii_case("system") {
                 Some(IDM_LANG_SYSTEM)

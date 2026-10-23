@@ -312,16 +312,7 @@ pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, 
                 let _ = ShowWindow(hwnd, SW_HIDE);
             }
             SurfaceNest::Floating | SurfaceNest::Auto => {
-                native_interop::make_popup(hwnd, true);
-                let _ = SetWindowPos(
-                    hwnd,
-                    Some(HWND_TOPMOST),
-                    x,
-                    y,
-                    width,
-                    height,
-                    SWP_NOACTIVATE,
-                );
+                place_floating(hwnd, x, y, width, height);
             }
         }
     }
@@ -375,7 +366,7 @@ pub(super) fn sync_theme_window_visibility() {
             if should_show == IsWindowVisible(hwnd).as_bool() {
                 continue;
             }
-            if should_show {
+            if should_show && floating_z() == app_settings::FloatingZOrder::Top {
                 let _ = SetWindowPos(
                     hwnd,
                     Some(HWND_TOPMOST),
@@ -1018,6 +1009,65 @@ pub(super) fn taskbar_free_dock_slot(
             calculate_rect_overlap_ratio(widget, *a)
                 .total_cmp(&calculate_rect_overlap_ratio(widget, *b))
         })
+}
+
+static FLOATING_Z: AtomicU8 = AtomicU8::new(1);
+
+pub(super) fn set_floating_z(mode: app_settings::FloatingZOrder) {
+    let value = match mode {
+        app_settings::FloatingZOrder::Normal => 0,
+        app_settings::FloatingZOrder::Top => 1,
+        app_settings::FloatingZOrder::Desktop => 2,
+    };
+    FLOATING_Z.store(value, Ordering::Relaxed);
+}
+
+pub(super) fn floating_z() -> app_settings::FloatingZOrder {
+    match FLOATING_Z.load(Ordering::Relaxed) {
+        0 => app_settings::FloatingZOrder::Normal,
+        2 => app_settings::FloatingZOrder::Desktop,
+        _ => app_settings::FloatingZOrder::Top,
+    }
+}
+
+/// Place the floating card at screen position (x, y) in the stacking chosen by the
+/// `floating_z_order` setting.
+pub(super) fn place_floating(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) {
+    unsafe {
+        match floating_z() {
+            app_settings::FloatingZOrder::Top => {
+                native_interop::make_popup(hwnd, true);
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOPMOST),
+                    x,
+                    y,
+                    width,
+                    height,
+                    SWP_NOACTIVATE,
+                );
+            }
+            app_settings::FloatingZOrder::Normal => {
+                native_interop::make_popup(hwnd, false);
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_NOTOPMOST),
+                    x,
+                    y,
+                    width,
+                    height,
+                    SWP_NOACTIVATE,
+                );
+            }
+            // A desktop-pinned card is a `Desktop`-nest surface (see
+            // `apply_floating_position`); this is only the fallback for a card
+            // that is still a top-level window: behind everything else.
+            app_settings::FloatingZOrder::Desktop => {
+                native_interop::make_popup(hwnd, false);
+                let _ = SetWindowPos(hwnd, Some(HWND_BOTTOM), x, y, width, height, SWP_NOACTIVATE);
+            }
+        }
+    }
 }
 
 /// Whether a mouse press may begin dragging the widget (it may not while pinned).

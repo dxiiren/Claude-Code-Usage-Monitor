@@ -91,6 +91,10 @@ pub(super) fn format_timestamp(unix: f64, format: &str, context: &DataContext) -
             "{:02}/{:02} {:02}:{:02}",
             value.wDay, value.wMonth, value.wHour, value.wMinute
         )),
+        "hm_dm" => Some(format!(
+            "{:02}:{:02} {:02}/{:02}",
+            value.wHour, value.wMinute, value.wDay, value.wMonth
+        )),
         "iso_date" => Some(format!(
             "{:04}-{:02}-{:02}",
             value.wYear, value.wMonth, value.wDay
@@ -143,6 +147,7 @@ fn is_timestamp_format(format: &str) -> bool {
             | "datetime_short"
             | "datetime_long"
             | "dm_hm"
+            | "hm_dm"
             | "iso_date"
             | "iso_time"
             | "iso_datetime"
