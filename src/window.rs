@@ -384,7 +384,20 @@ fn theme_surface_scale(theme: &ThemeDocument, surface_index: usize) -> f64 {
     } else {
         1.0
     };
-    display_scale(display_index) * user
+    // A strip docked in a taskbar shrinks to fit the gap left of the app buttons.
+    let fit = theme.surfaces.get(surface_index).is_some_and(|surface| {
+        surface
+            .placement
+            .nest
+            .resolve(surface.placement.reference.region)
+            == SurfaceNest::Taskbar
+    });
+    let fit = if fit {
+        strip_fit::percent(display_index) as f64 / 100.0
+    } else {
+        1.0
+    };
+    display_scale(display_index) * user * fit
 }
 
 fn logical_host_dimension(physical: i32, scale: f64) -> u32 {
@@ -599,6 +612,67 @@ fn spawn_taskbar_watchdog() {
     });
 }
 
+/// The size and offset every docked strip needs so it sits in the gap left of
+/// the centred app buttons on its own taskbar. A display whose gap cannot hold
+/// even the smallest strip is absent: its strip leaves the taskbar as before.
+fn strip_fit_plans(state: &AppState) -> Vec<(usize, strip_fit::Fit)> {
+    let Some(theme) = theme_with_placement(state, false) else {
+        return Vec::new();
+    };
+    let displays = native_interop::find_monitors();
+    let primary = theme
+        .surfaces
+        .first()
+        .map_or(0, |surface| surface.placement.reference.display);
+    let saved = state
+        .placement_override
+        .as_ref()
+        .filter(|p| p.nest == "taskbar" && p.screen_x > 0)
+        .map(|p| p.screen_x);
+    let mut plans = Vec::new();
+    for taskbar in native_interop::find_taskbars() {
+        if !native_interop::is_taskbar_horizontal(taskbar.rect) {
+            continue;
+        }
+        let monitor = unsafe { MonitorFromWindow(taskbar.hwnd, MONITOR_DEFAULTTOPRIMARY) };
+        let Some(display) = positioning::monitor_index_for_handle(&displays, monitor) else {
+            continue;
+        };
+        if display >= strip_fit::MAX_DISPLAYS
+            || !theme.surfaces.iter().any(|surface| {
+                surface.placement.reference.display == display
+                    && surface
+                        .placement
+                        .nest
+                        .resolve(surface.placement.reference.region)
+                        == SurfaceNest::Taskbar
+            })
+        {
+            continue;
+        }
+        let Some(occupancy) = taskbar_collision::cached(taskbar.hwnd, taskbar.rect) else {
+            continue;
+        };
+        let Some(gap) = occupancy
+            .free_slots(taskbar.rect)
+            .into_iter()
+            .next()
+            .filter(|gap| gap.left <= taskbar.rect.left + 2)
+        else {
+            continue;
+        };
+        let runtime = theme_runtime_for_surface(&theme, 0, theme_runtime_from_state(state));
+        let width =
+            positioning::widget_frame(&theme, state.data.as_ref(), runtime, display_scale(display))
+                .width;
+        let saved = (display == primary).then_some(saved).flatten();
+        if let Some(fit) = strip_fit::plan(gap.right - taskbar.rect.left, width, saved) {
+            plans.push((display, fit));
+        }
+    }
+    plans
+}
+
 fn taskbar_collision_action(state: &AppState) -> Option<usize> {
     if state.dragging || state.pending_drag || state.is_switching_window_style {
         return None;
@@ -606,6 +680,14 @@ fn taskbar_collision_action(state: &AppState) -> Option<usize> {
     let taskbar = state.taskbar_hwnd?.to_hwnd();
     let bounds = native_interop::get_taskbar_rect(taskbar)?;
     let occupancy = taskbar_collision::cached(taskbar, bounds)?;
+    // Shrink or grow the strip to the gap left of the app buttons before any
+    // decision to leave the taskbar is taken.
+    if strip_fit_plans(state)
+        .iter()
+        .any(|(display, fit)| strip_fit::current(*display) != *fit)
+    {
+        return Some(2);
+    }
     if state.auto_ejected {
         let target = restored_dock_rect(state, taskbar, bounds)?;
         let margin = (20.0 * CURRENT_DPI.load(Ordering::Relaxed) as f64 / 96.0).round() as i32;
@@ -736,6 +818,31 @@ fn theme_with_placement(state: &AppState, auto_ejected: bool) -> Option<ThemeDoc
     if state.show_on_all_taskbars {
         host_geometry::replicate_taskbar_surfaces(&mut theme, &taskbar_displays());
     }
+    // A strip that had to move left or shrink to fit keeps that place.
+    for surface in theme.surfaces.iter_mut().filter(|surface| {
+        surface
+            .placement
+            .nest
+            .resolve(surface.placement.reference.region)
+            == SurfaceNest::Taskbar
+            && taskbar_is_horizontal(surface.placement.reference.display)
+    }) {
+        let display = surface.placement.reference.display;
+        let fit = strip_fit::current(display);
+        if let Some(offset) = fit.offset {
+            let scale = display_scale(display) * fit.percent as f64 / 100.0;
+            surface.placement.offset_x = (offset as f64 / scale).round() as i32;
+        }
+    }
+    if let Some(first) = theme.surfaces.first().filter(|surface| {
+        surface
+            .placement
+            .nest
+            .resolve(surface.placement.reference.region)
+            == SurfaceNest::Taskbar
+    }) {
+        theme.placement = first.placement.clone();
+    }
     Some(theme)
 }
 
@@ -795,7 +902,8 @@ fn restored_dock_rect(state: &AppState, taskbar: HWND, taskbar_rect: RECT) -> Op
         return None;
     }
     let runtime = theme_runtime_for_surface(&theme, 0, theme_runtime_from_state(state));
-    let scale = monitor_scale(*display);
+    let display_index = surface.placement.reference.display;
+    let scale = monitor_scale(*display) * strip_fit::percent(display_index) as f64 / 100.0;
     let frame = positioning::widget_frame(&theme, state.data.as_ref(), runtime, scale);
     let offsets = theme_engine::resolve_surface_placement(&theme, 0, state.data.as_ref(), runtime);
     let mut placement = surface.placement.clone();
@@ -3066,6 +3174,7 @@ mod message_loop;
 use host_geometry::*;
 use message_loop::wnd_proc;
 mod positioning;
+mod strip_fit;
 mod taskbar_collision;
 use positioning::*;
 mod mouse;
