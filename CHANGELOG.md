@@ -4,6 +4,13 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [Unreleased]
+
+### Added
+
+- "Show taskbar window" and "Show main window" replace the single "Show widget" item in the right-click menu. They are independent switches (settings `show_taskbar_window` and `show_main_window`, both on by default): the first shows or hides every taskbar-docked window, the second the floating or desktop card, which keeps following the floating stacking and lock position settings.
+- Setting `show_on_all_taskbars` (off by default): repeats the taskbar window on the taskbar of every connected display and follows displays being plugged in or removed without a restart. `just widget-compact left grid all yes` turns it on for the compact strip and adds a main-window card.
+
 ## [2.17.0] - 2026-10-23
 
 ### Added

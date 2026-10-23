@@ -147,6 +147,8 @@ pub(super) fn context_menu_action_flags(
         ContextMenuAction::ToggleProvider { provider } => state.providers.contains(*provider),
         ContextMenuAction::ToggleStartup => is_startup_enabled(),
         ContextMenuAction::ToggleLockPosition => state.lock_position,
+        ContextMenuAction::ToggleTaskbarWindow => state.show_taskbar_window,
+        ContextMenuAction::ToggleMainWindow => state.show_main_window,
         ContextMenuAction::SetFloatingZOrder { mode } => {
             app_settings::FloatingZOrder::from_key(mode) == Some(positioning::floating_z())
         }
@@ -272,6 +274,8 @@ pub(super) fn execute_context_menu_action(
         }
         ContextMenuAction::ToggleStartup => Some(IDM_START_WITH_WINDOWS),
         ContextMenuAction::ToggleLockPosition => Some(IDM_LOCK_POSITION),
+        ContextMenuAction::ToggleTaskbarWindow => Some(IDM_SHOW_TASKBAR_WINDOW),
+        ContextMenuAction::ToggleMainWindow => Some(IDM_SHOW_MAIN_WINDOW),
         ContextMenuAction::SetFloatingZOrder { mode } => {
             match app_settings::FloatingZOrder::from_key(mode) {
                 Some(app_settings::FloatingZOrder::Normal) => Some(IDM_Z_NORMAL),

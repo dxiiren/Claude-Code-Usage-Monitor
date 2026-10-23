@@ -327,6 +327,8 @@ pub(super) fn context_menu_action_script(action: &ContextMenuAction) -> String {
             format!("set_floating_z_order({})", string_arg(mode))
         }
         ContextMenuAction::ToggleWidget => "toggle_widget()".into(),
+        ContextMenuAction::ToggleTaskbarWindow => "toggle_taskbar_window()".into(),
+        ContextMenuAction::ToggleMainWindow => "toggle_main_window()".into(),
         ContextMenuAction::LegacyResetPosition => String::new(),
         ContextMenuAction::SetLanguage { language } => {
             format!("set_language({})", string_arg(language))
@@ -357,6 +359,11 @@ pub(super) fn parse_context_menu_action_script(script: &str) -> Result<ContextMe
             ContextMenuAction::ToggleLockPosition,
         ),
         ("toggle_widget", ContextMenuAction::ToggleWidget),
+        (
+            "toggle_taskbar_window",
+            ContextMenuAction::ToggleTaskbarWindow,
+        ),
+        ("toggle_main_window", ContextMenuAction::ToggleMainWindow),
         ("check_for_updates", ContextMenuAction::CheckForUpdates),
         ("exit", ContextMenuAction::Exit),
     ] {

@@ -69,6 +69,16 @@ pub struct SettingsFile {
     /// Pin the widget where it is: dragging is ignored while this is on.
     #[serde(default)]
     pub lock_position: bool,
+    /// Show the taskbar window(s): every surface docked in a taskbar, on each display.
+    #[serde(default = "default_true")]
+    pub show_taskbar_window: bool,
+    /// Repeat every taskbar-docked window on the taskbar of each connected display,
+    /// following displays as they are plugged in or removed. Off by default.
+    #[serde(default)]
+    pub show_on_all_taskbars: bool,
+    /// Show the main window: the floating or desktop card.
+    #[serde(default = "default_true")]
+    pub show_main_window: bool,
     /// Stacking of the floating card: normal, always on top (default) or pinned to the desktop.
     #[serde(default)]
     pub floating_z_order: FloatingZOrder,
@@ -166,6 +176,9 @@ impl Default for SettingsFile {
             custom_theme_enabled: true,
             usage_countdown: false,
             lock_position: false,
+            show_taskbar_window: true,
+            show_on_all_taskbars: false,
+            show_main_window: true,
             floating_z_order: FloatingZOrder::default(),
             active_theme_path: None,
             dashboard_width: None,
@@ -642,6 +655,35 @@ mod tests {
         let restored = decode_settings(&json.to_string()).unwrap();
         assert!(restored.lock_position);
         assert_eq!(restored.placement_override, locked.placement_override);
+    }
+
+    #[test]
+    fn window_switches_default_to_today_and_round_trip() {
+        let settings = SettingsFile::default();
+        assert!(settings.show_taskbar_window);
+        assert!(settings.show_main_window);
+        assert!(!settings.show_on_all_taskbars);
+        let old = decode_settings(r#"{"lock_position":true}"#).unwrap();
+        assert!(old.show_taskbar_window && old.show_main_window && !old.show_on_all_taskbars);
+        for (taskbar, main, all) in [
+            (true, false, true),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            let json = settings_json(&SettingsFile {
+                show_taskbar_window: taskbar,
+                show_main_window: main,
+                show_on_all_taskbars: all,
+                ..SettingsFile::default()
+            });
+            assert_eq!(json["show_taskbar_window"], taskbar);
+            assert_eq!(json["show_main_window"], main);
+            assert_eq!(json["show_on_all_taskbars"], all);
+            let restored = decode_settings(&json.to_string()).unwrap();
+            assert_eq!(restored.show_taskbar_window, taskbar);
+            assert_eq!(restored.show_main_window, main);
+            assert_eq!(restored.show_on_all_taskbars, all);
+        }
     }
 
     #[test]

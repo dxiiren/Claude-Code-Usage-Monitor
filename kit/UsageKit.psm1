@@ -173,7 +173,7 @@ function Set-PollInterval([int]$Minutes) {
 # remote mode, else settings.json profiles), makes it the active theme, docks it at the
 # left or right end of the taskbar, then restarts the widget. `-Side off` goes back to the
 # built-in widget. Nothing changes unless this is run.
-function Set-CompactTaskbar([ValidateSet('left','right','off')][string]$Side = 'left', [ValidateSet('lines','grid')][string]$Style = 'lines') {
+function Set-CompactTaskbar([ValidateSet('left','right','off')][string]$Side = 'left', [ValidateSet('lines','grid')][string]$Style = 'lines', [switch]$AllTaskbars, [switch]$MainWindow) {
     $file = Join-Path $script:AppDataDir 'settings.json'
     if (-not (Test-Path $file)) { throw "Widget settings not found; start the widget once first." }
     Stop-Monitor
@@ -298,9 +298,13 @@ function Set-CompactTaskbar([ValidateSet('left','right','off')][string]$Side = '
         }
     }
     $horizontal = if ($Side -eq 'left') { 'left' } else { 'right' }
+    $stripWidth = $x - 6
+    $surfaces = New-Object System.Collections.ArrayList
     $theme = [ordered]@{
         schema_version = 1; id = 'compact-usage-myt'; name = 'Compact usage (MYT)'
-        surfaces = @([ordered]@{
+        surfaces = $surfaces
+    }
+    [void]$surfaces.Add([ordered]@{
             id = 'main'; name = 'Compact taskbar strip'; render = '1'; visibility = '100'
             placement = [ordered]@{
                 reference = @{ region = $(if ($Side -eq 'left') { 'taskbar' } else { 'system_tray' }); display = 0 }
@@ -315,6 +319,32 @@ function Set-CompactTaskbar([ValidateSet('left','right','off')][string]$Side = '
             content = @{ type = 'none' }
             children = @($children)
         })
+    if ($MainWindow) {
+        # "Main window": the same figures on a floating card (stacking follows the
+        # floating z-order setting, dragging follows lock_position).
+        $pad = 12
+        $cardChildren = foreach ($c in $children) {
+            $copy = $c | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+            $copy.x = "$([double]$copy.x + $pad)"
+            $copy.y = "$([double]$copy.y + 8)"
+            $copy
+        }
+        [void]$surfaces.Add([ordered]@{
+            id = 'card'; name = 'Main window'; render = '1'; visibility = '100'
+            placement = [ordered]@{
+                reference = @{ region = 'monitor'; display = 0 }
+                nest = 'floating'; horizontal = 'right'; vertical = 'top'
+                surface_horizontal = 'right'; surface_vertical = 'top'
+                offset_x = -24; offset_y = 80
+            }
+            width = "$($stripWidth + 2 * $pad)"; height = '62'
+            background = [ordered]@{ type = 'colour'; colour = [ordered]@{ color = '#0F172AF0'; opacity = '1' } }
+            border = $null
+            mouse_events = [ordered]@{ click = 'open_url("http://127.0.0.1:47291/")'; right_click = 'show_context_menu("classic-v1")' }
+            corner_radius = '10'; layout = 'freeform'; align = 'start'; gap = '0'
+            content = @{ type = 'none' }
+            children = @($cardChildren)
+        })
     }
     $dir = Join-Path $script:AppDataDir 'themes'
     New-Item -ItemType Directory -Force $dir | Out-Null
@@ -322,6 +352,9 @@ function Set-CompactTaskbar([ValidateSet('left','right','off')][string]$Side = '
     [IO.File]::WriteAllText($themeFile, (ConvertTo-Json $theme -Depth 30), (New-Object System.Text.UTF8Encoding $false))
     & $set 'active_theme_path' $themeFile
     & $set 'custom_theme_enabled' $true
+    & $set 'show_on_all_taskbars' ([bool]$AllTaskbars)
+    & $set 'show_taskbar_window' $true
+    & $set 'show_main_window' $true
     # Drop any saved drag/float position so the theme's own placement applies.
     if ($s.PSObject.Properties['placement_override']) { $s.PSObject.Properties.Remove('placement_override') }
     [IO.File]::WriteAllText($file, (ConvertTo-Json $s -Depth 20), (New-Object System.Text.UTF8Encoding $false))

@@ -130,6 +130,9 @@ struct AppState {
     usage_countdown: bool,
     /// Pinned: mouse drags do not move the widget (settings `lock_position`).
     lock_position: bool,
+    show_taskbar_window: bool,
+    show_on_all_taskbars: bool,
+    show_main_window: bool,
     active_theme_path: Option<PathBuf>,
     active_theme: Option<ThemeDocument>,
     theme_clock_interval: Option<Duration>,
@@ -206,6 +209,8 @@ const IDM_FREQ_15MIN: u16 = 12;
 const IDM_FREQ_1HOUR: u16 = 13;
 const IDM_START_WITH_WINDOWS: u16 = 20;
 const IDM_LOCK_POSITION: u16 = 21;
+const IDM_SHOW_TASKBAR_WINDOW: u16 = 27;
+const IDM_SHOW_MAIN_WINDOW: u16 = 28;
 const IDM_Z_NORMAL: u16 = 22;
 const IDM_Z_TOP: u16 = 23;
 const IDM_Z_DESKTOP: u16 = 24;
@@ -597,6 +602,7 @@ fn theme_runtime_from_state(state: &AppState) -> ThemeRuntime {
         .with_countdown(state.usage_countdown)
         .with_nest(nest)
         .with_floating_card_opacity(opacity)
+        .with_window_visibility(state.show_taskbar_window, state.show_main_window)
 }
 
 /// A transient outage can keep presenting the last real reading while its
@@ -673,6 +679,9 @@ fn theme_with_placement(state: &AppState, auto_ejected: bool) -> Option<ThemeDoc
             positioning::dock_placement(index, p.tray_offset, display_scale(index), horizontal)
         };
         positioning::override_primary_placement(&mut theme, placement);
+    }
+    if state.show_on_all_taskbars {
+        host_geometry::replicate_taskbar_surfaces(&mut theme, &taskbar_displays());
     }
     Some(theme)
 }
@@ -823,6 +832,9 @@ fn save_state_settings() {
             .map(|path| path.to_string_lossy().to_string());
         persisted.placement_override = s.placement_override.clone();
         persisted.lock_position = s.lock_position;
+        persisted.show_taskbar_window = s.show_taskbar_window;
+        persisted.show_on_all_taskbars = s.show_on_all_taskbars;
+        persisted.show_main_window = s.show_main_window;
         persisted.floating_z_order = positioning::floating_z();
         persisted.floating_card_opacity = s.floating_card_opacity;
         // The dashboard process owns its dimensions, so leave the freshly
@@ -2136,6 +2148,9 @@ pub fn run() {
                 custom_theme_enabled,
                 usage_countdown: settings.usage_countdown,
                 lock_position: settings.lock_position,
+                show_taskbar_window: settings.show_taskbar_window,
+                show_on_all_taskbars: settings.show_on_all_taskbars,
+                show_main_window: settings.show_main_window,
                 active_theme_path,
                 active_theme,
                 theme_clock_interval,
@@ -2937,6 +2952,9 @@ fn reload_settings_and_theme(hwnd: HWND, force_poll: bool) {
         state.providers = settings.enabled_providers();
         state.usage_countdown = settings.usage_countdown;
         state.lock_position = settings.lock_position;
+        state.show_taskbar_window = settings.show_taskbar_window;
+        state.show_on_all_taskbars = settings.show_on_all_taskbars;
+        state.show_main_window = settings.show_main_window;
         positioning::set_floating_z(settings.floating_z_order);
         state.taskbar_index = settings.taskbar_index;
         state.tray_offset = settings.tray_offset;

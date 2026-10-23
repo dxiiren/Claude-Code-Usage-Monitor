@@ -84,6 +84,47 @@ pub(super) fn theme_runtime_for_surface(
     runtime_with_geometry(theme, surface_index, runtime, &geometry)
 }
 
+/// Indices (in `find_monitors` order) of the displays that currently have a taskbar.
+pub(super) fn taskbar_displays() -> Vec<usize> {
+    THEME_HOST_GEOMETRY
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .enumerate()
+        .filter(|(_, host)| host.taskbar.is_some())
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Repeat the first taskbar-docked surface once for every other display that
+/// has a taskbar. The copies are ordinary surfaces, so the existing mirror
+/// windows host them and a display change only has to rebuild this list.
+pub(super) fn replicate_taskbar_surfaces(theme: &mut ThemeDocument, displays: &[usize]) {
+    let Some(source) = theme.surfaces.iter().find(|surface| {
+        surface
+            .placement
+            .nest
+            .resolve(surface.placement.reference.region)
+            == SurfaceNest::Taskbar
+    }) else {
+        return;
+    };
+    let source_display = source.placement.reference.display;
+    let copies: Vec<_> = displays
+        .iter()
+        .copied()
+        .filter(|display| *display != source_display)
+        .map(|display| {
+            let mut copy = source.clone();
+            copy.id = format!("{}-display-{display}", source.id);
+            copy.name = format!("{} (display {})", source.name, display + 1);
+            copy.placement.reference.display = display;
+            copy
+        })
+        .collect();
+    theme.surfaces.extend(copies);
+}
+
 pub(super) fn taskbar_is_horizontal(display_index: usize) -> bool {
     THEME_HOST_GEOMETRY
         .lock()
@@ -199,6 +240,82 @@ pub(super) fn floating_host_for_state(state: &AppState) -> Option<app_settings::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn taskbar_theme() -> ThemeDocument {
+        let mut theme = ThemeDocument::starter();
+        theme.surfaces.truncate(1);
+        theme.surfaces[0].placement.nest = SurfaceNest::Taskbar;
+        theme.surfaces[0].placement.reference.display = 0;
+        theme
+    }
+
+    #[test]
+    fn taskbar_surface_is_repeated_once_per_other_display() {
+        let mut theme = taskbar_theme();
+        let id = theme.surfaces[0].id.clone();
+        replicate_taskbar_surfaces(&mut theme, &[0, 1, 2]);
+        assert_eq!(theme.surfaces.len(), 3);
+        assert_eq!(theme.surfaces[0].placement.reference.display, 0);
+        assert_eq!(theme.surfaces[1].placement.reference.display, 1);
+        assert_eq!(theme.surfaces[2].placement.reference.display, 2);
+        assert_eq!(theme.surfaces[1].id, format!("{id}-display-1"));
+        assert_ne!(theme.surfaces[1].id, theme.surfaces[2].id);
+        assert!(theme.surfaces[1..]
+            .iter()
+            .all(|s| s.placement.nest == SurfaceNest::Taskbar));
+    }
+
+    #[test]
+    fn no_copies_when_only_the_source_display_has_a_taskbar() {
+        let mut theme = taskbar_theme();
+        replicate_taskbar_surfaces(&mut theme, &[0]);
+        assert_eq!(theme.surfaces.len(), 1);
+        replicate_taskbar_surfaces(&mut theme, &[]);
+        assert_eq!(theme.surfaces.len(), 1);
+    }
+
+    #[test]
+    fn unplugging_a_display_drops_its_copy_on_the_next_build() {
+        let base = taskbar_theme();
+        let mut with_two = base.clone();
+        replicate_taskbar_surfaces(&mut with_two, &[0, 1]);
+        assert_eq!(with_two.surfaces.len(), 2);
+        let mut after_unplug = base;
+        replicate_taskbar_surfaces(&mut after_unplug, &[0]);
+        assert_eq!(after_unplug.surfaces.len(), 1);
+    }
+
+    #[test]
+    fn floating_only_themes_are_left_alone() {
+        let mut theme = taskbar_theme();
+        theme.surfaces[0].placement.nest = SurfaceNest::Floating;
+        replicate_taskbar_surfaces(&mut theme, &[0, 1]);
+        assert_eq!(theme.surfaces.len(), 1);
+    }
+
+    #[test]
+    fn window_switches_gate_taskbar_and_main_surfaces_independently() {
+        let mut theme = taskbar_theme();
+        let mut card = theme.surfaces[0].clone();
+        card.id = "card".into();
+        card.placement.nest = SurfaceNest::Floating;
+        theme.surfaces.push(card);
+        let base = ThemeRuntime::default();
+        for (taskbar, main) in [(true, true), (true, false), (false, true), (false, false)] {
+            let runtime = base.with_window_visibility(taskbar, main);
+            assert_eq!(
+                theme_engine::window_group_visible(&theme.surfaces[0], runtime),
+                taskbar
+            );
+            assert_eq!(
+                theme_engine::window_group_visible(&theme.surfaces[1], runtime),
+                main
+            );
+        }
+        let off = base.with_window_visibility(false, false);
+        assert!(!theme_engine::surface_should_render(&theme, 0, None, off));
+        assert!(!theme_engine::surface_should_render(&theme, 1, None, off));
+    }
 
     fn display() -> ThemeHostGeometry {
         ThemeHostGeometry {

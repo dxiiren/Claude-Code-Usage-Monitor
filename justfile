@@ -96,8 +96,8 @@ widget-build: _require-cargo
     {{kit}}; Install-MonitorFromSource; Start-Monitor
 
 # Compact taskbar strip: per account 5h + 7d usage % and reset time/date in KL time. side = left | right | off; style = lines (default) | grid.
-widget-compact side="left" style="lines":
-    {{kit}}; Set-CompactTaskbar '{{side}}' '{{style}}'
+widget-compact side="left" style="lines" taskbars="primary" card="no":
+    {{kit}}; Set-CompactTaskbar '{{side}}' '{{style}}' -AllTaskbars:('{{taskbars}}' -eq 'all') -MainWindow:('{{card}}' -eq 'yes')
 
 # Widget + Account Manager start with Windows.
 startup-on:

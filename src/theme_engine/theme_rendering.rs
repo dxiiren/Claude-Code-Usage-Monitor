@@ -602,6 +602,21 @@ pub fn resolve_surface_placement(
     }
 }
 
+/// The "Show taskbar window" / "Show main window" switches: taskbar-docked
+/// surfaces follow the first, floating and desktop surfaces the second.
+/// Notification-area icons are never affected.
+pub fn window_group_visible(surface: &SceneObject, runtime: ThemeRuntime) -> bool {
+    match surface
+        .placement
+        .nest
+        .resolve(surface.placement.reference.region)
+    {
+        SurfaceNest::Taskbar => runtime.show_taskbar_window,
+        SurfaceNest::Floating | SurfaceNest::Desktop => runtime.show_main_window,
+        SurfaceNest::TrayIcon | SurfaceNest::Auto => true,
+    }
+}
+
 pub fn surface_should_render(
     theme: &ThemeDocument,
     surface_index: usize,
@@ -611,6 +626,9 @@ pub fn surface_should_render(
     let Some(surface) = theme.surfaces.get(surface_index) else {
         return surface_index == 0;
     };
+    if !window_group_visible(surface, runtime) {
+        return false;
+    }
     let (width, height) = resolve_surface_content_size(theme, surface_index, data, runtime);
     let canvas = Canvas {
         width,

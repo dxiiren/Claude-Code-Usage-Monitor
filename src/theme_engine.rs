@@ -1331,6 +1331,10 @@ pub struct ThemeRuntime {
     pub countdown: bool,
     pub surface_nest: SurfaceNest,
     pub floating_card_opacity: u8,
+    /// Master switch for every taskbar-docked surface (all displays).
+    pub show_taskbar_window: bool,
+    /// Master switch for every floating or desktop surface.
+    pub show_main_window: bool,
     host_width: u32,
     host_height: u32,
 }
@@ -1345,6 +1349,8 @@ impl Default for ThemeRuntime {
             countdown: false,
             surface_nest: SurfaceNest::Taskbar,
             floating_card_opacity: 85,
+            show_taskbar_window: true,
+            show_main_window: true,
             host_width: default_canvas_width(),
             host_height: default_canvas_height(),
         }
@@ -1375,6 +1381,8 @@ impl ThemeRuntime {
             countdown: false,
             surface_nest: SurfaceNest::Taskbar,
             floating_card_opacity: 85,
+            show_taskbar_window: true,
+            show_main_window: true,
             host_width: default_canvas_width(),
             host_height: default_canvas_height(),
         }
@@ -1382,6 +1390,12 @@ impl ThemeRuntime {
 
     pub fn with_nest(mut self, nest: SurfaceNest) -> Self {
         self.surface_nest = nest;
+        self
+    }
+
+    pub fn with_window_visibility(mut self, taskbar: bool, main: bool) -> Self {
+        self.show_taskbar_window = taskbar;
+        self.show_main_window = main;
         self
     }
 
