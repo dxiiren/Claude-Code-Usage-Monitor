@@ -123,6 +123,10 @@ struct AppState {
     is_switching_window_style: bool,
     is_snapped: bool,
     placement_override: Option<PlacementOverride>,
+    /// Surface id -> logical (dx, dy) the user dragged a floating card by.
+    surface_offsets: std::collections::BTreeMap<String, (i32, i32)>,
+    /// Theme surface index of a card (not the primary strip) being dragged.
+    drag_surface: Option<usize>,
     floating_card_opacity: Option<u8>,
     window_state_timer_active: bool,
 
@@ -831,6 +835,7 @@ fn save_state_settings() {
             .as_ref()
             .map(|path| path.to_string_lossy().to_string());
         persisted.placement_override = s.placement_override.clone();
+        persisted.surface_offsets = s.surface_offsets.clone();
         persisted.lock_position = s.lock_position;
         persisted.show_taskbar_window = s.show_taskbar_window;
         persisted.show_on_all_taskbars = s.show_on_all_taskbars;
@@ -1808,39 +1813,20 @@ unsafe extern "system" fn mirror_wnd_proc(
     match msg {
         WM_NCHITTEST => LRESULT(HTCLIENT as isize),
         WM_SETCURSOR if set_surface_cursor(hwnd) => LRESULT(1),
-        WM_MOUSEMOVE => {
-            update_mouse_hover(hwnd, lparam);
-            LRESULT(0)
+        // Press, move, release and capture loss behave exactly as on the primary
+        // window (drag rules, lock, clicks), so a card or a taskbar copy is never
+        // a dead surface.
+        WM_LBUTTONDOWN | WM_MOUSEMOVE | WM_CAPTURECHANGED => {
+            message_loop::wnd_proc(hwnd, msg, wparam, lparam)
         }
         WM_MOUSELEAVE => {
             clear_mouse_hover(hwnd);
             LRESULT(0)
         }
-        WM_LBUTTONUP => {
-            let suppressed = {
-                let mut state = lock_state();
-                state.as_mut().is_some_and(|state| {
-                    let suppressed = state.suppress_next_left_up;
-                    state.suppress_next_left_up = false;
-                    suppressed
-                })
-            };
-            if !suppressed {
-                if let Some((surface, object)) = mouse_target_at(hwnd, lparam) {
-                    schedule_or_dispatch_click(hwnd, surface, object);
-                }
-            }
-            LRESULT(0)
-        }
+        WM_LBUTTONUP | WM_RBUTTONUP => message_loop::wnd_proc(hwnd, msg, wparam, lparam),
         WM_LBUTTONDBLCLK => {
             if let Some((surface, object)) = mouse_target_at(hwnd, lparam) {
                 dispatch_double_click(hwnd, surface, object);
-            }
-            LRESULT(0)
-        }
-        WM_RBUTTONUP => {
-            if let Some((surface, object)) = mouse_target_at(hwnd, lparam) {
-                let _ = dispatch_mouse_event(surface, &object, MouseEventKind::RightClick);
             }
             LRESULT(0)
         }
@@ -2143,6 +2129,8 @@ pub fn run() {
                 is_switching_window_style: false,
                 is_snapped: false,
                 placement_override: settings.placement_override.clone(),
+                surface_offsets: settings.surface_offsets.clone(),
+                drag_surface: None,
                 floating_card_opacity: settings.floating_card_opacity,
                 window_state_timer_active: false,
                 custom_theme_enabled,
@@ -2351,6 +2339,15 @@ fn render_layered() {
         );
         positioned.placement.offset_x = placement.offset_x;
         positioned.placement.offset_y = placement.offset_y;
+        if surface_index > 0 && matches!(nest, SurfaceNest::Floating | SurfaceNest::Taskbar) {
+            let moved = lock_state()
+                .as_ref()
+                .and_then(|state| state.surface_offsets.get(&surface.id).copied());
+            if let Some((dx, dy)) = moved {
+                positioned.placement.offset_x += dx;
+                positioned.placement.offset_y += dy;
+            }
+        }
         position_custom_theme(target_hwnd, &positioned, scale);
         if desktop_nested {
             unsafe {
@@ -2959,6 +2956,7 @@ fn reload_settings_and_theme(hwnd: HWND, force_poll: bool) {
         state.taskbar_index = settings.taskbar_index;
         state.tray_offset = settings.tray_offset;
         state.placement_override = settings.placement_override;
+        state.surface_offsets = settings.surface_offsets;
         state.floating_card_opacity = settings.floating_card_opacity;
         apply_language_to_state(state, language_override);
     }

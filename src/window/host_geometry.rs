@@ -85,6 +85,21 @@ pub(super) fn theme_runtime_for_surface(
 }
 
 /// Indices (in `find_monitors` order) of the displays that currently have a taskbar.
+/// The theme whose surfaces the windows show, with the per-display taskbar copies
+/// but without placement or drag overrides. Mouse scripts are looked up in it, so
+/// a copy answers clicks exactly like the strip it repeats.
+pub(super) fn theme_with_taskbar_copies(
+    theme: &ThemeDocument,
+    show_on_all_taskbars: bool,
+    displays: &[usize],
+) -> ThemeDocument {
+    let mut theme = theme.clone();
+    if show_on_all_taskbars {
+        replicate_taskbar_surfaces(&mut theme, displays);
+    }
+    theme
+}
+
 pub(super) fn taskbar_displays() -> Vec<usize> {
     THEME_HOST_GEOMETRY
         .lock()

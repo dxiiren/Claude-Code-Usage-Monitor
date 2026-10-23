@@ -92,6 +92,10 @@ pub struct SettingsFile {
     pub floating_card_opacity: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement_override: Option<PlacementOverride>,
+    /// Where the user dragged each free-floating theme surface (the main window
+    /// card), as a logical (dx, dy) added to the theme's own placement.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub surface_offsets: std::collections::BTreeMap<String, (i32, i32)>,
     /// Account Manager server (`https://...`). With a token, the Claude
     /// accounts and usage come from its `GET /api/v1/widget` (remote mode).
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -185,6 +189,7 @@ impl Default for SettingsFile {
             dashboard_height: None,
             floating_card_opacity: None,
             placement_override: None,
+            surface_offsets: Default::default(),
             remote_server_url: String::new(),
             remote_server_token: Default::default(),
         }
@@ -822,5 +827,17 @@ mod tests {
         invalid.normalize();
         assert_eq!(invalid.dashboard_width, None);
         assert_eq!(invalid.dashboard_height, None);
+    }
+
+    #[test]
+    fn dragged_card_offsets_round_trip_and_default_empty() {
+        assert!(decode_settings("{}").unwrap().surface_offsets.is_empty());
+        let mut s = decode_settings("{}").unwrap();
+        s.surface_offsets.insert("card".into(), (-40, 12));
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(
+            decode_settings(&json).unwrap().surface_offsets["card"],
+            (-40, 12)
+        );
     }
 }

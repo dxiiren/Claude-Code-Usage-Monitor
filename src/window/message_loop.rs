@@ -205,11 +205,12 @@ pub(super) unsafe extern "system" fn wnd_proc(
             unsafe {
                 let _ = SetCapture(hwnd);
             }
-            let mut pt = POINT::default();
-            let _ = unsafe { GetCursorPos(&mut pt) };
+            let pt = pointer_screen_point(hwnd, lparam);
             let rect = native_interop::get_window_rect_safe(hwnd).unwrap_or_default();
             let mut state = lock_state();
             if let Some(s) = state.as_mut() {
+                // Index 0 is the primary strip; any other window is a theme card.
+                s.drag_surface = surface_index_for_window(s, hwnd).filter(|index| *index > 0);
                 // The press stays a candidate click; a pinned widget refuses the drag
                 // part in WM_MOUSEMOVE, so it stays exactly put.
                 s.pending_drag = true;
@@ -224,8 +225,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            let mut pt = POINT::default();
-            let _ = unsafe { GetCursorPos(&mut pt) };
+            let pt = pointer_screen_point(hwnd, lparam);
 
             let (should_start_drag, is_dragging) = {
                 let mut state = lock_state();
@@ -236,7 +236,12 @@ pub(super) unsafe extern "system" fn wnd_proc(
                         let dx = (pt.x - s.drag_start_cursor.x).abs();
                         let dy = (pt.y - s.drag_start_cursor.y).abs();
                         if dx >= cx_drag || dy >= cy_drag {
-                            if positioning::drag_allowed(s.lock_position) {
+                            let surface = s.drag_surface.unwrap_or(0);
+                            if positioning::surface_drag_allowed(
+                                s.lock_position,
+                                surface,
+                                surface_is_draggable(s, surface),
+                            ) {
                                 (true, false)
                             } else {
                                 // Pinned: a press that moved is neither a drag nor a click.
@@ -253,6 +258,71 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     (false, false)
                 }
             };
+
+            let card_surface = lock_state().as_ref().and_then(|s| s.drag_surface);
+            if card_surface.is_some() && (should_start_drag || is_dragging) {
+                if should_start_drag {
+                    let mut state = lock_state();
+                    if let Some(s) = state.as_mut() {
+                        s.dragging = true;
+                        s.pending_drag = false;
+                    }
+                }
+                let start = lock_state()
+                    .as_ref()
+                    .map(|s| (s.drag_start_cursor, s.drag_start_origin));
+                if let Some((start_cursor, start_origin)) = start {
+                    let rect = native_interop::get_window_rect_safe(hwnd).unwrap_or_default();
+                    let size = (rect.right - rect.left, rect.bottom - rect.top);
+                    let displays = native_interop::find_monitors();
+                    let (_, display) = positioning::monitor_for_point(&displays, pt);
+                    // A taskbar copy slides along its own taskbar; a card moves freely
+                    // but stays on its display.
+                    let docked_axis = lock_state().as_ref().and_then(|s| {
+                        let theme = effective_theme_from_state(s)?;
+                        let surface = theme.surfaces.get(card_surface?)?;
+                        (surface
+                            .placement
+                            .nest
+                            .resolve(surface.placement.reference.region)
+                            == SurfaceNest::Taskbar)
+                            .then(|| taskbar_is_horizontal(surface.placement.reference.display))
+                    });
+                    let wanted = POINT {
+                        x: start_origin.x + pt.x - start_cursor.x,
+                        y: start_origin.y + pt.y - start_cursor.y,
+                    };
+                    let origin = match docked_axis {
+                        Some(true) => POINT {
+                            x: wanted.x,
+                            y: start_origin.y,
+                        },
+                        Some(false) => POINT {
+                            x: start_origin.x,
+                            y: wanted.y,
+                        },
+                        None => positioning::clamp_card_origin(wanted, size, display.rect),
+                    };
+                    // A copy docked in a taskbar is a child window: its position is
+                    // relative to that taskbar, not to the screen.
+                    let mut place = origin;
+                    unsafe {
+                        if let Ok(parent) = GetParent(hwnd) {
+                            let _ = ScreenToClient(parent, &mut place);
+                        }
+                        let _ = SetWindowPos(
+                            hwnd,
+                            None,
+                            place.x,
+                            place.y,
+                            0,
+                            0,
+                            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+                        );
+                    }
+                }
+                return LRESULT(0);
+            }
 
             if should_start_drag {
                 {
@@ -405,11 +475,13 @@ pub(super) unsafe extern "system" fn wnd_proc(
         }
         WM_RBUTTONUP => {
             if let Some((surface, object)) = mouse_target_at(hwnd, lparam) {
+                set_menu_anchor(pointer_screen_point(hwnd, lparam));
                 let _ = dispatch_mouse_event(surface, &object, MouseEventKind::RightClick);
             }
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            let card_surface = lock_state().as_mut().and_then(|s| s.drag_surface.take());
             let released = release_drag_capture_with(
                 || {
                     lock_state()
@@ -438,8 +510,37 @@ pub(super) unsafe extern "system" fn wnd_proc(
             if suppressed {
                 return LRESULT(0);
             }
-            let mut pt = POINT::default();
-            let _ = unsafe { GetCursorPos(&mut pt) };
+            let pt = pointer_screen_point(hwnd, lparam);
+
+            if let (Some(surface), true) = (card_surface, released.dragging) {
+                let rect = native_interop::get_window_rect_safe(hwnd).unwrap_or_default();
+                {
+                    let mut state = lock_state();
+                    if let Some(s) = state.as_mut() {
+                        let delta = (
+                            rect.left - s.drag_start_origin.x,
+                            rect.top - s.drag_start_origin.y,
+                        );
+                        if let Some(theme) = effective_theme_from_state(s) {
+                            let scale = theme_surface_scale(&theme, surface);
+                            if let Some(surface) = theme.surfaces.get(surface) {
+                                let old = s
+                                    .surface_offsets
+                                    .get(&surface.id)
+                                    .copied()
+                                    .unwrap_or((0, 0));
+                                s.surface_offsets.insert(
+                                    surface.id.clone(),
+                                    positioning::card_offset_after_drag(old, delta, scale),
+                                );
+                            }
+                        }
+                    }
+                }
+                save_state_settings();
+                render_layered();
+                return LRESULT(0);
+            }
 
             if released.dragging {
                 let widget_rect = native_interop::get_window_rect_safe(hwnd).unwrap_or_default();

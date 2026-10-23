@@ -619,3 +619,94 @@ fn a_locked_widget_never_starts_a_drag() {
     assert!(positioning::drag_allowed(false));
     assert!(!positioning::drag_allowed(true));
 }
+
+#[test]
+fn only_a_floating_card_or_the_primary_strip_may_start_a_drag() {
+    // Unlocked: the strip (0) and a floating card drag; a docked replica does not.
+    assert!(positioning::surface_drag_allowed(false, 0, false));
+    assert!(positioning::surface_drag_allowed(false, 1, true));
+    assert!(!positioning::surface_drag_allowed(false, 1, false));
+    // Locked: nothing moves.
+    assert!(!positioning::surface_drag_allowed(true, 0, false));
+    assert!(!positioning::surface_drag_allowed(true, 1, true));
+}
+
+#[test]
+fn drag_follows_the_cursor_unless_the_message_is_far_from_it() {
+    let cursor = POINT { x: 500, y: 300 };
+    let near = POINT { x: 510, y: 295 };
+    assert_eq!(positioning::drag_pointer(cursor, near), cursor);
+    let far = POINT { x: 900, y: 40 };
+    assert_eq!(positioning::drag_pointer(cursor, far), far);
+}
+
+#[test]
+fn card_offset_accumulates_logical_pixels_and_survives_a_bad_scale() {
+    assert_eq!(
+        positioning::card_offset_after_drag((0, 0), (-120, 30), 1.0),
+        (-120, 30)
+    );
+    assert_eq!(
+        positioning::card_offset_after_drag((10, 5), (-150, 0), 1.5),
+        (-90, 5)
+    );
+    assert_eq!(
+        positioning::card_offset_after_drag((1, 1), (2, 2), 0.0),
+        (3, 3)
+    );
+}
+
+#[test]
+fn a_dragged_card_stays_on_its_display() {
+    let display = RECT {
+        left: 0,
+        top: 0,
+        right: 1000,
+        bottom: 800,
+    };
+    let clamp = |x, y| positioning::clamp_card_origin(POINT { x, y }, (300, 60), display);
+    assert_eq!((clamp(-50, -9).x, clamp(-50, -9).y), (0, 0));
+    assert_eq!((clamp(900, 790).x, clamp(900, 790).y), (700, 740));
+    assert_eq!((clamp(400, 400).x, clamp(400, 400).y), (400, 400));
+}
+
+#[test]
+fn a_taskbar_copy_answers_mouse_events_like_the_strip_it_repeats() {
+    let mut theme = ThemeDocument::starter();
+    theme.surfaces[0].placement.nest = SurfaceNest::Taskbar;
+    theme.surfaces[0].placement.reference.display = 0;
+    theme.surfaces[0].mouse_events = Some(theme_engine::MouseEvents {
+        right_click: "show_context_menu(\"classic-v1\")".into(),
+        click: "open_url(\"http://127.0.0.1:47291/\")".into(),
+        ..Default::default()
+    });
+    let id = theme.surfaces[0].id.clone();
+
+    // Without the copies the second display's surface has no handler at all.
+    assert!(theme_engine::mouse_event_script(
+        &theme,
+        1,
+        &format!("{id}-display-1"),
+        MouseEventKind::RightClick
+    )
+    .is_none());
+
+    let with_copies = theme_with_taskbar_copies(&theme, true, &[0, 1]);
+    assert_eq!(with_copies.surfaces.len(), theme.surfaces.len() + 1);
+    let copy_id = format!("{id}-display-1");
+    for (kind, text) in [
+        (MouseEventKind::RightClick, "show_context_menu"),
+        (MouseEventKind::Click, "open_url"),
+    ] {
+        let copy_index = theme.surfaces.len();
+        let script = theme_engine::mouse_event_script(&with_copies, copy_index, &copy_id, kind);
+        assert!(script.is_some_and(|s| s.contains(text)), "{text}");
+    }
+    // Turned off, there are no copies.
+    assert_eq!(
+        theme_with_taskbar_copies(&theme, false, &[0, 1])
+            .surfaces
+            .len(),
+        theme.surfaces.len()
+    );
+}
