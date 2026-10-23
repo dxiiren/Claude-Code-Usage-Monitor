@@ -667,7 +667,8 @@ fn strip_fit_plans(state: &AppState) -> Vec<(usize, strip_fit::Fit)> {
                 .width;
         let saved = (display == primary).then_some(saved).flatten();
         // Left gap = the clock's gap to the taskbar's right edge, so both ends match.
-        let left_edge = native_interop::clock_edge_gap(taskbar.hwnd, taskbar.rect)
+        let left_edge = occupancy
+            .clock_gap()
             .unwrap_or_else(|| strip_fit::fallback_edge(display_scale(display)));
         if let Some(fit) = strip_fit::plan(gap.right - taskbar.rect.left, width, saved, left_edge)
         {

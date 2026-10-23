@@ -14,6 +14,9 @@ pub(super) struct Occupancy {
     pub bounds: RECT,
     pub occupied: Vec<RECT>,
     pub reserved: Vec<RECT>,
+    /// The taskbar clock's rectangle, read from the accessibility tree: on
+    /// Windows 11 the clock has no window of its own, so its window rect is useless.
+    pub clock: Option<RECT>,
 }
 
 fn intersection(a: RECT, b: RECT) -> Option<RECT> {
@@ -27,6 +30,14 @@ fn intersection(a: RECT, b: RECT) -> Option<RECT> {
 }
 
 impl Occupancy {
+    /// Physical gap between the taskbar's right edge and the clock's right edge
+    /// (`None` when the clock was not seen or the gap is under 4 px).
+    pub fn clock_gap(&self) -> Option<i32> {
+        let clock = self.clock?;
+        let gap = self.bounds.right - clock.right;
+        (native_interop::is_taskbar_horizontal(self.bounds) && gap >= 4).then_some(gap)
+    }
+
     pub fn overlaps(&self, widget: RECT) -> bool {
         self.occupied
             .iter()
@@ -230,6 +241,7 @@ impl Reader {
                 return Ok(None);
             }
             let mut found_control = false;
+            let mut clock: Option<RECT> = None;
             for index in 0..count {
                 let element = elements.GetElement(index)?;
                 if element.CachedProcessId()? == std::process::id() as i32
@@ -238,6 +250,15 @@ impl Reader {
                     continue;
                 }
                 found_control = true;
+                // The Windows 11 clock is the only `OmniButton` (the volume
+                // button is `OmniButtonCenter`); keep the rightmost one.
+                if element.CachedClassName()? == "SystemTray.OmniButton" {
+                    if let Some(rect) = intersection(element.CachedBoundingRectangle()?, bounds) {
+                        if clock.is_none_or(|best| rect.right > best.right) {
+                            clock = Some(rect);
+                        }
+                    }
+                }
                 if !element.CachedIsOffscreen()?.as_bool() {
                     if let Some(rect) = intersection(element.CachedBoundingRectangle()?, bounds) {
                         let is_tray = element
@@ -269,6 +290,7 @@ impl Reader {
                 bounds,
                 occupied,
                 reserved,
+                clock,
             }))
         }
     }
@@ -349,6 +371,7 @@ mod tests {
             bounds,
             occupied,
             reserved: Vec::new(),
+            clock: None,
         }
     }
 
