@@ -82,11 +82,20 @@ describe('readPool and GET /api/pool', () => {
 		expect(s.today.total.tasks).toBe(3);
 	});
 	it('the route handler returns JSON', async () => {
-		const res = poolResponse();
+		const res = poolResponse(false);
 		expect(res.status).toBe(200);
 		const body = await res.json();
 		expect(body.hasLedger).toBe(true);
 		expect(body.off).toBe(true);
 		expect(Array.isArray(body.recent)).toBe(true);
+	});
+	it('server mode answers 404 and never reads the ledger', () => {
+		let thrown: { status?: number } | undefined;
+		try {
+			poolResponse(true);
+		} catch (e) {
+			thrown = e as { status?: number };
+		}
+		expect(thrown?.status).toBe(404);
 	});
 });

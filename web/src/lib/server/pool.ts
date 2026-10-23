@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { json } from '@sveltejs/kit';
+import { error, json } from '@sveltejs/kit';
+import { SERVER } from './paths';
 
 /**
  * Read-only view of the local LLM pool ledger (%LOCALAPPDATA%\llm-pool\ledger.jsonl, override
@@ -153,4 +154,8 @@ export function readPool(now: Date = new Date()): PoolSnapshot {
 }
 
 /** The GET /api/pool response (kept here so a unit test can call it without the $lib alias). */
-export const poolResponse = (): Response => json(readPool(), { headers: { 'cache-control': 'no-store' } });
+export const poolResponse = (server: boolean = SERVER): Response => {
+	// The ledger is a file on the laptop: server mode must never expose it (and never reads it).
+	if (server) error(404, 'Not found');
+	return json(readPool(), { headers: { 'cache-control': 'no-store' } });
+};
