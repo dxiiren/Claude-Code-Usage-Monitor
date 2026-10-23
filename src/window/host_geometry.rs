@@ -114,6 +114,9 @@ pub(super) fn taskbar_displays() -> Vec<usize> {
 /// Repeat the first taskbar-docked surface once for every other display that
 /// has a taskbar. The copies are ordinary surfaces, so the existing mirror
 /// windows host them and a display change only has to rebuild this list.
+/// Gap, in logical pixels, between a taskbar copy and the left edge of its taskbar.
+const COPY_LEFT_MARGIN: i32 = 4;
+
 pub(super) fn replicate_taskbar_surfaces(theme: &mut ThemeDocument, displays: &[usize]) {
     let Some(source) = theme.surfaces.iter().find(|surface| {
         surface
@@ -133,7 +136,16 @@ pub(super) fn replicate_taskbar_surfaces(theme: &mut ThemeDocument, displays: &[
             let mut copy = source.clone();
             copy.id = format!("{}-display-{display}", source.id);
             copy.name = format!("{} (display {})", source.name, display + 1);
-            copy.placement.reference.display = display;
+            // A copy sits on its own taskbar, flush at that taskbar's left edge. It must
+            // not inherit the primary strip's saved offset (measured against the primary
+            // taskbar) or the strip's tray anchor; a drag is stored per display under the
+            // copy's own surface id.
+            copy.placement = positioning::taskbar_dock_placement(
+                display,
+                COPY_LEFT_MARGIN,
+                1.0,
+                taskbar_is_horizontal(display),
+            );
             copy
         })
         .collect();
@@ -278,6 +290,44 @@ mod tests {
         assert!(theme.surfaces[1..]
             .iter()
             .all(|s| s.placement.nest == SurfaceNest::Taskbar));
+    }
+
+    #[test]
+    fn copy_sits_flush_left_on_its_own_taskbar_whatever_the_primary_offset() {
+        let mut theme = taskbar_theme();
+        theme.surfaces[0].placement.offset_x = 151;
+        theme.surfaces[0].placement.offset_y = 7;
+        replicate_taskbar_surfaces(&mut theme, &[0, 1]);
+        let copy = &theme.surfaces[1].placement;
+        assert_eq!((copy.offset_x, copy.offset_y), (COPY_LEFT_MARGIN, 0));
+        let monitor = RECT {
+            left: -1920,
+            top: 0,
+            right: 0,
+            bottom: 1080,
+        };
+        let taskbar = RECT {
+            left: -1920,
+            top: 1040,
+            right: 0,
+            bottom: 1080,
+        };
+        let tray = RECT {
+            left: -300,
+            top: 1040,
+            right: 0,
+            bottom: 1080,
+        };
+        let rect = positioning::surface_screen_rect(
+            copy,
+            200,
+            40,
+            1.0,
+            monitor,
+            Some(taskbar),
+            Some(tray),
+        );
+        assert_eq!(rect.left, -1920 + COPY_LEFT_MARGIN);
     }
 
     #[test]
