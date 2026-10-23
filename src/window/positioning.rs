@@ -293,6 +293,9 @@ pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, 
                     }
                     let mut point = [POINT { x, y }];
                     MapWindowPoints(None, Some(desktop.parent), &mut point);
+                    super::drag_stats::trace(|| {
+                        format!("swp place-desktop hwnd={hwnd:?} to=({},{}) size={width}x{height}", point[0].x, point[0].y)
+                    });
                     let _ = SetWindowPos(
                         hwnd,
                         Some(desktop.insert_after),
@@ -1033,6 +1036,7 @@ pub(super) fn floating_z() -> app_settings::FloatingZOrder {
 /// Place the floating card at screen position (x, y) in the stacking chosen by the
 /// `floating_z_order` setting.
 pub(super) fn place_floating(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) {
+    super::drag_stats::trace(|| format!("swp place-floating hwnd={hwnd:?} to=({x},{y})"));
     unsafe {
         match floating_z() {
             app_settings::FloatingZOrder::Top => {

@@ -72,6 +72,10 @@ pub enum ContextMenuAction {
         mode: String,
     },
     ToggleWidget,
+    /// Size of the floating or desktop card, in percent of its authored size.
+    SetCardSize {
+        percent: u32,
+    },
     /// Show or hide every taskbar-docked window (all displays).
     ToggleTaskbarWindow,
     /// Show or hide the floating or desktop card.
@@ -266,6 +270,13 @@ fn validate_items(
                         if crate::app_settings::FloatingZOrder::from_key(mode).is_none() =>
                     {
                         errors.push(format!("{}.mode must be normal, top or desktop", item.id));
+                    }
+                    ContextMenuAction::SetCardSize { percent }
+                        if !(crate::app_settings::CARD_SCALE_MIN_PERCENT
+                            ..=crate::app_settings::CARD_SCALE_MAX_PERCENT)
+                            .contains(percent) =>
+                    {
+                        errors.push(format!("{}.percent must be 50 to 300", item.id));
                     }
                     ContextMenuAction::SetLanguage { language } if language.trim().is_empty() => {
                         errors.push(format!("{}.language cannot be empty", item.id));
@@ -495,6 +506,15 @@ pub fn classic_context_menu() -> ContextMenuDocument {
                             mode: "desktop".into(),
                         },
                     ),
+                ],
+            ),
+            ContextMenuItem::submenu(
+                "card-size",
+                "Card size",
+                vec![
+                    ContextMenuItem::action("size-small", "Small", Action::SetCardSize { percent: 75 }),
+                    ContextMenuItem::action("size-medium", "Medium", Action::SetCardSize { percent: 100 }),
+                    ContextMenuItem::action("size-large", "Large", Action::SetCardSize { percent: 150 }),
                 ],
             ),
             ContextMenuItem::submenu("language", "Language", languages),

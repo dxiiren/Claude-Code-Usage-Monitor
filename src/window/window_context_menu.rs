@@ -152,6 +152,7 @@ pub(super) fn context_menu_action_flags(
         ContextMenuAction::ToggleProvider { provider } => state.providers.contains(*provider),
         ContextMenuAction::ToggleStartup => is_startup_enabled(),
         ContextMenuAction::ToggleLockPosition => state.lock_position,
+        ContextMenuAction::SetCardSize { percent } => *percent == card_scale_percent(),
         ContextMenuAction::ToggleTaskbarWindow => state.show_taskbar_window,
         ContextMenuAction::ToggleMainWindow => state.show_main_window,
         ContextMenuAction::SetFloatingZOrder { mode } => {
@@ -279,6 +280,12 @@ pub(super) fn execute_context_menu_action(
         }
         ContextMenuAction::ToggleStartup => Some(IDM_START_WITH_WINDOWS),
         ContextMenuAction::ToggleLockPosition => Some(IDM_LOCK_POSITION),
+        ContextMenuAction::SetCardSize { percent } => match *percent {
+            75 => Some(IDM_SIZE_SMALL),
+            100 => Some(IDM_SIZE_MEDIUM),
+            150 => Some(IDM_SIZE_LARGE),
+            _ => None,
+        },
         ContextMenuAction::ToggleTaskbarWindow => Some(IDM_SHOW_TASKBAR_WINDOW),
         ContextMenuAction::ToggleMainWindow => Some(IDM_SHOW_MAIN_WINDOW),
         ContextMenuAction::SetFloatingZOrder { mode } => {

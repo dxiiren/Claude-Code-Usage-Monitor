@@ -77,6 +77,154 @@ fn is_desktop_primary_surface(hwnd: HWND) -> bool {
     })
 }
 
+/// End a drag whose button-up never reached us, exactly as a button-up would:
+/// the final position is saved and drawn.
+fn finish_lost_drag(hwnd: HWND) -> LRESULT {
+    let mut cursor = POINT::default();
+    let _ = unsafe { GetCursorPos(&mut cursor) };
+    let origin = lock_state()
+        .as_ref()
+        .map(|s| s.drag_start_origin)
+        .unwrap_or_default();
+    let client = LPARAM((((cursor.y - origin.y) as i16 as u16 as isize) << 16)
+        | ((cursor.x - origin.x) as i16 as u16 as isize));
+    unsafe { wnd_proc_inner(hwnd, WM_LBUTTONUP, WPARAM(0), client) }
+}
+
+/// What a card or taskbar-copy drag needs, read once when the drag starts.
+#[derive(Clone, Copy)]
+struct CardDragPlan {
+    start_cursor: POINT,
+    start_origin: POINT,
+    size: (i32, i32),
+    display: RECT,
+    /// `Some(horizontal)` for a copy docked in a taskbar, which slides along it.
+    docked_horizontal: Option<bool>,
+    /// Screen position of the window's parent, 0,0 for a top-level window.
+    parent_origin: POINT,
+}
+
+thread_local! {
+    static CARD_PLAN: std::cell::RefCell<Option<CardDragPlan>> = const { std::cell::RefCell::new(None) };
+}
+
+fn build_card_drag_plan(hwnd: HWND, pt: POINT, card_surface: Option<usize>) -> Option<CardDragPlan> {
+    let (start_cursor, start_origin) = lock_state()
+        .as_ref()
+        .map(|s| (s.drag_start_cursor, s.drag_start_origin))?;
+    let rect = native_interop::get_window_rect_safe(hwnd).unwrap_or_default();
+    let display = drag_geometry(|geometry| positioning::monitor_for_point(&geometry.monitors, pt).1);
+    let docked_horizontal = lock_state().as_ref().and_then(|s| {
+        let theme = effective_theme_from_state(s)?;
+        let surface = theme.surfaces.get(card_surface?)?;
+        (surface.placement.nest.resolve(surface.placement.reference.region) == SurfaceNest::Taskbar)
+            .then(|| taskbar_is_horizontal(surface.placement.reference.display))
+    });
+    let mut parent_origin = POINT::default();
+    unsafe {
+        if let Ok(parent) = GetParent(hwnd) {
+            let _ = ClientToScreen(parent, &mut parent_origin);
+        }
+    }
+    Some(CardDragPlan {
+        start_cursor,
+        start_origin,
+        size: (rect.right - rect.left, rect.bottom - rect.top),
+        display: display.rect,
+        docked_horizontal,
+        parent_origin,
+    })
+}
+
+/// A resize in progress: the pointer and the size when the corner was grabbed.
+#[derive(Clone, Copy)]
+struct CardResize {
+    start_x: i32,
+    start_width: i32,
+    start_percent: u32,
+}
+
+thread_local! {
+    static CARD_RESIZE: std::cell::Cell<Option<CardResize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Width of the grab zone in the bottom-right corner of a card, in pixels.
+const RESIZE_GRIP: i32 = 20;
+
+/// Whether `hwnd` is the floating or desktop card (not a copy docked in a taskbar).
+fn is_card_window(hwnd: HWND) -> bool {
+    let parent_class = unsafe { GetParent(hwnd) }
+        .ok()
+        .and_then(native_interop::window_class_name)
+        .unwrap_or_default();
+    if parent_class.starts_with("Shell_") {
+        return false;
+    }
+    lock_state()
+        .as_ref()
+        .and_then(|s| surface_index_for_window(s, hwnd))
+        .is_some_and(|index| index > 0)
+}
+
+fn begin_card_resize(hwnd: HWND, lparam: LPARAM) -> bool {
+    if lock_state().as_ref().is_none_or(|s| s.lock_position) || !is_card_window(hwnd) {
+        return false;
+    }
+    let (x, y) = (
+        (lparam.0 & 0xFFFF) as u16 as i16 as i32,
+        ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32,
+    );
+    let mut client = RECT::default();
+    if unsafe { GetClientRect(hwnd, &mut client) }.is_err() {
+        return false;
+    }
+    if x < client.right - RESIZE_GRIP || y < client.bottom - RESIZE_GRIP {
+        return false;
+    }
+    let mut cursor = POINT::default();
+    let _ = unsafe { GetCursorPos(&mut cursor) };
+    CARD_RESIZE.with(|cell| {
+        cell.set(Some(CardResize {
+            start_x: cursor.x,
+            start_width: client.right.max(1),
+            start_percent: card_scale_percent(),
+        }))
+    });
+    unsafe {
+        let _ = SetCapture(hwnd);
+    }
+    true
+}
+
+fn card_resize_to_cursor() {
+    let Some(resize) = CARD_RESIZE.with(|cell| cell.get()) else {
+        return;
+    };
+    let mut cursor = POINT::default();
+    let _ = unsafe { GetCursorPos(&mut cursor) };
+    let width = (resize.start_width + cursor.x - resize.start_x).max(1);
+    let percent = (resize.start_percent as f64 * width as f64 / resize.start_width as f64).round()
+        as u32;
+    let percent = percent.clamp(
+        app_settings::CARD_SCALE_MIN_PERCENT,
+        app_settings::CARD_SCALE_MAX_PERCENT,
+    );
+    if percent != card_scale_percent() {
+        resize_card_to_percent(percent);
+        sync_custom_mirrors();
+        position_at_taskbar();
+        render_layered();
+    }
+}
+
+fn end_card_resize() -> bool {
+    let was = CARD_RESIZE.with(|cell| cell.take()).is_some();
+    if was {
+        save_state_settings();
+    }
+    was
+}
+
 static DRAG_REPORT_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Main window procedure
@@ -87,6 +235,19 @@ pub(super) unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     let started = (msg == WM_MOUSEMOVE).then(Instant::now);
+    drag_stats::trace(|| {
+        let (dragging, pending) = lock_state()
+            .as_ref()
+            .map(|s| (s.dragging, s.pending_drag))
+            .unwrap_or_default();
+        format!(
+            "msg hwnd={:?} msg={msg:#06x} w={:#x} l={:#x} dragging={dragging} pending={pending} capture={:?}",
+            hwnd,
+            wparam.0,
+            lparam.0,
+            unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetCapture() }
+        )
+    });
     let result = wnd_proc_inner(hwnd, msg, wparam, lparam);
     if let Some(started) = started {
         drag_stats::MOVE_MICROS.fetch_add(started.elapsed().as_micros() as u32, Ordering::Relaxed);
@@ -100,6 +261,8 @@ pub(super) unsafe extern "system" fn wnd_proc(
 unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_NCHITTEST => LRESULT(HTCLIENT as isize),
+        // A press on the card must never activate or raise anything.
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_PAINT => {
             drag_stats::bump(&drag_stats::PAINTS);
             let mut ps = PAINTSTRUCT::default();
@@ -267,6 +430,9 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
         WM_SETCURSOR => DefWindowProcW(hwnd, msg, wparam, lparam),
         WM_LBUTTONDOWN => {
             drag_stats::reset();
+            if begin_card_resize(hwnd, lparam) {
+                return LRESULT(0);
+            }
             unsafe {
                 let _ = SetCapture(hwnd);
             }
@@ -290,6 +456,12 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
+            if CARD_RESIZE.with(|cell| cell.get()).is_some() {
+                if !newer_mouse_move_pending(hwnd) {
+                    card_resize_to_cursor();
+                }
+                return LRESULT(0);
+            }
             drag_stats::bump(&drag_stats::MOVES_SEEN);
             let pt = pointer_screen_point(hwnd, lparam);
 
@@ -325,6 +497,13 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                 }
             };
 
+            // The button went up somewhere we did not see (capture taken by another
+            // window): finish the drag now instead of leaving the card half-moved.
+            if is_dragging && !should_start_drag && (wparam.0 & 1) == 0 {
+                drag_stats::trace(|| "move without button while dragging: finishing".into());
+                return finish_lost_drag(hwnd);
+            }
+
             if is_dragging && !should_start_drag && newer_mouse_move_pending(hwnd) {
                 return LRESULT(0);
             }
@@ -339,50 +518,33 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                         s.pending_drag = false;
                     }
                 }
-                let start = lock_state()
-                    .as_ref()
-                    .map(|s| (s.drag_start_cursor, s.drag_start_origin));
-                if let Some((start_cursor, start_origin)) = start {
-                    let rect = native_interop::get_window_rect_safe(hwnd).unwrap_or_default();
-                    let size = (rect.right - rect.left, rect.bottom - rect.top);
-                    let display = drag_geometry(|geometry| {
-                        positioning::monitor_for_point(&geometry.monitors, pt).1
-                    });
-                    // A taskbar copy slides along its own taskbar; a card moves freely
-                    // but stays on its display.
-                    let docked_axis = lock_state().as_ref().and_then(|s| {
-                        let theme = effective_theme_from_state(s)?;
-                        let surface = theme.surfaces.get(card_surface?)?;
-                        (surface
-                            .placement
-                            .nest
-                            .resolve(surface.placement.reference.region)
-                            == SurfaceNest::Taskbar)
-                            .then(|| taskbar_is_horizontal(surface.placement.reference.display))
-                    });
+                if should_start_drag {
+                    // Everything a move needs is worked out once, at the start of the drag.
+                    let plan = build_card_drag_plan(hwnd, pt, card_surface);
+                    CARD_PLAN.with(|cell| *cell.borrow_mut() = plan);
+                }
+                CARD_PLAN.with(|cell| {
+                    let Some(plan) = cell.borrow().as_ref().copied() else {
+                        return;
+                    };
                     let wanted = POINT {
-                        x: start_origin.x + pt.x - start_cursor.x,
-                        y: start_origin.y + pt.y - start_cursor.y,
+                        x: plan.start_origin.x + pt.x - plan.start_cursor.x,
+                        y: plan.start_origin.y + pt.y - plan.start_cursor.y,
                     };
-                    let origin = match docked_axis {
-                        Some(true) => POINT {
-                            x: wanted.x,
-                            y: start_origin.y,
-                        },
-                        Some(false) => POINT {
-                            x: start_origin.x,
-                            y: wanted.y,
-                        },
-                        None => positioning::clamp_card_origin(wanted, size, display.rect),
+                    let origin = match plan.docked_horizontal {
+                        Some(true) => POINT { x: wanted.x, y: plan.start_origin.y },
+                        Some(false) => POINT { x: plan.start_origin.x, y: wanted.y },
+                        None => positioning::clamp_card_origin(wanted, plan.size, plan.display),
                     };
-                    // A copy docked in a taskbar is a child window: its position is
-                    // relative to that taskbar, not to the screen.
-                    let mut place = origin;
+                    let place = POINT {
+                        x: origin.x - plan.parent_origin.x,
+                        y: origin.y - plan.parent_origin.y,
+                    };
+                    drag_stats::bump(&drag_stats::MOVES_APPLIED);
+                    drag_stats::trace(|| {
+                        format!("swp drag-in-place hwnd={hwnd:?} to=({},{})", place.x, place.y)
+                    });
                     unsafe {
-                        if let Ok(parent) = GetParent(hwnd) {
-                            let _ = ScreenToClient(parent, &mut place);
-                        }
-                        drag_stats::bump(&drag_stats::MOVES_APPLIED);
                         let _ = SetWindowPos(
                             hwnd,
                             None,
@@ -393,7 +555,7 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                             SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOCOPYBITS,
                         );
                     }
-                }
+                });
                 return LRESULT(0);
             }
 
@@ -520,6 +682,9 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
 
                     let (final_x, final_y) = snapped_pos.unwrap_or((origin_x, origin_y));
                     drag_stats::bump(&drag_stats::MOVES_APPLIED);
+                    drag_stats::trace(|| {
+                        format!("swp drag-popup hwnd={hwnd:?} to=({final_x},{final_y})")
+                    });
                     unsafe {
                         let _ = SetWindowPos(
                             hwnd,
@@ -555,7 +720,20 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            if CARD_RESIZE.with(|cell| cell.get()).is_some() {
+                card_resize_to_cursor();
+                end_card_resize();
+                unsafe {
+                    let _ = ReleaseCapture();
+                }
+                return LRESULT(0);
+            }
+            drag_stats::trace(|| {
+                let start = lock_state().as_ref().map(|s| (s.drag_start_origin, s.drag_surface));
+                format!("release: start_origin_surface={start:?} rect={:?}", native_interop::get_window_rect_safe(hwnd).map(|r| (r.left, r.top)))
+            });
             clear_drag_geometry();
+            CARD_PLAN.with(|cell| *cell.borrow_mut() = None);
             let card_surface = lock_state().as_mut().and_then(|s| s.drag_surface.take());
             let released = release_drag_capture_with(
                 || {
@@ -776,6 +954,14 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
             LRESULT(0)
         }
         WM_CAPTURECHANGED => {
+            end_card_resize();
+            let lost_drag = lock_state()
+                .as_ref()
+                .is_some_and(|s| s.dragging && !s.is_switching_window_style);
+            drag_stats::trace(|| format!("capture changed, drag in progress={lost_drag}"));
+            if lost_drag {
+                return finish_lost_drag(hwnd);
+            }
             let mut state = lock_state();
             if let Some(s) = state.as_mut() {
                 if !s.is_switching_window_style {
@@ -927,6 +1113,20 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                     }
                     save_state_settings();
                     render_layered();
+                }
+                IDM_SIZE_SMALL | IDM_SIZE_MEDIUM | IDM_SIZE_LARGE => {
+                    let locked = lock_state().as_ref().is_some_and(|s| s.lock_position);
+                    if !locked {
+                        resize_card_to_percent(match id {
+                            IDM_SIZE_SMALL => 75,
+                            IDM_SIZE_LARGE => 150,
+                            _ => 100,
+                        });
+                        save_state_settings();
+                        sync_custom_mirrors();
+                        position_at_taskbar();
+                        render_layered();
+                    }
                 }
                 IDM_Z_NORMAL | IDM_Z_TOP | IDM_Z_DESKTOP => {
                     positioning::set_floating_z(match id {

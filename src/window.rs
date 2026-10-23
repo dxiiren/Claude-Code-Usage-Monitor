@@ -218,6 +218,40 @@ const IDM_SHOW_MAIN_WINDOW: u16 = 28;
 const IDM_Z_NORMAL: u16 = 22;
 const IDM_Z_TOP: u16 = 23;
 const IDM_Z_DESKTOP: u16 = 24;
+const IDM_SIZE_SMALL: u16 = 25;
+const IDM_SIZE_MEDIUM: u16 = 26;
+const IDM_SIZE_LARGE: u16 = 29;
+
+static CARD_SCALE_PERCENT: AtomicU32 = AtomicU32::new(100);
+
+fn card_scale_percent() -> u32 {
+    CARD_SCALE_PERCENT.load(Ordering::Relaxed)
+}
+
+/// Change the card size and keep the card's top-left corner where it is: saved
+/// offsets are in logical units that are multiplied by the size, so they are
+/// divided by the same ratio.
+fn resize_card_to_percent(percent: u32) {
+    let old = card_scale_percent().max(1) as f64;
+    set_card_scale_percent(percent);
+    let new = card_scale_percent().max(1) as f64;
+    if let Some(state) = lock_state().as_mut() {
+        for offset in state.surface_offsets.values_mut() {
+            offset.0 = (offset.0 as f64 * old / new).round() as i32;
+            offset.1 = (offset.1 as f64 * old / new).round() as i32;
+        }
+    }
+}
+
+fn set_card_scale_percent(percent: u32) {
+    CARD_SCALE_PERCENT.store(
+        percent.clamp(
+            app_settings::CARD_SCALE_MIN_PERCENT,
+            app_settings::CARD_SCALE_MAX_PERCENT,
+        ),
+        Ordering::Relaxed,
+    );
+}
 const IDM_VERSION_ACTION: u16 = 31;
 const IDM_LANG_SYSTEM: u16 = 100;
 const IDM_LANG_FIRST: u16 = 101;
@@ -335,7 +369,22 @@ fn theme_surface_scale(theme: &ThemeDocument, surface_index: usize) -> f64 {
         .get(surface_index)
         .map(|surface| surface.placement.reference.display)
         .unwrap_or(theme.placement.reference.display);
-    display_scale(display_index)
+    // Only a card (a theme surface after the primary one) is user-resizable; the
+    // primary strip, docked or ejected, keeps its authored size.
+    let card = surface_index > 0
+        && theme.surfaces.get(surface_index).is_some_and(|surface| {
+            surface
+                .placement
+                .nest
+                .resolve(surface.placement.reference.region)
+                != SurfaceNest::Taskbar
+        });
+    let user = if card {
+        card_scale_percent() as f64 / 100.0
+    } else {
+        1.0
+    };
+    display_scale(display_index) * user
 }
 
 fn logical_host_dimension(physical: i32, scale: f64) -> u32 {
@@ -838,6 +887,7 @@ fn save_state_settings() {
         persisted.placement_override = s.placement_override.clone();
         persisted.surface_offsets = s.surface_offsets.clone();
         persisted.lock_position = s.lock_position;
+        persisted.card_scale_percent = card_scale_percent();
         persisted.show_taskbar_window = s.show_taskbar_window;
         persisted.show_on_all_taskbars = s.show_on_all_taskbars;
         persisted.show_main_window = s.show_main_window;
@@ -1813,6 +1863,7 @@ unsafe extern "system" fn mirror_wnd_proc(
 ) -> LRESULT {
     match msg {
         WM_NCHITTEST => LRESULT(HTCLIENT as isize),
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_SETCURSOR if set_surface_cursor(hwnd) => LRESULT(1),
         // Press, move, release and capture loss behave exactly as on the primary
         // window (drag rules, lock, clicks), so a card or a taskbar copy is never
@@ -2137,7 +2188,10 @@ pub fn run() {
                 window_state_timer_active: false,
                 custom_theme_enabled,
                 usage_countdown: settings.usage_countdown,
-                lock_position: settings.lock_position,
+                lock_position: {
+                    set_card_scale_percent(settings.card_scale_percent);
+                    settings.lock_position
+                },
                 show_taskbar_window: settings.show_taskbar_window,
                 show_on_all_taskbars: settings.show_on_all_taskbars,
                 show_main_window: settings.show_main_window,
@@ -2254,6 +2308,7 @@ fn render_layered() {
     if lock_state().as_ref().is_some_and(|s| s.dragging) {
         return;
     }
+    drag_stats::trace(|| "render_layered".into());
     drag_stats::bump(&drag_stats::RENDERS);
     refresh_dpi();
     sync_custom_mirrors();
@@ -2958,6 +3013,7 @@ fn reload_settings_and_theme(hwnd: HWND, force_poll: bool) {
         state.providers = settings.enabled_providers();
         state.usage_countdown = settings.usage_countdown;
         state.lock_position = settings.lock_position;
+        set_card_scale_percent(settings.card_scale_percent);
         state.show_taskbar_window = settings.show_taskbar_window;
         state.show_on_all_taskbars = settings.show_on_all_taskbars;
         state.show_main_window = settings.show_main_window;
