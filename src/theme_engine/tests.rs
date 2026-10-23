@@ -624,11 +624,70 @@ fn timestamps_support_localized_and_iso_date_time_formats() {
         "iso_date",
         "iso_time",
         "iso_datetime",
+        "dm_hm",
+        "hm_dm",
     ] {
         let template = format!("{{timestamp:utc_{format}}}");
         let rendered = format_template(&template, &context);
         assert!(!rendered.is_empty() && rendered != "--", "{format}");
     }
+}
+
+#[test]
+fn myt_timestamps_are_utc_plus_8_whatever_the_pc_zone() {
+    let mut context = DataContext::default();
+    context.insert_string("i18n.locale", "en-US");
+    // 23 Oct 2026 06:30 UTC is 14:30 the same day in Kuala Lumpur.
+    context.insert("same_day", 1792737000.0);
+    assert_eq!(
+        format_template("{same_day:myt_dm_hm}", &context),
+        "23/10 14:30"
+    );
+    // 23 Oct 2026 20:30 UTC rolls over to 04:30 on the 24th.
+    context.insert("next_day", 1792787400.0);
+    assert_eq!(
+        format_template("{next_day:myt_dm_hm}", &context),
+        "24/10 04:30"
+    );
+    // 31 Dec 2026 17:00 UTC rolls the month and year: 01/01 01:00.
+    context.insert("new_year", 1798736400.0);
+    assert_eq!(
+        format_template("{new_year:myt_dm_hm}", &context),
+        "01/01 01:00"
+    );
+    assert_eq!(format_template("{new_year:myt_year}", &context), "2027");
+    // 28 Feb 2028 16:30 UTC (leap year) is 29 Feb 00:30.
+    context.insert("leap", 1835368200.0);
+    assert_eq!(format_template("{leap:myt_dm_hm}", &context), "29/02 00:30");
+    // The UTC form of the same instant is unchanged, and a missing reset shows a dash.
+    assert_eq!(
+        format_template("{next_day:utc_dm_hm}", &context),
+        "23/10 20:30"
+    );
+    context.insert("none", 0.0);
+    assert_eq!(format_template("{none:myt_dm_hm}", &context), "--");
+}
+
+#[test]
+fn hm_dm_puts_the_time_before_the_date() {
+    let mut context = DataContext::default();
+    context.insert_string("i18n.locale", "en-US");
+    context.insert("same_day", 1792737000.0);
+    context.insert("next_day", 1792787400.0);
+    assert_eq!(
+        format_template("{same_day:myt_hm_dm}", &context),
+        "14:30 23/10"
+    );
+    assert_eq!(
+        format_template("{next_day:myt_hm_dm}", &context),
+        "04:30 24/10"
+    );
+    assert_eq!(
+        format_template("{next_day:utc_hm_dm}", &context),
+        "20:30 23/10"
+    );
+    context.insert("none", 0.0);
+    assert_eq!(format_template("{none:myt_hm_dm}", &context), "--");
 }
 
 #[test]

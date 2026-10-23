@@ -10,6 +10,7 @@ The instructions below use the app's English labels.
 - [Duplicate and customise a built-in theme](#duplicate-and-customise-a-built-in-theme)
 - [Choose providers and refresh usage](#choose-providers-and-refresh-usage)
 - [Show used or remaining allowance](#show-used-or-remaining-allowance)
+- [Compact taskbar strip with Kuala Lumpur reset times](#compact-taskbar-strip-with-kuala-lumpur-reset-times)
 - [Windows VM testing for developers](#windows-vm-testing-for-developers)
 
 ## Open the dashboard
@@ -106,6 +107,26 @@ The setting saves automatically. The default theme and Compact Fluent Quad
 support both directions. Custom themes need to support this setting too; a
 theme that always displays consumed usage may stay unchanged. See the
 [theme binding notes](README.md#usage) if you are editing usage expressions.
+
+## Compact taskbar strip with Kuala Lumpur reset times
+
+`just widget-compact` (or `just widget-compact right`) writes a theme with one block per
+account and docks it at the left (default) or right end of the taskbar. Each block shows the
+account name, then the 5-hour and the weekly window, each with its usage percent and the
+reset as a time then a date in Kuala Lumpur time (UTC+8), for example:
+
+```text
+BA
+5h 42% 14:30 23/10
+7d 61% 09:00 27/10
+```
+
+`just widget-compact left grid` gives an aligned grid instead: one block per account with a dim `5h`/`7d` label, the percent right-aligned (amber from 60, red above 85), the reset time, and the date on the 7d row.
+
+It reads the account list from the Account Manager (remote mode) or from the widget's
+settings, restarts the widget, and changes nothing until you run it. `just widget-compact off`
+returns to the built-in widget. In your own themes, `{account.weekly.reset.unix:myt_hm_dm}`
+gives the same Malaysia Time text; `myt_` works with every timestamp format.
 
 ## Claude extra limits in custom themes
 

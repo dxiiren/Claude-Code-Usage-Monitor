@@ -65,6 +65,12 @@ pub enum ContextMenuAction {
         provider: ContextMenuProvider,
     },
     ToggleStartup,
+    /// Pin the widget: it can no longer be dragged away from where it is.
+    ToggleLockPosition,
+    /// Stacking of the floating card: `normal`, `top` or `desktop`.
+    SetFloatingZOrder {
+        mode: String,
+    },
     ToggleWidget,
     /// Accepted only so menus saved by older versions can be loaded and
     /// cleaned up. New menus cannot create or execute this legacy action.
@@ -251,6 +257,11 @@ fn validate_items(
                             "{}.seconds must be a supported update frequency",
                             item.id
                         ));
+                    }
+                    ContextMenuAction::SetFloatingZOrder { mode }
+                        if crate::app_settings::FloatingZOrder::from_key(mode).is_none() =>
+                    {
+                        errors.push(format!("{}.mode must be normal, top or desktop", item.id));
                     }
                     ContextMenuAction::SetLanguage { language } if language.trim().is_empty() => {
                         errors.push(format!("{}.language cannot be empty", item.id));
@@ -453,6 +464,32 @@ pub fn classic_context_menu() -> ContextMenuDocument {
                 "start-with-windows",
                 "Start with Windows",
                 Action::ToggleStartup,
+            ),
+            ContextMenuItem::action("lock-position", "Lock position", Action::ToggleLockPosition),
+            ContextMenuItem::submenu(
+                "floating-z-order",
+                "Floating card",
+                vec![
+                    ContextMenuItem::action(
+                        "z-normal",
+                        "Normal",
+                        Action::SetFloatingZOrder {
+                            mode: "normal".into(),
+                        },
+                    ),
+                    ContextMenuItem::action(
+                        "z-top",
+                        "Always on top",
+                        Action::SetFloatingZOrder { mode: "top".into() },
+                    ),
+                    ContextMenuItem::action(
+                        "z-desktop",
+                        "Pin to desktop",
+                        Action::SetFloatingZOrder {
+                            mode: "desktop".into(),
+                        },
+                    ),
+                ],
             ),
             ContextMenuItem::submenu("language", "Language", languages),
             ContextMenuItem::separator("settings-separator"),

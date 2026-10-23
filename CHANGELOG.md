@@ -4,6 +4,18 @@ Notable changes to Claude Code Usage Monitor are documented here, newest first.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with
 changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
+## [2.17.0] - 2026-10-23
+
+### Added
+
+- Theme text: `myt_` timestamp formats (for example `{account.weekly.reset.unix:myt_hm_dm}`) show a time in Malaysia Time (UTC+8) whatever the PC's time zone, plus `dm_hm` (`23/10 14:30`) and `hm_dm` (`14:30 23/10`) formats that work with the local, `utc_` and `myt_` forms.
+- Opt-in compact taskbar strip: `just widget-compact [left|right|off]` writes a theme with one block per account, 5h and 7d usage percent with their reset date and time in Kuala Lumpur time, and docks it at the left or right end of the taskbar. Nothing changes unless you run it.
+- Lock position: a "Lock position" item in the Settings menu (setting `lock_position`, off by default) pins the widget so mouse drags no longer move it.
+- Compact strip: a left click opens the Account Manager (`http://127.0.0.1:47291/`) in the default browser; right click keeps the menu. Reset times read time first, then date (`14:30 23/10`).
+- Floating card stacking: Settings > Floating card (setting `floating_z_order`): Normal, Always on top (default, unchanged) or Pin to desktop (behind every window, still visible after Win+D).
+- Compact strip grid style: `just widget-compact left grid` draws identical aligned blocks per account (dim `5h`/`7d` label, right-aligned percent coloured amber above 60 and red above 85, time, and the date on the 7d row). `lines` stays the default. In local mode the strip uses the Account Manager's account list.
+- Lock position no longer swallows clicks: a pinned widget still reacts to a click, it just cannot be dragged.
+
 ## [2.16.0] - 2026-10-06
 
 ### Added
@@ -1209,4 +1221,5 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 [2.15.15]: https://github.com/dxiiren/Claude-Code-Usage-Monitor/compare/v2.15.14...v2.15.15
 [2.15.16]: https://github.com/dxiiren/Claude-Code-Usage-Monitor/compare/v2.15.15...v2.15.16
 [2.15.17]: https://github.com/dxiiren/Claude-Code-Usage-Monitor/compare/v2.15.16...v2.15.17
+[2.17.0]: https://github.com/dxiiren/Claude-Code-Usage-Monitor/compare/v2.16.0...v2.17.0
 [2.16.0]: https://github.com/dxiiren/Claude-Code-Usage-Monitor/compare/v2.15.17...v2.16.0

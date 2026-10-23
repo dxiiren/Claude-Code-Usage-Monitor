@@ -163,6 +163,172 @@ function Set-PollInterval([int]$Minutes) {
     Write-Ok "Widget fetches usage every $Minutes minute(s)"
 }
 
+# ---------- Compact taskbar strip (opt-in) ----------
+
+# One strip per account, three short lines each (name, 5h, 7d), reset times in Kuala Lumpur time (MYT, UTC+8):
+#   BA
+#   5h 42% 23/10 14:30
+#   7d 61% 27/10 09:00
+# Writes themes\compact-usage-myt.json from the account list (the Account Manager's list in
+# remote mode, else settings.json profiles), makes it the active theme, docks it at the
+# left or right end of the taskbar, then restarts the widget. `-Side off` goes back to the
+# built-in widget. Nothing changes unless this is run.
+function Set-CompactTaskbar([ValidateSet('left','right','off')][string]$Side = 'left', [ValidateSet('lines','grid')][string]$Style = 'lines') {
+    $file = Join-Path $script:AppDataDir 'settings.json'
+    if (-not (Test-Path $file)) { throw "Widget settings not found; start the widget once first." }
+    Stop-Monitor
+    $s = Get-Content $file -Raw | ConvertFrom-Json
+    $set = {
+        param($name, $value)
+        if ($s.PSObject.Properties[$name]) { $s.$name = $value }
+        else { $s | Add-Member -NotePropertyName $name -NotePropertyValue $value }
+    }
+    if ($Side -eq 'off') {
+        & $set 'custom_theme_enabled' $false
+        & $set 'active_theme_path' $null
+        [IO.File]::WriteAllText($file, (ConvertTo-Json $s -Depth 20), (New-Object System.Text.UTF8Encoding $false))
+        Start-Monitor
+        Write-Ok "Compact taskbar strip off (built-in widget)"
+        return
+    }
+    $accounts = @()
+    $remote = Join-Path $script:AppDataDir 'remote-accounts.json'
+    if ($s.remote_server_url -and (Test-Path $remote)) {
+        foreach ($a in @((Get-Content $remote -Raw | ConvertFrom-Json).accounts)) {
+            $accounts += [pscustomobject]@{ Provider = $a.provider; Id = $a.id; Name = $a.name }
+        }
+    } else {
+        # Local mode: the Account Manager's own list (accounts.db) is what the widget shows,
+        # so ask it first; fall back to the widget's settings.json profiles.
+        try {
+            $api = Invoke-RestMethod 'http://127.0.0.1:47291/api/accounts' -TimeoutSec 5
+            foreach ($a in @($api.accounts)) {
+                if ($a.enabled -ne $false -and $a.id) { $accounts += [pscustomobject]@{ Provider = $a.provider; Id = $a.id; Name = $a.name } }
+            }
+        } catch { }
+    }
+    if ($accounts.Count -eq 0 -and -not ($s.remote_server_url -and (Test-Path $remote))) {
+        foreach ($prov in 'claude', 'codex') {
+            $block = $s.accounts.$prov
+            if ($block) { foreach ($a in @($block.profiles)) { if ($a.enabled) { $accounts += [pscustomobject]@{ Provider = $prov; Id = $a.id; Name = $a.name } } } }
+        }
+    }
+    if ($accounts.Count -eq 0) { throw "No accounts found to show." }
+    $children = New-Object System.Collections.ArrayList
+    $text = {
+        param($id, $x, $y, $w, $h, $render, $template, $weight, $size, $align = 'left', $dim = $false)
+        $modes = if ($dim) { @(@('dark', 'system.dark', '#94A3B8FF'), @('light', '1 - system.dark', '#6B7280FF')) } else { @(@('dark', 'system.dark', '#F1F5F9FF'), @('light', '1 - system.dark', '#111827FF')) }
+        foreach ($mode in $modes) {
+            [void]$children.Add([ordered]@{
+                id = "$id-$($mode[0])"; name = "$id $($mode[0])"
+                render = "($render) * ($($mode[1]))"; visibility = '100'
+                x = "$x"; y = "$y"; width = "$w"; height = "$h"
+                background = @{ type = 'none' }; border = $null; corner_radius = '0'
+                layout = 'freeform'; align = 'start'; gap = '0'
+                content = [ordered]@{
+                    type = 'text'; template = $template; font_family = 'Segoe UI'; font_size = "$size"
+                    weight = $weight; rendering = 'clear_type'; contrast = '1'; align = $align
+                    color = @{ color = $mode[2]; opacity = '1' }
+                }
+            })
+        }
+    }
+    # One fixed-colour text object (used for the traffic-light percentages).
+    $solid = {
+        param($id, $x, $y, $w, $h, $render, $template, $weight, $size, $color, $align)
+        [void]$children.Add([ordered]@{
+            id = $id; name = $id
+            render = $render; visibility = '100'
+            x = "$x"; y = "$y"; width = "$w"; height = "$h"
+            background = @{ type = 'none' }; border = $null; corner_radius = '0'
+            layout = 'freeform'; align = 'start'; gap = '0'
+            content = [ordered]@{
+                type = 'text'; template = $template; font_family = 'Segoe UI'; font_size = "$size"
+                weight = $weight; rendering = 'clear_type'; contrast = '1'; align = $align
+                color = @{ color = $color; opacity = '1' }
+            }
+        })
+    }
+    $x = 0
+    $n = 0
+    if ($Style -eq 'grid') {
+        # Every account is an identical block of fixed sub-columns, so everything lines up:
+        #   NAME
+        #   5h  12% 13:00
+        #   7d 100% 05:00 25/10
+        # label (dim) | percent (right-aligned) | time | date (7d only). Percent is plain below 60,
+        # amber 60-85, red above 85.
+        $x = 0
+        foreach ($a in $accounts) {
+            $n++
+            $p = "accounts.$($a.Provider).$($a.Id)"
+            $ok = "1 - $p.login_required"
+            $name = if ($a.Name.Length -gt 7) { ($a.Name -replace '[^A-Za-z0-9]', '').Substring(0, 3).ToUpper() } else { $a.Name }
+            & $text "n$n" $x 1 107 15 '1' $name 'bold' 10
+            foreach ($row in @(@('a', 16, '5h', 'five_hour'), @('b', 31, '7d', 'weekly'))) {
+                $k = "$($row[0])$n"
+                $pp = "$p.$($row[3]).percentage"
+                $pct = "{${pp}:0}%"
+                & $text "$k-l" $x $row[1] 14 15 $ok $row[2] 'medium' 9 'left' $true
+                & $text "$k-g" ($x + 14) $row[1] 29 15 "($ok) * ($pp < 60)" $pct 'semibold' 9 'right'
+                & $solid "$k-y" ($x + 14) $row[1] 29 15 "($ok) * ($pp >= 60) * ($pp <= 85)" $pct 'semibold' 9 '#FBBF24FF' 'right'
+                & $solid "$k-r" ($x + 14) $row[1] 29 15 "($ok) * ($pp > 85)" $pct 'semibold' 9 '#F87171FF' 'right'
+                # Time starts at the same x in every block; 7d continues with the date.
+                $fmt = if ($row[0] -eq 'b') { 'myt_hm_dm' } else { 'myt_time_24' }
+                & $text "$k-t" ($x + 46) $row[1] 61 15 $ok "{$p.$($row[3]).reset.unix:$fmt}" 'medium' 9
+            }
+            & $text "x$n" $x 16 107 15 "$p.login_required" 'Expired - re-login' 'semibold' 9
+            $x = $x + 107 + 5
+        }
+    } else {
+        $x = 0
+        $n = 0
+        foreach ($a in $accounts) {
+            $n++
+            $p = "accounts.$($a.Provider).$($a.Id)"
+            $ok = "1 - $p.login_required"
+            $colW = 106
+            $tpl5 = "5h {$p.five_hour.percentage:0}% {$p.five_hour.reset.unix:myt_hm_dm}"
+            $tpl7 = "7d {$p.weekly.percentage:0}% {$p.weekly.reset.unix:myt_hm_dm}"
+            & $text "n$n" $x 1 $colW 14 '1' $a.Name 'semibold' 10
+            & $text "a$n" $x 15 $colW 14 $ok $tpl5 'medium' 10.5
+            & $text "b$n" $x 29 $colW 14 $ok $tpl7 'medium' 10.5
+            & $text "x$n" $x 15 $colW 14 "$p.login_required" 'Expired - re-login' 'semibold' 10.5
+            $x = $x + $colW + 6
+        }
+    }
+    $horizontal = if ($Side -eq 'left') { 'left' } else { 'right' }
+    $theme = [ordered]@{
+        schema_version = 1; id = 'compact-usage-myt'; name = 'Compact usage (MYT)'
+        surfaces = @([ordered]@{
+            id = 'main'; name = 'Compact taskbar strip'; render = '1'; visibility = '100'
+            placement = [ordered]@{
+                reference = @{ region = $(if ($Side -eq 'left') { 'taskbar' } else { 'system_tray' }); display = 0 }
+                nest = 'taskbar'; horizontal = $horizontal; vertical = 'bottom'
+                surface_horizontal = $horizontal; surface_vertical = 'bottom'
+                offset_x = $(if ($Side -eq 'left') { 8 } else { -6 }); offset_y = 0
+            }
+            width = "$($x - 6)"; height = '46'
+            background = @{ type = 'none' }; border = $null
+            mouse_events = [ordered]@{ click = 'open_url("http://127.0.0.1:47291/")'; right_click = 'show_context_menu("classic-v1")' }
+            corner_radius = '0'; layout = 'freeform'; align = 'start'; gap = '0'
+            content = @{ type = 'none' }
+            children = @($children)
+        })
+    }
+    $dir = Join-Path $script:AppDataDir 'themes'
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    $themeFile = Join-Path $dir 'compact-usage-myt.json'
+    [IO.File]::WriteAllText($themeFile, (ConvertTo-Json $theme -Depth 30), (New-Object System.Text.UTF8Encoding $false))
+    & $set 'active_theme_path' $themeFile
+    & $set 'custom_theme_enabled' $true
+    # Drop any saved drag/float position so the theme's own placement applies.
+    if ($s.PSObject.Properties['placement_override']) { $s.PSObject.Properties.Remove('placement_override') }
+    [IO.File]::WriteAllText($file, (ConvertTo-Json $s -Depth 20), (New-Object System.Text.UTF8Encoding $false))
+    Start-Monitor
+    Write-Ok "Compact taskbar strip on the $Side of the taskbar for $($accounts.Count) account(s) (reset times in MYT)"
+}
+
 # ---------- Startup + shortcuts ----------
 
 function Enable-Startup {
@@ -202,4 +368,4 @@ function Install-CloseMenu {
 Export-ModuleMember -Function Write-Ok, Write-Info, Write-Warn, Write-Fail, Get-MonitorExe, Get-UpstreamMonitorExe,
     Stop-Monitor, Start-Monitor, Install-MonitorRelease, Install-MonitorFromSource, Install-ManagerApp,
     Get-ManagerProcess, Stop-Manager, Test-ManagerUp, Start-Manager, Enable-Startup, Disable-Startup, New-Shortcuts,
-    Install-CloseMenu, Set-RemoteServer, Set-PollInterval
+    Install-CloseMenu, Set-RemoteServer, Set-PollInterval, Set-CompactTaskbar

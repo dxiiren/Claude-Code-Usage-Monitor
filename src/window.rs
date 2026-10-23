@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -128,6 +128,8 @@ struct AppState {
 
     custom_theme_enabled: bool,
     usage_countdown: bool,
+    /// Pinned: mouse drags do not move the widget (settings `lock_position`).
+    lock_position: bool,
     active_theme_path: Option<PathBuf>,
     active_theme: Option<ThemeDocument>,
     theme_clock_interval: Option<Duration>,
@@ -203,6 +205,10 @@ const IDM_FREQ_5MIN: u16 = 11;
 const IDM_FREQ_15MIN: u16 = 12;
 const IDM_FREQ_1HOUR: u16 = 13;
 const IDM_START_WITH_WINDOWS: u16 = 20;
+const IDM_LOCK_POSITION: u16 = 21;
+const IDM_Z_NORMAL: u16 = 22;
+const IDM_Z_TOP: u16 = 23;
+const IDM_Z_DESKTOP: u16 = 24;
 const IDM_VERSION_ACTION: u16 = 31;
 const IDM_LANG_SYSTEM: u16 = 100;
 const IDM_LANG_FIRST: u16 = 101;
@@ -697,6 +703,13 @@ fn apply_floating_position(
     placement.offset_x = offset.x;
     placement.offset_y = offset.y;
     positioning::override_primary_placement(theme, placement);
+    if positioning::floating_z() == app_settings::FloatingZOrder::Desktop {
+        // Pinned to the desktop: draw it as Explorer's desktop-layer surface, which sits
+        // behind every window and stays visible after Win+D.
+        if let Some(surface) = theme.surfaces.first_mut() {
+            surface.placement.nest = SurfaceNest::Desktop;
+        }
+    }
 }
 
 /// Resolve the actual rectangle that will be restored, including authored
@@ -809,6 +822,8 @@ fn save_state_settings() {
             .as_ref()
             .map(|path| path.to_string_lossy().to_string());
         persisted.placement_override = s.placement_override.clone();
+        persisted.lock_position = s.lock_position;
+        persisted.floating_z_order = positioning::floating_z();
         persisted.floating_card_opacity = s.floating_card_opacity;
         // The dashboard process owns its dimensions, so leave the freshly
         // loaded values unchanged when monitor actions persist settings.
@@ -1585,8 +1600,7 @@ fn sync_custom_mirrors() {
         state
             .as_ref()
             .map(|state| {
-                let surfaces = state
-                    .active_theme
+                let surfaces = effective_theme_from_state(state)
                     .as_ref()
                     .map(|theme| {
                         theme
@@ -2015,6 +2029,7 @@ pub fn run() {
                 save_settings_or_log(&settings, "unable to persist active theme");
             }
         }
+        positioning::set_floating_z(settings.floating_z_order);
         let language_override = settings.language.as_deref().and_then(LanguageId::from_code);
         let language = localization::resolve_language(language_override);
         let install_channel = updater::current_install_channel();
@@ -2120,6 +2135,7 @@ pub fn run() {
                 window_state_timer_active: false,
                 custom_theme_enabled,
                 usage_countdown: settings.usage_countdown,
+                lock_position: settings.lock_position,
                 active_theme_path,
                 active_theme,
                 theme_clock_interval,
@@ -2920,6 +2936,8 @@ fn reload_settings_and_theme(hwnd: HWND, force_poll: bool) {
         state.poll_interval_ms = settings.poll_interval_ms;
         state.providers = settings.enabled_providers();
         state.usage_countdown = settings.usage_countdown;
+        state.lock_position = settings.lock_position;
+        positioning::set_floating_z(settings.floating_z_order);
         state.taskbar_index = settings.taskbar_index;
         state.tray_offset = settings.tray_offset;
         state.placement_override = settings.placement_override;

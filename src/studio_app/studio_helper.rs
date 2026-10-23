@@ -223,6 +223,13 @@ const MENU_ACTIONS: &[ActionSpec] = &[
         "toggle_startup",
     ),
     (
+        "toggle_lock_position",
+        APP,
+        "Toggle Lock position",
+        "toggle_lock_position()",
+        "toggle_lock_position",
+    ),
+    (
         "check_for_updates",
         APP,
         "Check for updates",
@@ -243,6 +250,13 @@ const MENU_ACTIONS: &[ActionSpec] = &[
         "Toggle provider",
         "toggle_provider(provider)",
         "toggle_provider",
+    ),
+    (
+        "set_floating_z_order",
+        SETTINGS,
+        "Set floating card stacking",
+        "set_floating_z_order(\"top\")",
+        "set_floating_z_order",
     ),
     (
         "set_language",
@@ -373,6 +387,7 @@ pub(super) struct HelperForms {
     frequency: u32,
     provider: ContextMenuProvider,
     language_code: String,
+    z_order: String,
 }
 
 impl Default for HelperForms {
@@ -388,6 +403,7 @@ impl Default for HelperForms {
             frequency: POLL_15_MIN_SECONDS,
             provider: ContextMenuProvider::Claude,
             language_code: "system".into(),
+            z_order: "top".into(),
         }
     }
 }
@@ -486,6 +502,7 @@ impl HelperSession {
             ContextMenuAction::SetUpdateFrequency { seconds } => forms.frequency = *seconds,
             ContextMenuAction::ToggleProvider { provider } => forms.provider = *provider,
             ContextMenuAction::SetLanguage { language } => forms.language_code = language.clone(),
+            ContextMenuAction::SetFloatingZOrder { mode } => forms.z_order = mode.clone(),
             ContextMenuAction::ToggleLayerRender { target } => forms.layer = target.clone(),
             ContextMenuAction::OpenUrl { url } => forms.url = url.clone(),
             _ => {}
@@ -1363,6 +1380,7 @@ fn menu_action_details(
         "refresh" => ContextMenuAction::Refresh,
         "toggle_widget" => ContextMenuAction::ToggleWidget,
         "toggle_startup" => ContextMenuAction::ToggleStartup,
+        "toggle_lock_position" => ContextMenuAction::ToggleLockPosition,
         "check_for_updates" => ContextMenuAction::CheckForUpdates,
         "exit" => ContextMenuAction::Exit,
         "set_update_frequency" => {
@@ -1404,6 +1422,25 @@ fn menu_action_details(
                 });
             ContextMenuAction::ToggleProvider {
                 provider: forms.provider,
+            }
+        }
+        "set_floating_z_order" => {
+            form_label(ui, language.text("Floating card"));
+            Dropdown::from_id_salt("helper-z-order")
+                .width(ui.available_width())
+                .selected_text(forms.z_order.clone())
+                .show_ui(ui, |ui| {
+                    for mode in ["normal", "top", "desktop"] {
+                        dropdown_selectable_value(
+                            ui,
+                            &mut forms.z_order,
+                            mode.to_string(),
+                            mode.to_string(),
+                        );
+                    }
+                });
+            ContextMenuAction::SetFloatingZOrder {
+                mode: forms.z_order.clone(),
             }
         }
         "set_language" => {

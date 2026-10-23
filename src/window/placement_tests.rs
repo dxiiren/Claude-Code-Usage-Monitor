@@ -613,3 +613,9 @@ fn can_redock_at_tray(free_space: i32, width: i32) -> bool {
     };
     occupancy.can_restore(widget, 20)
 }
+
+#[test]
+fn a_locked_widget_never_starts_a_drag() {
+    assert!(positioning::drag_allowed(false));
+    assert!(!positioning::drag_allowed(true));
+}

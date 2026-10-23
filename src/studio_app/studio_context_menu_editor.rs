@@ -322,6 +322,10 @@ pub(super) fn context_menu_action_script(action: &ContextMenuAction) -> String {
             format!("toggle_provider({})", provider.descriptor().key)
         }
         ContextMenuAction::ToggleStartup => "toggle_startup()".into(),
+        ContextMenuAction::ToggleLockPosition => "toggle_lock_position()".into(),
+        ContextMenuAction::SetFloatingZOrder { mode } => {
+            format!("set_floating_z_order({})", string_arg(mode))
+        }
         ContextMenuAction::ToggleWidget => "toggle_widget()".into(),
         ContextMenuAction::LegacyResetPosition => String::new(),
         ContextMenuAction::SetLanguage { language } => {
@@ -348,6 +352,10 @@ pub(super) fn parse_context_menu_action_script(script: &str) -> Result<ContextMe
         ("open_dashboard", ContextMenuAction::OpenDashboard),
         ("refresh", ContextMenuAction::Refresh),
         ("toggle_startup", ContextMenuAction::ToggleStartup),
+        (
+            "toggle_lock_position",
+            ContextMenuAction::ToggleLockPosition,
+        ),
         ("toggle_widget", ContextMenuAction::ToggleWidget),
         ("check_for_updates", ContextMenuAction::CheckForUpdates),
         ("exit", ContextMenuAction::Exit),
@@ -397,6 +405,13 @@ pub(super) fn parse_context_menu_action_script(script: &str) -> Result<ContextMe
         let provider = ContextMenuProvider::from_key(&key)
             .ok_or_else(|| format!("Unknown provider: {key}"))?;
         return Ok(ContextMenuAction::ToggleProvider { provider });
+    }
+    if call_arg("set_floating_z_order").is_some() {
+        let mode = string_arg("set_floating_z_order")?;
+        if crate::app_settings::FloatingZOrder::from_key(&mode).is_none() {
+            return Err("Choose normal, top or desktop".into());
+        }
+        return Ok(ContextMenuAction::SetFloatingZOrder { mode });
     }
     if call_arg("set_language").is_some() {
         return Ok(ContextMenuAction::SetLanguage {

@@ -66,6 +66,12 @@ pub struct SettingsFile {
     /// the widget counts down towards a limit rather than up from zero.
     #[serde(default)]
     pub usage_countdown: bool,
+    /// Pin the widget where it is: dragging is ignored while this is on.
+    #[serde(default)]
+    pub lock_position: bool,
+    /// Stacking of the floating card: normal, always on top (default) or pinned to the desktop.
+    #[serde(default)]
+    pub floating_z_order: FloatingZOrder,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_theme_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,6 +89,36 @@ pub struct SettingsFile {
     /// Bearer token for `remote_server_url`. Never logged.
     #[serde(default, skip_serializing_if = "crate::remote::SecretToken::is_empty")]
     pub remote_server_token: crate::remote::SecretToken,
+}
+
+/// Where the floating card sits in the window stack.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FloatingZOrder {
+    /// An ordinary window: other windows can cover it.
+    Normal,
+    /// Pinned to the desktop, behind every window and still shown after Win+D.
+    Desktop,
+    /// Always above other windows (the long-standing behaviour).
+    #[default]
+    #[serde(other)]
+    Top,
+}
+
+impl FloatingZOrder {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Top => "top",
+            Self::Desktop => "desktop",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        [Self::Normal, Self::Top, Self::Desktop]
+            .into_iter()
+            .find(|mode| mode.key().eq_ignore_ascii_case(key.trim()))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +165,8 @@ impl Default for SettingsFile {
             show_grok: false,
             custom_theme_enabled: true,
             usage_countdown: false,
+            lock_position: false,
+            floating_z_order: FloatingZOrder::default(),
             active_theme_path: None,
             dashboard_width: None,
             dashboard_height: None,
@@ -577,6 +615,71 @@ mod tests {
         let mut settings = SettingsFile::default();
         assert!(!settings.toggle_provider(ProviderId::Claude));
         assert_eq!(settings.enabled_providers(), ProviderSet::default());
+    }
+
+    #[test]
+    fn lock_position_defaults_off_and_the_saved_position_round_trips() {
+        let settings = SettingsFile::default();
+        assert!(!settings.lock_position);
+        assert!(
+            !decode_settings(r#"{"poll_interval_ms":900000}"#)
+                .unwrap()
+                .lock_position
+        );
+
+        let mut locked = decode_settings(r#"{"lock_position":true}"#).unwrap();
+        assert!(locked.lock_position);
+        locked.placement_override = Some(PlacementOverride {
+            nest: "floating".into(),
+            monitor_index: 1,
+            screen_x: 2096,
+            screen_y: 552,
+            tray_offset: 0,
+            floating_host: None,
+        });
+        let json = settings_json(&locked);
+        assert_eq!(json["lock_position"], true);
+        let restored = decode_settings(&json.to_string()).unwrap();
+        assert!(restored.lock_position);
+        assert_eq!(restored.placement_override, locked.placement_override);
+    }
+
+    #[test]
+    fn floating_z_order_defaults_to_top_and_round_trips() {
+        assert_eq!(
+            SettingsFile::default().floating_z_order,
+            FloatingZOrder::Top
+        );
+        assert_eq!(
+            decode_settings(r#"{"poll_interval_ms":900000}"#)
+                .unwrap()
+                .floating_z_order,
+            FloatingZOrder::Top
+        );
+        for mode in [
+            FloatingZOrder::Normal,
+            FloatingZOrder::Top,
+            FloatingZOrder::Desktop,
+        ] {
+            let settings = SettingsFile {
+                floating_z_order: mode,
+                ..SettingsFile::default()
+            };
+            let json = settings_json(&settings);
+            assert_eq!(json["floating_z_order"], mode.key());
+            assert_eq!(
+                decode_settings(&json.to_string()).unwrap().floating_z_order,
+                mode
+            );
+            assert_eq!(FloatingZOrder::from_key(mode.key()), Some(mode));
+        }
+        assert_eq!(FloatingZOrder::from_key("sideways"), None);
+        assert_eq!(
+            decode_settings(r#"{"floating_z_order":"sideways"}"#)
+                .unwrap()
+                .floating_z_order,
+            FloatingZOrder::Top
+        );
     }
 
     #[test]
