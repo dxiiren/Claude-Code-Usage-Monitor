@@ -28,6 +28,57 @@ pub(super) fn release_drag_capture_with(
     released
 }
 
+/// What a drag needs to know about the screen. Monitors and taskbars do not
+/// change while the button is down, so they are read once at the start of the drag
+/// instead of on every mouse move.
+#[derive(Default)]
+struct DragGeometry {
+    monitors: Vec<native_interop::DisplayMonitor>,
+    taskbars: Vec<native_interop::TaskbarWindow>,
+}
+
+thread_local! {
+    static DRAG_GEOMETRY: std::cell::RefCell<Option<DragGeometry>> = const { std::cell::RefCell::new(None) };
+}
+
+fn drag_geometry<R>(read: impl FnOnce(&DragGeometry) -> R) -> R {
+    DRAG_GEOMETRY.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        let geometry = cell.get_or_insert_with(|| DragGeometry {
+            monitors: native_interop::find_monitors(),
+            taskbars: native_interop::find_taskbars(),
+        });
+        read(geometry)
+    })
+}
+
+fn clear_drag_geometry() {
+    DRAG_GEOMETRY.with(|cell| *cell.borrow_mut() = None);
+}
+
+/// Whether a newer mouse move is already queued for this window. Only the newest
+/// position matters, so an older one is dropped instead of moving the window to
+/// a place the pointer has already left.
+fn newer_mouse_move_pending(hwnd: HWND) -> bool {
+    let mut queued = MSG::default();
+    unsafe { PeekMessageW(&mut queued, Some(hwnd), WM_MOUSEMOVE, WM_MOUSEMOVE, PM_NOREMOVE) }
+        .as_bool()
+}
+
+/// The primary surface drawn as the desktop-pinned card. It is a child of the
+/// desktop host and is dragged in place, never turned into a popup.
+fn is_desktop_primary_surface(hwnd: HWND) -> bool {
+    lock_state().as_ref().is_some_and(|s| {
+        s.desktop_hwnds
+            .first()
+            .copied()
+            .flatten()
+            .is_some_and(|window| window.to_hwnd() == hwnd)
+    })
+}
+
+static DRAG_REPORT_PENDING: AtomicBool = AtomicBool::new(false);
+
 /// Main window procedure
 pub(super) unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
@@ -35,9 +86,22 @@ pub(super) unsafe extern "system" fn wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let started = (msg == WM_MOUSEMOVE).then(Instant::now);
+    let result = wnd_proc_inner(hwnd, msg, wparam, lparam);
+    if let Some(started) = started {
+        drag_stats::MOVE_MICROS.fetch_add(started.elapsed().as_micros() as u32, Ordering::Relaxed);
+    }
+    if msg == WM_LBUTTONUP && DRAG_REPORT_PENDING.swap(false, Ordering::AcqRel) {
+        drag_stats::report("drag");
+    }
+    result
+}
+
+unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_NCHITTEST => LRESULT(HTCLIENT as isize),
         WM_PAINT => {
+            drag_stats::bump(&drag_stats::PAINTS);
             let mut ps = PAINTSTRUCT::default();
             let _ = BeginPaint(hwnd, &mut ps);
             let _ = EndPaint(hwnd, &ps);
@@ -202,6 +266,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
         WM_SETCURSOR if set_surface_cursor(hwnd) => LRESULT(1),
         WM_SETCURSOR => DefWindowProcW(hwnd, msg, wparam, lparam),
         WM_LBUTTONDOWN => {
+            drag_stats::reset();
             unsafe {
                 let _ = SetCapture(hwnd);
             }
@@ -225,6 +290,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
+            drag_stats::bump(&drag_stats::MOVES_SEEN);
             let pt = pointer_screen_point(hwnd, lparam);
 
             let (should_start_drag, is_dragging) = {
@@ -259,8 +325,13 @@ pub(super) unsafe extern "system" fn wnd_proc(
                 }
             };
 
+            if is_dragging && !should_start_drag && newer_mouse_move_pending(hwnd) {
+                return LRESULT(0);
+            }
+
             let card_surface = lock_state().as_ref().and_then(|s| s.drag_surface);
-            if card_surface.is_some() && (should_start_drag || is_dragging) {
+            let moves_in_place = card_surface.is_some() || is_desktop_primary_surface(hwnd);
+            if moves_in_place && (should_start_drag || is_dragging) {
                 if should_start_drag {
                     let mut state = lock_state();
                     if let Some(s) = state.as_mut() {
@@ -274,8 +345,9 @@ pub(super) unsafe extern "system" fn wnd_proc(
                 if let Some((start_cursor, start_origin)) = start {
                     let rect = native_interop::get_window_rect_safe(hwnd).unwrap_or_default();
                     let size = (rect.right - rect.left, rect.bottom - rect.top);
-                    let displays = native_interop::find_monitors();
-                    let (_, display) = positioning::monitor_for_point(&displays, pt);
+                    let display = drag_geometry(|geometry| {
+                        positioning::monitor_for_point(&geometry.monitors, pt).1
+                    });
                     // A taskbar copy slides along its own taskbar; a card moves freely
                     // but stays on its display.
                     let docked_axis = lock_state().as_ref().and_then(|s| {
@@ -310,6 +382,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                         if let Ok(parent) = GetParent(hwnd) {
                             let _ = ScreenToClient(parent, &mut place);
                         }
+                        drag_stats::bump(&drag_stats::MOVES_APPLIED);
                         let _ = SetWindowPos(
                             hwnd,
                             None,
@@ -317,7 +390,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                             place.y,
                             0,
                             0,
-                            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+                            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOCOPYBITS,
                         );
                     }
                 }
@@ -371,7 +444,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     let widget_w = frame.content_width;
                     let widget_h = frame.height;
 
-                    let taskbars = native_interop::find_taskbars();
+                    let taskbars = drag_geometry(|geometry| geometry.taskbars.clone());
                     let target_taskbar = taskbars.into_iter().find(|tb| {
                         let tb_rect = tb.rect;
                         let extended = RECT {
@@ -446,6 +519,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     }
 
                     let (final_x, final_y) = snapped_pos.unwrap_or((origin_x, origin_y));
+                    drag_stats::bump(&drag_stats::MOVES_APPLIED);
                     unsafe {
                         let _ = SetWindowPos(
                             hwnd,
@@ -481,6 +555,7 @@ pub(super) unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            clear_drag_geometry();
             let card_surface = lock_state().as_mut().and_then(|s| s.drag_surface.take());
             let released = release_drag_capture_with(
                 || {
@@ -499,6 +574,9 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     let _ = ReleaseCapture();
                 },
             );
+            if released.dragging {
+                DRAG_REPORT_PENDING.store(true, Ordering::Release);
+            }
             let suppressed = {
                 let mut state = lock_state();
                 state.as_mut().is_some_and(|state| {
@@ -683,7 +761,11 @@ pub(super) unsafe extern "system" fn wnd_proc(
                         }
                     }
                     save_state_settings();
-                    positioning::place_floating(hwnd, clamped_x, clamped_y, widget_w, widget_h);
+                    // The desktop-pinned card stays a child of the desktop host:
+                    // render_layered places it from the saved position.
+                    if !is_desktop_primary_surface(hwnd) {
+                        positioning::place_floating(hwnd, clamped_x, clamped_y, widget_w, widget_h);
+                    }
                     render_layered();
                 }
             } else if released.pending {
