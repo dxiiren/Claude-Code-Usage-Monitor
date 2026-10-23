@@ -61,8 +61,16 @@ fn clear_drag_geometry() {
 /// a place the pointer has already left.
 fn newer_mouse_move_pending(hwnd: HWND) -> bool {
     let mut queued = MSG::default();
-    unsafe { PeekMessageW(&mut queued, Some(hwnd), WM_MOUSEMOVE, WM_MOUSEMOVE, PM_NOREMOVE) }
-        .as_bool()
+    unsafe {
+        PeekMessageW(
+            &mut queued,
+            Some(hwnd),
+            WM_MOUSEMOVE,
+            WM_MOUSEMOVE,
+            PM_NOREMOVE,
+        )
+    }
+    .as_bool()
 }
 
 /// The primary surface drawn as the desktop-pinned card. It is a child of the
@@ -86,8 +94,10 @@ fn finish_lost_drag(hwnd: HWND) -> LRESULT {
         .as_ref()
         .map(|s| s.drag_start_origin)
         .unwrap_or_default();
-    let client = LPARAM((((cursor.y - origin.y) as i16 as u16 as isize) << 16)
-        | ((cursor.x - origin.x) as i16 as u16 as isize));
+    let client = LPARAM(
+        (((cursor.y - origin.y) as i16 as u16 as isize) << 16)
+            | ((cursor.x - origin.x) as i16 as u16 as isize),
+    );
     unsafe { wnd_proc_inner(hwnd, WM_LBUTTONUP, WPARAM(0), client) }
 }
 
@@ -108,16 +118,25 @@ thread_local! {
     static CARD_PLAN: std::cell::RefCell<Option<CardDragPlan>> = const { std::cell::RefCell::new(None) };
 }
 
-fn build_card_drag_plan(hwnd: HWND, pt: POINT, card_surface: Option<usize>) -> Option<CardDragPlan> {
+fn build_card_drag_plan(
+    hwnd: HWND,
+    pt: POINT,
+    card_surface: Option<usize>,
+) -> Option<CardDragPlan> {
     let (start_cursor, start_origin) = lock_state()
         .as_ref()
         .map(|s| (s.drag_start_cursor, s.drag_start_origin))?;
     let rect = native_interop::get_window_rect_safe(hwnd).unwrap_or_default();
-    let display = drag_geometry(|geometry| positioning::monitor_for_point(&geometry.monitors, pt).1);
+    let display =
+        drag_geometry(|geometry| positioning::monitor_for_point(&geometry.monitors, pt).1);
     let docked_horizontal = lock_state().as_ref().and_then(|s| {
         let theme = effective_theme_from_state(s)?;
         let surface = theme.surfaces.get(card_surface?)?;
-        (surface.placement.nest.resolve(surface.placement.reference.region) == SurfaceNest::Taskbar)
+        (surface
+            .placement
+            .nest
+            .resolve(surface.placement.reference.region)
+            == SurfaceNest::Taskbar)
             .then(|| taskbar_is_horizontal(surface.placement.reference.display))
     });
     let mut parent_origin = POINT::default();
@@ -166,6 +185,29 @@ fn is_card_window(hwnd: HWND) -> bool {
         .is_some_and(|index| index > 0)
 }
 
+/// Shows the diagonal resize arrow while the pointer is on a card's bottom-right grip.
+fn card_resize_cursor(hwnd: HWND) -> bool {
+    if lock_state().as_ref().is_none_or(|s| s.lock_position) || !is_card_window(hwnd) {
+        return false;
+    }
+    let mut point = POINT::default();
+    let mut client = RECT::default();
+    unsafe {
+        if GetCursorPos(&mut point).is_err() || GetClientRect(hwnd, &mut client).is_err() {
+            return false;
+        }
+    }
+    let mut mapped = [point];
+    unsafe { MapWindowPoints(None, Some(hwnd), &mut mapped) };
+    if mapped[0].x < client.right - RESIZE_GRIP || mapped[0].y < client.bottom - RESIZE_GRIP {
+        return false;
+    }
+    unsafe {
+        SetCursor(Some(LoadCursorW(None, IDC_SIZENWSE).unwrap_or_default()));
+    }
+    true
+}
+
 fn begin_card_resize(hwnd: HWND, lparam: LPARAM) -> bool {
     if lock_state().as_ref().is_none_or(|s| s.lock_position) || !is_card_window(hwnd) {
         return false;
@@ -203,8 +245,8 @@ fn card_resize_to_cursor() {
     let mut cursor = POINT::default();
     let _ = unsafe { GetCursorPos(&mut cursor) };
     let width = (resize.start_width + cursor.x - resize.start_x).max(1);
-    let percent = (resize.start_percent as f64 * width as f64 / resize.start_width as f64).round()
-        as u32;
+    let percent =
+        (resize.start_percent as f64 * width as f64 / resize.start_width as f64).round() as u32;
     let percent = percent.clamp(
         app_settings::CARD_SCALE_MIN_PERCENT,
         app_settings::CARD_SCALE_MAX_PERCENT,
@@ -426,6 +468,7 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
             schedule_auto_update_check(hwnd);
             LRESULT(0)
         }
+        WM_SETCURSOR if card_resize_cursor(hwnd) => LRESULT(1),
         WM_SETCURSOR if set_surface_cursor(hwnd) => LRESULT(1),
         WM_SETCURSOR => DefWindowProcW(hwnd, msg, wparam, lparam),
         WM_LBUTTONDOWN => {
@@ -532,8 +575,14 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                         y: plan.start_origin.y + pt.y - plan.start_cursor.y,
                     };
                     let origin = match plan.docked_horizontal {
-                        Some(true) => POINT { x: wanted.x, y: plan.start_origin.y },
-                        Some(false) => POINT { x: plan.start_origin.x, y: wanted.y },
+                        Some(true) => POINT {
+                            x: wanted.x,
+                            y: plan.start_origin.y,
+                        },
+                        Some(false) => POINT {
+                            x: plan.start_origin.x,
+                            y: wanted.y,
+                        },
                         None => positioning::clamp_card_origin(wanted, plan.size, plan.display),
                     };
                     let place = POINT {
@@ -542,7 +591,10 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                     };
                     drag_stats::bump(&drag_stats::MOVES_APPLIED);
                     drag_stats::trace(|| {
-                        format!("swp drag-in-place hwnd={hwnd:?} to=({},{})", place.x, place.y)
+                        format!(
+                            "swp drag-in-place hwnd={hwnd:?} to=({},{})",
+                            place.x, place.y
+                        )
                     });
                     unsafe {
                         let _ = SetWindowPos(
@@ -729,8 +781,13 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                 return LRESULT(0);
             }
             drag_stats::trace(|| {
-                let start = lock_state().as_ref().map(|s| (s.drag_start_origin, s.drag_surface));
-                format!("release: start_origin_surface={start:?} rect={:?}", native_interop::get_window_rect_safe(hwnd).map(|r| (r.left, r.top)))
+                let start = lock_state()
+                    .as_ref()
+                    .map(|s| (s.drag_start_origin, s.drag_surface));
+                format!(
+                    "release: start_origin_surface={start:?} rect={:?}",
+                    native_interop::get_window_rect_safe(hwnd).map(|r| (r.left, r.top))
+                )
             });
             clear_drag_geometry();
             CARD_PLAN.with(|cell| *cell.borrow_mut() = None);
@@ -983,7 +1040,20 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                 return LRESULT(0);
             }
 
-            if action == 1 && !s.auto_ejected && s.embedded {
+            if action == 2 {
+                let plans = strip_fit_plans(s);
+                let ejected = s.auto_ejected;
+                drop(state);
+                for (display, fit) in plans {
+                    strip_fit::store(display, fit);
+                }
+                diagnose::log("taskbar collision: strip resized to the free gap");
+                if !ejected {
+                    sync_custom_mirrors();
+                    position_at_taskbar();
+                    render_layered();
+                }
+            } else if action == 1 && !s.auto_ejected && s.embedded {
                 s.auto_ejected_host = floating_host_for_state(s);
                 s.auto_ejected = true;
                 let widget_rect = native_interop::get_window_rect_safe(hwnd).unwrap_or_default();
