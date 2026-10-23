@@ -72,6 +72,10 @@ pub enum ContextMenuAction {
         mode: String,
     },
     ToggleWidget,
+    /// Show or hide every taskbar-docked window (all displays).
+    ToggleTaskbarWindow,
+    /// Show or hide the floating or desktop card.
+    ToggleMainWindow,
     /// Accepted only so menus saved by older versions can be loaded and
     /// cleaned up. New menus cannot create or execute this legacy action.
     #[serde(rename = "reset_position")]
@@ -331,6 +335,8 @@ pub fn rendered_label(
         "Providers" => language.text("Providers"),
         "Check for updates" => language.text("Check for updates"),
         "Show widget" => language.text("Show widget"),
+        "Show taskbar window" => language.text("Show taskbar window"),
+        "Show main window" => language.text("Show main window"),
         "Manage accounts" => language.text("Manage accounts"),
         _ => label,
     };
@@ -510,7 +516,16 @@ pub fn classic_context_menu() -> ContextMenuDocument {
             frequency,
             providers,
             settings,
-            ContextMenuItem::action("toggle-widget", "Show widget", Action::ToggleWidget),
+            ContextMenuItem::action(
+                "toggle-taskbar-window",
+                "Show taskbar window",
+                Action::ToggleTaskbarWindow,
+            ),
+            ContextMenuItem::action(
+                "toggle-main-window",
+                "Show main window",
+                Action::ToggleMainWindow,
+            ),
             ContextMenuItem::action("open-dashboard", "Open Dashboard", Action::OpenDashboard),
             manage_accounts_item(),
             ContextMenuItem::separator("root-separator"),
@@ -763,15 +778,18 @@ mod tests {
         assert!(serde_json::to_string(&menu)
             .unwrap()
             .contains("provider-grok"));
-        assert!(menu.items.iter().any(|item| {
-            item.id == "toggle-widget"
-                && matches!(
-                    &item.kind,
-                    ContextMenuItemKind::Action {
-                        action: ContextMenuAction::ToggleWidget
-                    }
-                )
-        }));
+        for (id, wanted) in [
+            (
+                "toggle-taskbar-window",
+                ContextMenuAction::ToggleTaskbarWindow,
+            ),
+            ("toggle-main-window", ContextMenuAction::ToggleMainWindow),
+        ] {
+            assert!(menu.items.iter().any(|item| {
+                item.id == id
+                    && matches!(&item.kind, ContextMenuItemKind::Action { action } if *action == wanted)
+            }));
+        }
         assert!(!serde_json::to_string(&menu)
             .unwrap()
             .contains("reset_position"));

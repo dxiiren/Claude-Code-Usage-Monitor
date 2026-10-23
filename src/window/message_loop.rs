@@ -731,6 +731,20 @@ pub(super) unsafe extern "system" fn wnd_proc(
                     }
                     save_state_settings();
                 }
+                IDM_SHOW_TASKBAR_WINDOW | IDM_SHOW_MAIN_WINDOW => {
+                    {
+                        let mut state = lock_state();
+                        if let Some(s) = state.as_mut() {
+                            if id == IDM_SHOW_TASKBAR_WINDOW {
+                                s.show_taskbar_window = !s.show_taskbar_window;
+                            } else {
+                                s.show_main_window = !s.show_main_window;
+                            }
+                        }
+                    }
+                    save_state_settings();
+                    render_layered();
+                }
                 IDM_Z_NORMAL | IDM_Z_TOP | IDM_Z_DESKTOP => {
                     positioning::set_floating_z(match id {
                         IDM_Z_NORMAL => app_settings::FloatingZOrder::Normal,

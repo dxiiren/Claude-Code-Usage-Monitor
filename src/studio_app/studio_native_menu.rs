@@ -575,6 +575,8 @@ pub(super) fn context_menu_preview_action_checked(
         ContextMenuAction::ToggleProvider { provider } => settings.provider_enabled(*provider),
         ContextMenuAction::ToggleStartup => startup_enabled,
         ContextMenuAction::ToggleLockPosition => settings.lock_position,
+        ContextMenuAction::ToggleTaskbarWindow => settings.show_taskbar_window,
+        ContextMenuAction::ToggleMainWindow => settings.show_main_window,
         ContextMenuAction::SetFloatingZOrder { mode } => {
             crate::app_settings::FloatingZOrder::from_key(mode) == Some(settings.floating_z_order)
         }
