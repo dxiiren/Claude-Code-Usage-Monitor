@@ -32,6 +32,8 @@ pub struct HubSource {
     pub kind: String,
     pub tokens_today: Option<u64>,
     pub tokens_7d: Option<u64>,
+    /// The compact tile value the source asks for (Qoder: `6.5k left`); wins over the derived one.
+    pub label: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -54,6 +56,7 @@ struct Raw {
     kind: String,
     tokens_today: Option<u64>,
     tokens_7d: Option<u64>,
+    short: Option<String>,
 }
 
 fn theme_safe(id: &str) -> String {
@@ -67,6 +70,9 @@ impl HubSource {
     /// The one-line value for a compact tile: the percentage, else up/down,
     /// else the first word of the text (`818k` of `818k today`).
     pub fn short(&self) -> String {
+        if let Some(label) = &self.label {
+            return label.clone();
+        }
         let status = if self.idle {
             Some("idle")
         } else {
@@ -147,6 +153,7 @@ pub fn group_by_kind(sources: &[HubSource]) -> Vec<HubSource> {
             };
             tile.idle = !any_up && members.iter().any(|m| m.idle);
             tile.percent = None;
+            tile.label = None;
             let mut name = group.clone();
             name[..1].make_ascii_uppercase();
             tile.name = name;
@@ -214,6 +221,7 @@ pub fn parse(json: &str) -> Result<Vec<HubSource>, String> {
             kind: theme_safe(&raw.kind),
             tokens_today: raw.tokens_today,
             tokens_7d: raw.tokens_7d,
+            label: raw.short.filter(|s| !s.trim().is_empty()).map(|s| s.chars().take(16).collect()),
             id,
         });
     }
@@ -347,6 +355,19 @@ mod tests {
         assert_eq!(sources[1].percent, None, "no invented percentage");
         assert_eq!(sources[2].percent, Some(100.0));
         assert_eq!(sources[2].name, "over");
+    }
+
+    #[test]
+    fn qoder_tile_shows_credits_left_not_percent() {
+        let json = r#"{"sources":[
+            {"id":"qoder","name":"Qoder","short":"6.5k left","percent":49.2,"text":"6.5k credits left\n49.2% used - resets 28 Nov"},
+            {"id":"nol","name":"Qoder2","short":"—","text":"credits left unknown"},
+            {"id":"plain","percent":12}]}"#;
+        let s = parse(json).unwrap();
+        assert_eq!(s[0].short(), "6.5k left");
+        assert_eq!(s[0].percent, Some(49.2), "the bar keeps its percent");
+        assert_eq!(s[1].short(), "\u{2014}", "missing credits show a dash, never 0");
+        assert_eq!(s[2].short(), "12%", "no label: the old derived value");
     }
 
     #[test]
