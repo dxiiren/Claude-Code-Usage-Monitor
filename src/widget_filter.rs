@@ -13,7 +13,10 @@ use crate::theme_engine::SurfaceNest;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct View {
-    /// Keys such as `claude.work`, `codex.main` or `hub.qoder` that are unticked.
+    /// Keys such as `claude.work`, `codex.main` or `hub.qoder` whose tick differs
+    /// from the default: accounts are on by default, so these are the unticked
+    /// ones; Agent Hub providers are off by default on the taskbar strip (it has
+    /// little room) and on everywhere else, so on the strip these are the ticked ones.
     pub hidden: BTreeSet<String>,
     pub show_5h: bool,
     pub show_7d: bool,
@@ -30,9 +33,15 @@ impl Default for View {
 }
 
 impl View {
-    pub fn is_shown(&self, key: &str) -> bool {
-        !self.hidden.contains(key)
+    fn is_shown(&self, default_on: bool, key: &str) -> bool {
+        default_on != self.hidden.contains(key)
     }
+}
+
+/// Is `key` ticked by default in this view? Only Agent Hub providers on the
+/// taskbar strip start unticked.
+fn default_on(nest: SurfaceNest, key: &str) -> bool {
+    !(nest == SurfaceNest::Taskbar && key.starts_with("hub."))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,7 +81,7 @@ impl WidgetFilter {
     }
 
     pub fn is_shown(&self, nest: SurfaceNest, key: &str) -> bool {
-        self.view(nest).is_shown(key)
+        self.view(nest).is_shown(default_on(nest, key), key)
     }
 
     pub fn toggle_account(&mut self, nest: SurfaceNest, key: &str) {
@@ -88,6 +97,86 @@ impl WidgetFilter {
             Row::FiveHour => view.show_5h = !view.show_5h,
             Row::SevenDay => view.show_7d = !view.show_7d,
         }
+    }
+}
+
+/// A menu action names the view it edits with a prefix: `taskbar:` or `card:`
+/// (`taskbar:claude.work`, `card:hub.*`, `taskbar:5h`). Without a prefix it
+/// edits the view that was right-clicked.
+pub fn split_target(spec: &str) -> (Option<SurfaceNest>, &str) {
+    if let Some(rest) = spec.strip_prefix("taskbar:") {
+        (Some(SurfaceNest::Taskbar), rest)
+    } else if let Some(rest) = spec.strip_prefix("card:") {
+        (Some(SurfaceNest::Floating), rest)
+    } else {
+        (None, spec)
+    }
+}
+
+/// Logical width the taskbar strip can hold before the shell would move it
+/// off the taskbar (the owner's strip holds six 112 px account tiles).
+pub const TASKBAR_BUDGET: u32 = 672;
+/// Width of one account tile in the compact taskbar theme.
+pub const ACCOUNT_TILE_W: u32 = 112;
+pub const HUB_FULL_W: u32 = 156;
+pub const HUB_COMPACT_W: u32 = 78;
+/// The "+N" tile that stands for the providers that did not fit.
+pub const HUB_OVERFLOW_W: u32 = 40;
+/// Tiles per row on the floating card; more wrap to a further row.
+pub const CARD_PER_ROW: u32 = 6;
+
+/// How the ticked Agent Hub providers are laid out in one view. Themes read it
+/// as `hub.layout.*`, `hub.slotN.x/row` and `hub.overflow.*`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HubLayout {
+    pub tile_w: u32,
+    /// One value line instead of two: the strip ran out of room.
+    pub compact: bool,
+    /// Providers drawn (the first ones).
+    pub fit: u32,
+    /// Providers folded into the "+N" tile.
+    pub overflow: u32,
+    pub rows: u32,
+    pub per_row: u32,
+    /// Width of the widest hub row in px, including the "+N" tile.
+    pub width: u32,
+}
+
+/// `accounts_w` is the px the account tiles already take on the strip.
+/// The card wraps at six per row; the strip is one row and falls back to
+/// compact tiles, then to a "+N" tile, so nothing is ever clipped.
+pub fn hub_layout(nest: SurfaceNest, hub_shown: u32, accounts_w: u32) -> HubLayout {
+    if hub_shown == 0 {
+        return HubLayout::default();
+    }
+    if nest != SurfaceNest::Taskbar {
+        return HubLayout {
+            tile_w: HUB_FULL_W,
+            compact: false,
+            fit: hub_shown,
+            overflow: 0,
+            rows: hub_shown.div_ceil(CARD_PER_ROW),
+            per_row: CARD_PER_ROW,
+            width: hub_shown.min(CARD_PER_ROW) * HUB_FULL_W,
+        };
+    }
+    let room = TASKBAR_BUDGET.saturating_sub(accounts_w);
+    let layout = |tile_w, compact, fit: u32, overflow: u32| HubLayout {
+        tile_w,
+        compact,
+        fit,
+        overflow,
+        rows: 1,
+        per_row: hub_shown,
+        width: fit * tile_w + if overflow > 0 { HUB_OVERFLOW_W } else { 0 },
+    };
+    if hub_shown * HUB_FULL_W <= room {
+        layout(HUB_FULL_W, false, hub_shown, 0)
+    } else if hub_shown * HUB_COMPACT_W <= room {
+        layout(HUB_COMPACT_W, true, hub_shown, 0)
+    } else {
+        let fit = (room.saturating_sub(HUB_OVERFLOW_W) / HUB_COMPACT_W).min(hub_shown - 1);
+        layout(HUB_COMPACT_W, true, fit, hub_shown - fit)
     }
 }
 
@@ -119,6 +208,107 @@ mod tests {
         let partial: WidgetFilter = serde_json::from_str(r#"{"card":{"show_7d":false}}"#).unwrap();
         assert!(partial.card.show_5h && !partial.card.show_7d);
         assert!(partial.taskbar.show_7d && partial.taskbar.hidden.is_empty());
+    }
+
+    #[test]
+    fn menu_targets_name_the_view_with_a_prefix() {
+        assert_eq!(
+            split_target("taskbar:5h"),
+            (Some(SurfaceNest::Taskbar), "5h")
+        );
+        assert_eq!(
+            split_target("card:hub.*"),
+            (Some(SurfaceNest::Floating), "hub.*")
+        );
+        assert_eq!(split_target("claude.work"), (None, "claude.work"));
+    }
+
+    #[test]
+    fn hub_providers_start_off_on_the_strip_and_on_on_the_card() {
+        let mut filter = WidgetFilter::default();
+        assert!(!filter.is_shown(SurfaceNest::Taskbar, "hub.qoder"));
+        assert!(filter.is_shown(SurfaceNest::Floating, "hub.qoder"));
+        assert!(filter.is_shown(SurfaceNest::Taskbar, "claude.work"));
+        filter.toggle_account(SurfaceNest::Taskbar, "hub.qoder");
+        filter.toggle_account(SurfaceNest::Floating, "hub.codex");
+        assert!(
+            filter.is_shown(SurfaceNest::Taskbar, "hub.qoder"),
+            "ticked on the strip"
+        );
+        assert!(
+            !filter.is_shown(SurfaceNest::Floating, "hub.codex"),
+            "unticked on the card"
+        );
+        assert!(
+            filter.is_shown(SurfaceNest::Floating, "hub.qoder"),
+            "views are separate"
+        );
+        let json = serde_json::to_string(&filter).unwrap();
+        assert_eq!(serde_json::from_str::<WidgetFilter>(&json).unwrap(), filter);
+        filter.toggle_account(SurfaceNest::Taskbar, "hub.qoder");
+        filter.toggle_account(SurfaceNest::Floating, "hub.codex");
+        assert!(filter.is_default());
+    }
+
+    #[test]
+    fn card_layout_wraps_at_six_per_row_and_keeps_full_tiles() {
+        assert_eq!(
+            hub_layout(SurfaceNest::Floating, 0, 0),
+            HubLayout::default()
+        );
+        let one = hub_layout(SurfaceNest::Floating, 4, 0);
+        assert_eq!(
+            (one.rows, one.fit, one.overflow, one.compact, one.width),
+            (1, 4, 0, false, 4 * 156)
+        );
+        let two = hub_layout(SurfaceNest::Floating, 7, 0);
+        assert_eq!(
+            (two.rows, two.per_row, two.fit, two.width),
+            (2, 6, 7, 6 * 156)
+        );
+    }
+
+    #[test]
+    fn strip_layout_falls_back_full_then_compact_then_plus_n_and_never_exceeds_the_budget() {
+        // Room for 3 full tiles after 3 accounts (672 - 336 = 336 -> 2 full fit, 4 compact fit).
+        let full = hub_layout(SurfaceNest::Taskbar, 2, 336);
+        assert_eq!(
+            (full.tile_w, full.compact, full.fit, full.overflow),
+            (156, false, 2, 0)
+        );
+        let compact = hub_layout(SurfaceNest::Taskbar, 4, 336);
+        assert_eq!(
+            (
+                compact.tile_w,
+                compact.compact,
+                compact.fit,
+                compact.overflow
+            ),
+            (78, true, 4, 0)
+        );
+        let plus = hub_layout(SurfaceNest::Taskbar, 7, 336);
+        assert_eq!((plus.fit, plus.overflow, plus.compact), (3, 4, true));
+        for accounts in 0..=7u32 {
+            for hub in 0..=12u32 {
+                let l = hub_layout(SurfaceNest::Taskbar, hub, accounts * ACCOUNT_TILE_W);
+                assert_eq!(
+                    l.fit + l.overflow,
+                    hub,
+                    "every provider is drawn or counted"
+                );
+                let room = TASKBAR_BUDGET.saturating_sub(accounts * ACCOUNT_TILE_W);
+                if l.fit > 0 {
+                    assert!(
+                        l.width <= room,
+                        "{accounts} accounts, {hub} hub: {} > {room}",
+                        l.width
+                    );
+                }
+            }
+        }
+        // Accounts alone fill the strip: only the "+N" tile is left, never a clipped tile.
+        let none_fit = hub_layout(SurfaceNest::Taskbar, 3, 672);
+        assert_eq!((none_fit.fit, none_fit.overflow), (0, 3));
     }
 
     #[test]

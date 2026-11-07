@@ -119,11 +119,13 @@ specific instructions.
 - **Settings:** the widget reads `%APPDATA%\ClaudeCodeUsageMonitor\settings.json` at start. It does NOT
   watch the file: after editing it, restart the widget, or post window message `0x8005` (WM_APP+5,
   "settings updated") to the widget window class `ClaudeCodeUsageMonitor` (a child of the taskbar). Keys you will touch: `widget` (`taskbar` and `card`, each with
-  `hidden`, `show_5h`, `show_7d`), `agent_hub_command`, `active_theme_path`. Accounts: `accounts.db` in the
+  `hidden`, `show_5h`, `show_7d`; for `hub.*` keys `hidden` means "differs from the default", the default being off on the strip and on elsewhere), `agent_hub_command`, `active_theme_path`. Accounts: `accounts.db` in the
   same folder (managed by the Account Manager, never edit by hand). Themes: `...\themes\*.json`.
-- **Code map:** `src/widget_filter.rs` (the account / 5h / 7d filter), `src/agent_hub.rs` (optional
-  hub entries), `src/theme_engine.rs` (`from_usage_filtered` builds the `accounts.*`, `view.*`,
-  `hub.*` theme variables), `src/context_menu.rs` + `src/window/window_context_menu.rs` (the
+- **Code map:** `src/widget_filter.rs` (the account / 5h / 7d filter per view, and `hub_layout`: card
+  wraps at 6 per row, strip goes full -> compact -> "+N" inside a 672 px budget), `src/agent_hub.rs`
+  (hub providers parsed from `agent_hub_command`), `src/theme_engine.rs` (`from_usage_filtered` builds
+  the `accounts.*`, `view.*`, `hub.<id>.*`, generic `hub.slotN.*`, `hub.layout.*`, `hub.overflow.*`
+  theme variables; `expand_repeats` turns a child with `"repeat": N` into N copies, `@n` = the index), `src/context_menu.rs` + `src/window/window_context_menu.rs` (the
   right-click menu), `src/localization/locales/*.toml` (every menu label needs all 14 languages),
   `web/` (Account Manager, SvelteKit), `kit/` (PowerShell install and run helpers).
 - **Build and test:** `cargo test` (Rust), `cargo build --release` (exe in `target/release`),
@@ -138,3 +140,12 @@ specific instructions.
   trailer lines.
 - **Adding a menu label:** add it to `src/localization/locales/en.toml` and to every other locale
   file next to `"Manage accounts"`; a test fails if one language is missing or left in English.
+
+## Agent Hub providers (widget): how to extend
+
+- The hub side is `plugins/usage-otel/bin/agent_hub_widget.py` in the agent-hub repo: it prints one
+  source per configured provider of any kind. A new provider needs no widget change.
+- Menu actions name their view with a prefix: `toggle_account("taskbar:hub.*")`,
+  `toggle_account("card:claude.work")`, `toggle_row("taskbar:7d")` (no prefix = the view that was
+  right-clicked). Add a label to all 14 `src/localization/locales/*.toml`.
+- Tests to run after touching this: `cargo test widget_filter`, `cargo test hub`, `cargo test context_menu`.

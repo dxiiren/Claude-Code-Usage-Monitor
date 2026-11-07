@@ -2742,10 +2742,21 @@ fn widget_filter_variables_follow_the_unticked_accounts_and_rows() {
     let mut filter = WidgetFilter::default();
     filter.toggle_account(SurfaceNest::Taskbar, "claude.work");
     filter.toggle_row(SurfaceNest::Taskbar, Row::FiveHour);
-    let taskbar =
-        DataContext::from_usage_filtered(Some(&data), &canvas, ThemeRuntime::default(), &filter, &[]);
-    assert_eq!(evaluate("accounts.claude.work.shown", &taskbar).unwrap(), 0.0);
-    assert_eq!(evaluate("accounts.claude.home.shown", &taskbar).unwrap(), 1.0);
+    let taskbar = DataContext::from_usage_filtered(
+        Some(&data),
+        &canvas,
+        ThemeRuntime::default(),
+        &filter,
+        &[],
+    );
+    assert_eq!(
+        evaluate("accounts.claude.work.shown", &taskbar).unwrap(),
+        0.0
+    );
+    assert_eq!(
+        evaluate("accounts.claude.home.shown", &taskbar).unwrap(),
+        1.0
+    );
     assert_eq!(evaluate("accounts.shown_count", &taskbar).unwrap(), 1.0);
     assert_eq!(evaluate("view.show_5h", &taskbar).unwrap(), 0.0);
     assert_eq!(evaluate("view.show_7d", &taskbar).unwrap(), 1.0);
@@ -2766,11 +2777,9 @@ fn widget_filter_variables_follow_the_unticked_accounts_and_rows() {
     assert_eq!(evaluate("accounts.shown_count", &empty).unwrap(), 0.0);
 }
 
-#[test]
-fn agent_hub_entries_are_theme_variables_and_absent_ones_read_as_hidden() {
+fn hub_fixture() -> Vec<crate::agent_hub::HubSource> {
     use crate::agent_hub::HubSource;
-    use crate::widget_filter::WidgetFilter;
-    let hub = [
+    vec![
         HubSource {
             id: "qoder".into(),
             name: "Qoder".into(),
@@ -2785,26 +2794,53 @@ fn agent_hub_entries_are_theme_variables_and_absent_ones_read_as_hidden() {
             percent: None,
             up: Some(true),
         },
-    ];
-    let mut filter = WidgetFilter::default();
-    filter.toggle_account(SurfaceNest::Taskbar, "hub.qwen_122");
-    let context = DataContext::from_usage_filtered(
+        HubSource {
+            id: "codex".into(),
+            name: "codex".into(),
+            text: "818k today\n6.8M in 7 days".into(),
+            percent: None,
+            up: None,
+        },
+    ]
+}
+
+fn hub_context(
+    filter: &crate::widget_filter::WidgetFilter,
+    nest: SurfaceNest,
+    hub: &[crate::agent_hub::HubSource],
+) -> DataContext {
+    DataContext::from_usage_filtered(
         None,
         &Canvas::default(),
-        ThemeRuntime::default(),
-        &filter,
-        &hub,
-    );
-    assert_eq!(evaluate("hub.qoder.shown", &context).unwrap(), 1.0);
-    assert_eq!(evaluate("hub.qoder.percent", &context).unwrap(), 49.2);
-    assert_eq!(evaluate("hub.qoder.has_up", &context).unwrap(), 0.0);
-    assert_eq!(evaluate("hub.qwen_122.shown", &context).unwrap(), 0.0);
-    assert_eq!(evaluate("hub.qwen_122.up", &context).unwrap(), 1.0);
-    assert_eq!(evaluate("hub.qwen_122.has_percent", &context).unwrap(), 0.0);
-    assert_eq!(evaluate("hub.shown_count", &context).unwrap(), 1.0);
-    assert_eq!(context.get_string("hub.qoder.line1"), Some("49% used"));
-    assert_eq!(context.get_string("hub.qoder.line2"), Some("6k left"));
-    assert_eq!(context.get_string("hub.qwen_122.line2"), Some(""));
+        ThemeRuntime::default().with_nest(nest),
+        filter,
+        hub,
+    )
+}
+
+#[test]
+fn agent_hub_entries_are_theme_variables_and_absent_ones_read_as_hidden() {
+    use crate::widget_filter::WidgetFilter;
+    let hub = hub_fixture();
+    let mut filter = WidgetFilter::default();
+    // On the card every provider is ticked by default; unticking one hides it there only.
+    filter.toggle_account(SurfaceNest::Floating, "hub.qwen_122");
+    let card = hub_context(&filter, SurfaceNest::Floating, &hub);
+    assert_eq!(evaluate("hub.qoder.shown", &card).unwrap(), 1.0);
+    assert_eq!(evaluate("hub.qoder.percent", &card).unwrap(), 49.2);
+    assert_eq!(evaluate("hub.qoder.has_up", &card).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.qwen_122.shown", &card).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.qwen_122.up", &card).unwrap(), 1.0);
+    assert_eq!(evaluate("hub.qwen_122.has_percent", &card).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.shown_count", &card).unwrap(), 2.0);
+    assert_eq!(card.get_string("hub.qoder.line1"), Some("49% used"));
+    assert_eq!(card.get_string("hub.qoder.line2"), Some("6k left"));
+    assert_eq!(card.get_string("hub.qwen_122.line2"), Some(""));
+    assert_eq!(card.get_string("hub.qoder.short"), Some("49%"));
+    // The taskbar strip starts with no hub tile.
+    let strip = hub_context(&WidgetFilter::default(), SurfaceNest::Taskbar, &hub);
+    assert_eq!(evaluate("hub.shown_count", &strip).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.slot1.shown", &strip).unwrap(), 0.0);
     // Not configured: every entry is absent and hidden, nothing else changes.
     let none = DataContext::from_usage(None, &Canvas::default());
     assert_eq!(evaluate("hub.qoder.shown", &none).unwrap(), 0.0);
@@ -2812,4 +2848,114 @@ fn agent_hub_entries_are_theme_variables_and_absent_ones_read_as_hidden() {
     assert_eq!(none.get_string("hub.qoder.line1"), Some(""));
     assert_eq!(evaluate("hub.shown_count", &none).unwrap(), 0.0);
     assert!(evaluate("hub.qoder.typo", &none).is_err());
+}
+
+#[test]
+fn hub_slots_are_generic_in_ticked_order_and_the_card_has_a_second_row() {
+    use crate::agent_hub::HubSource;
+    use crate::widget_filter::WidgetFilter;
+    let mut hub = hub_fixture();
+    // Any provider the hub reports becomes a slot, whatever it is called.
+    for n in 0..5 {
+        hub.push(HubSource {
+            id: format!("custom_{n}"),
+            name: format!("Custom {n}"),
+            text: "x".into(),
+            ..Default::default()
+        });
+    }
+    let mut filter = WidgetFilter::default();
+    filter.toggle_account(SurfaceNest::Floating, "hub.qoder");
+    let card = hub_context(&filter, SurfaceNest::Floating, &hub);
+    // qoder is unticked, so slot 1 is the next provider.
+    assert_eq!(card.get_string("hub.slot1.name"), Some("Qwen .122"));
+    assert_eq!(card.get_string("hub.slot2.name"), Some("codex"));
+    assert_eq!(evaluate("hub.slot1.up", &card).unwrap(), 1.0);
+    assert_eq!(
+        evaluate("hub.slot7.shown", &card).unwrap(),
+        1.0,
+        "7 ticked providers"
+    );
+    assert_eq!(evaluate("hub.slot8.shown", &card).unwrap(), 0.0);
+    assert_eq!(card.get_string("hub.slot8.name"), Some(""));
+    assert_eq!(evaluate("hub.layout.rows", &card).unwrap(), 2.0);
+    assert_eq!(evaluate("hub.layout.per_row", &card).unwrap(), 6.0);
+    assert_eq!(evaluate("hub.slot1.row", &card).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.slot7.row", &card).unwrap(), 1.0);
+    assert_eq!(evaluate("hub.slot7.x", &card).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.slot3.x", &card).unwrap(), 2.0 * 156.0);
+    assert_eq!(evaluate("hub.layout.width", &card).unwrap(), 6.0 * 156.0);
+    assert_eq!(evaluate("hub.overflow.shown", &card).unwrap(), 0.0);
+}
+
+#[test]
+fn taskbar_hub_falls_back_to_compact_tiles_then_a_plus_n_tile() {
+    use crate::widget_filter::WidgetFilter;
+    let mut hub = hub_fixture();
+    for n in 0..6 {
+        hub.push(crate::agent_hub::HubSource {
+            id: format!("p{n}"),
+            name: format!("P{n}"),
+            text: "x".into(),
+            ..Default::default()
+        });
+    }
+    let mut filter = WidgetFilter::default();
+    // Tick 2 providers on the strip: full tiles, no accounts in the way.
+    for id in ["qoder", "codex"] {
+        filter.toggle_account(SurfaceNest::Taskbar, &format!("hub.{id}"));
+    }
+    let two = hub_context(&filter, SurfaceNest::Taskbar, &hub);
+    assert_eq!(evaluate("hub.layout.tile_w", &two).unwrap(), 156.0);
+    assert_eq!(evaluate("hub.layout.compact", &two).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.slot2.x", &two).unwrap(), 156.0);
+    // Tick everything: 9 providers cannot fit even compact, so "+N" appears.
+    for id in ["qwen_122", "p0", "p1", "p2", "p3", "p4", "p5"] {
+        filter.toggle_account(SurfaceNest::Taskbar, &format!("hub.{id}"));
+    }
+    let nine = hub_context(&filter, SurfaceNest::Taskbar, &hub);
+    assert_eq!(evaluate("hub.layout.compact", &nine).unwrap(), 1.0);
+    let fit = evaluate("hub.layout.fit", &nine).unwrap();
+    let overflow = evaluate("hub.layout.overflow", &nine).unwrap();
+    assert_eq!(fit + overflow, 9.0);
+    assert!(overflow > 0.0);
+    assert_eq!(evaluate("hub.overflow.shown", &nine).unwrap(), 1.0);
+    assert_eq!(
+        nine.get_string("hub.overflow.text"),
+        Some(format!("+{overflow}").as_str())
+    );
+    assert_eq!(
+        evaluate(&format!("hub.slot{}.shown", fit as u32), &nine).unwrap(),
+        1.0
+    );
+    assert_eq!(
+        evaluate(&format!("hub.slot{}.shown", fit as u32 + 1), &nine).unwrap(),
+        0.0
+    );
+    assert!(evaluate("hub.layout.width", &nine).unwrap() <= 672.0);
+}
+
+#[test]
+fn a_child_with_repeat_becomes_numbered_copies() {
+    let theme: ThemeDocument = serde_json::from_str(
+        r#"{"id":"t","name":"t","surfaces":[{"id":"main","name":"m","children":[
+            {"id":"t@n","name":"tile @n of @name","repeat":3,"render":"hub.slot@n.shown",
+             "x":"(@n - 1) * 10","content":{"type":"text","template":"{hub.slot@n.name}"}},
+            {"id":"plain","name":"plain"}]}]}"#,
+    )
+    .unwrap();
+    let ids: Vec<_> = theme.surfaces[0]
+        .children
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(ids, ["t1", "t2", "t3", "plain"]);
+    let third = &theme.surfaces[0].children[2];
+    assert_eq!(third.name, "tile 3 of @name", "only a bare @n is the index");
+    assert_eq!(third.render.0, "hub.slot3.shown");
+    assert_eq!(third.x.0, "(3 - 1) * 10");
+    let bad = serde_json::from_str::<ThemeDocument>(
+        r#"{"id":"t","name":"t","surfaces":[{"id":"m","name":"m","children":[{"id":"a","name":"a","repeat":99}]}]}"#,
+    );
+    assert!(bad.is_err());
 }

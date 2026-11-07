@@ -6,7 +6,15 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
 ## [Unreleased]
 
+### Changed
+
+- Agent Hub providers start unticked on the taskbar strip (little room) and ticked on the floating card. In `settings.json` `widget.taskbar.hidden` now lists the `hub.*` entries you ticked; remove old `hub.*` entries from it if the strip shows tiles you did not choose.
+
 ### Added
+
+- Agent Hub providers are generic: every provider the hub reports (any kind: Qwen Code, local llama, Qoder, Codex, Claude, OpenCode, custom) is a tile, with the hub's own label. The right-click menu has **Accounts and rows > Taskbar strip** and **> Floating card**, each with **Accounts**, **Agent Hub providers** (one checkbox each, plus **Open Agent Hub to add a provider**), **Show 5h** and **Show 7d**, so the strip is chosen separately from the card.
+- Layout: the floating card shows accounts on line 1 and Agent Hub providers on line 2 (wrapping after six); the taskbar strip falls back from full tiles to compact tiles to a **+N** tile inside its 672 px budget, so nothing is clipped.
+- Themes: a child object with `"repeat": N` expands into N copies (`@n` in any string becomes 1..N), and `hub.slotN.*`, `hub.layout.*` and `hub.overflow.*` variables let a theme draw hub providers without naming them.
 
 - Choose what the widget shows: **Accounts and rows** in the right-click menu has one checkbox per account and **Show 5h** / **Show 7d**. The taskbar strip and the floating card keep their own choices in `settings.json` (`widget.taskbar` / `widget.card`: `hidden`, `show_5h`, `show_7d`); a file without the key shows everything as before. Themes read `accounts.<provider>.<id>.shown`, `view.show_5h`, `view.show_7d`, `view.rows` and `accounts.shown_count`; the widget shows a hint instead of going blank when everything is unticked.
 - Optional Agent Hub tiles: setting `agent_hub_command` runs a command (at most every 5 minutes, hidden, 25 s limit) that prints JSON for Qoder quota and self-hosted model endpoints; entries appear as `hub.<id>.*` theme variables and as checkboxes in the same menu. Nothing runs when the setting is empty.

@@ -425,7 +425,7 @@ pub(super) fn parse_context_menu_action_script(script: &str) -> Result<ContextMe
     }
     if call_arg("toggle_row").is_some() {
         let row = string_arg("toggle_row")?;
-        if !matches!(row.as_str(), "5h" | "7d") {
+        if !matches!(crate::widget_filter::split_target(&row).1, "5h" | "7d") {
             return Err("Choose 5h or 7d".into());
         }
         return Ok(ContextMenuAction::ToggleRow { row });
@@ -442,7 +442,8 @@ pub(super) fn parse_context_menu_action_script(script: &str) -> Result<ContextMe
             .trim()
             .parse()
             .map_err(|_| "Choose a size from 50 to 300".to_string())?;
-        if !(crate::app_settings::CARD_SCALE_MIN_PERCENT..=crate::app_settings::CARD_SCALE_MAX_PERCENT)
+        if !(crate::app_settings::CARD_SCALE_MIN_PERCENT
+            ..=crate::app_settings::CARD_SCALE_MAX_PERCENT)
             .contains(&percent)
         {
             return Err("Choose a size from 50 to 300".into());

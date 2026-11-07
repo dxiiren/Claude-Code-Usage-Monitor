@@ -66,11 +66,14 @@ pub enum ContextMenuAction {
     },
     ToggleStartup,
     /// Tick or untick one account (`claude.work`) in the widget. The key `*`
-    /// expands to one checkbox per account when the menu opens.
+    /// expands to one checkbox per account when the menu opens, `hub.*` to one
+    /// per Agent Hub provider. A `taskbar:` or `card:` prefix picks the view
+    /// (`taskbar:*`); without it the view that was right-clicked is edited.
     ToggleAccount {
         account: String,
     },
-    /// Show or hide the `5h` or `7d` usage row of the view that was clicked.
+    /// Show or hide the `5h` or `7d` usage row of the view that was clicked
+    /// (or of `taskbar:5h` / `card:7d`).
     ToggleRow {
         row: String,
     },
@@ -287,10 +290,17 @@ fn validate_items(
                     {
                         errors.push(format!("{}.percent must be 50 to 300", item.id));
                     }
-                    ContextMenuAction::ToggleRow { row } if !matches!(row.as_str(), "5h" | "7d") => {
+                    ContextMenuAction::ToggleRow { row }
+                        if !matches!(crate::widget_filter::split_target(row).1, "5h" | "7d") =>
+                    {
                         errors.push(format!("{}.row must be 5h or 7d", item.id));
                     }
-                    ContextMenuAction::ToggleAccount { account } if account.trim().is_empty() => {
+                    ContextMenuAction::ToggleAccount { account }
+                        if crate::widget_filter::split_target(account)
+                            .1
+                            .trim()
+                            .is_empty() =>
+                    {
                         errors.push(format!("{}.account cannot be empty", item.id));
                     }
                     ContextMenuAction::SetLanguage { language } if language.trim().is_empty() => {
@@ -355,29 +365,77 @@ fn manage_accounts_item() -> ContextMenuItem {
     )
 }
 
-/// Accounts (one checkbox each, built when the menu opens) and the 5h / 7d rows.
-fn widget_view_item() -> ContextMenuItem {
+/// One view's choices: accounts and Agent Hub providers (one checkbox each,
+/// built when the menu opens) and the 5h / 7d rows. `view` is `taskbar` or `card`.
+fn widget_view_group(view: &str, id: &str, label: &str) -> ContextMenuItem {
     use ContextMenuAction as Action;
+    ContextMenuItem::submenu(
+        id,
+        label,
+        vec![
+            ContextMenuItem::action(
+                &format!("{id}-accounts"),
+                "Accounts",
+                Action::ToggleAccount {
+                    account: format!("{view}:*"),
+                },
+            ),
+            ContextMenuItem::submenu(
+                &format!("{id}-hub"),
+                "Agent Hub providers",
+                vec![
+                    ContextMenuItem::action(
+                        &format!("{id}-hub-providers"),
+                        "Agent Hub providers",
+                        Action::ToggleAccount {
+                            account: format!("{view}:hub.*"),
+                        },
+                    ),
+                    ContextMenuItem::separator(&format!("{id}-hub-separator")),
+                    ContextMenuItem::action(
+                        &format!("{id}-hub-open"),
+                        "Open Agent Hub to add a provider",
+                        Action::OpenUrl {
+                            url: AGENT_HUB_URL.into(),
+                        },
+                    ),
+                ],
+            ),
+            ContextMenuItem::separator(&format!("{id}-separator")),
+            ContextMenuItem::action(
+                &format!("{id}-show-5h"),
+                "Show 5h",
+                Action::ToggleRow {
+                    row: format!("{view}:5h"),
+                },
+            ),
+            ContextMenuItem::action(
+                &format!("{id}-show-7d"),
+                "Show 7d",
+                Action::ToggleRow {
+                    row: format!("{view}:7d"),
+                },
+            ),
+        ],
+    )
+}
+
+/// Where the local Agent Hub's web UI lives (Settings, Providers adds one).
+pub const AGENT_HUB_URL: &str = "http://127.0.0.1:6767/";
+
+#[cfg(test)]
+pub fn widget_view_item_for_tests() -> ContextMenuItem {
+    widget_view_item()
+}
+
+/// The taskbar strip and the floating card are chosen separately.
+fn widget_view_item() -> ContextMenuItem {
     ContextMenuItem::submenu(
         "widget-view",
         "Accounts and rows",
         vec![
-            ContextMenuItem::action(
-                "widget-accounts",
-                "Accounts",
-                Action::ToggleAccount { account: "*".into() },
-            ),
-            ContextMenuItem::separator("widget-view-separator"),
-            ContextMenuItem::action(
-                "widget-show-5h",
-                "Show 5h",
-                Action::ToggleRow { row: "5h".into() },
-            ),
-            ContextMenuItem::action(
-                "widget-show-7d",
-                "Show 7d",
-                Action::ToggleRow { row: "7d".into() },
-            ),
+            widget_view_group("taskbar", "widget-taskbar", "Taskbar strip"),
+            widget_view_group("card", "widget-card", "Floating card"),
         ],
     )
 }
@@ -1078,14 +1136,23 @@ mod tests {
         let menu = classic_context_menu();
         assert!(menu.validate().is_empty(), "{:?}", menu.validate());
         let json = serde_json::to_string(&menu).unwrap();
-        assert!(json.contains(r#""type":"toggle_account","account":"*""#));
-        assert!(json.contains(r#""type":"toggle_row","row":"5h""#));
-        assert!(json.contains(r#""type":"toggle_row","row":"7d""#));
+        for view in ["taskbar", "card"] {
+            assert!(json.contains(&format!(r#""type":"toggle_account","account":"{view}:*""#)));
+            assert!(json.contains(&format!(
+                r#""type":"toggle_account","account":"{view}:hub.*""#
+            )));
+            assert!(json.contains(&format!(r#""type":"toggle_row","row":"{view}:5h""#)));
+            assert!(json.contains(&format!(r#""type":"toggle_row","row":"{view}:7d""#)));
+        }
+        assert!(json.contains("Open Agent Hub to add a provider"));
+        assert!(json.contains(AGENT_HUB_URL));
         let mut bad = menu.clone();
         bad.items = vec![ContextMenuItem::action(
             "bad",
             "Bad",
-            ContextMenuAction::ToggleRow { row: "30d".into() },
+            ContextMenuAction::ToggleRow {
+                row: "taskbar:30d".into(),
+            },
         )];
         assert!(bad.validate().iter().any(|e| e.contains("5h or 7d")));
     }
