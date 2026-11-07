@@ -106,6 +106,12 @@ pub struct SettingsFile {
     /// Bearer token for `remote_server_url`. Never logged.
     #[serde(default, skip_serializing_if = "crate::remote::SecretToken::is_empty")]
     pub remote_server_token: crate::remote::SecretToken,
+    /// Which accounts and which usage rows (5h / 7d) the widget shows.
+    #[serde(default, skip_serializing_if = "crate::widget_filter::WidgetFilter::is_default")]
+    pub widget: crate::widget_filter::WidgetFilter,
+    /// Command printing the Agent Hub JSON (Qoder quota, Qwen endpoints); empty = off.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent_hub_command: String,
 }
 
 /// Where the floating card sits in the window stack.
@@ -214,6 +220,8 @@ impl Default for SettingsFile {
             surface_offsets: Default::default(),
             remote_server_url: String::new(),
             remote_server_token: Default::default(),
+            widget: Default::default(),
+            agent_hub_command: String::new(),
         }
     }
 }
@@ -662,6 +670,22 @@ mod tests {
         let mut settings = SettingsFile::default();
         assert!(!settings.toggle_provider(ProviderId::Claude));
         assert_eq!(settings.enabled_providers(), ProviderSet::default());
+    }
+
+    #[test]
+    fn widget_filter_defaults_and_round_trips_in_settings() {
+        let old = decode_settings(r#"{"lock_position":true}"#).unwrap();
+        assert!(old.widget.is_default());
+        let json = serde_json::to_value(&old).unwrap();
+        assert!(json.get("widget").is_none(), "defaults are not written");
+        let mut settings = decode_settings("{}").unwrap();
+        settings.widget.toggle_account(crate::theme_engine::SurfaceNest::Taskbar, "claude.work");
+        settings.widget.card.show_7d = false;
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored = decode_settings(&json).unwrap();
+        assert_eq!(restored.widget, settings.widget);
+        assert!(old.agent_hub_command.is_empty());
+        assert!(!json.contains("agent_hub_command"));
     }
 
     #[test]

@@ -1452,6 +1452,26 @@ impl DataContext {
         canvas: &Canvas,
         runtime: ThemeRuntime,
     ) -> Self {
+        Self::from_usage_filtered(
+            data,
+            canvas,
+            runtime,
+            &crate::widget_filter::current(),
+            &crate::agent_hub::current(),
+        )
+    }
+
+    /// Same as `from_usage_with_runtime` with an explicit widget filter.
+    /// Themes read `accounts.<provider>.<id>.shown` (1 unless unticked in the
+    /// right-click menu), `view.show_5h`, `view.show_7d`, `view.rows` and
+    /// `accounts.shown_count`, and lay themselves out from them.
+    pub fn from_usage_filtered(
+        data: Option<&AppUsageData>,
+        canvas: &Canvas,
+        runtime: ThemeRuntime,
+        filter: &crate::widget_filter::WidgetFilter,
+        hub: &[crate::agent_hub::HubSource],
+    ) -> Self {
         let mut context = Self::default();
         context.insert("canvas.width", canvas.width as f64);
         context.insert("canvas.height", canvas.height as f64);
@@ -1518,6 +1538,37 @@ impl DataContext {
             );
         }
         context.insert("display.countdown", runtime.countdown as u8 as f64);
+        let view = filter.view(runtime.surface_nest);
+        let nest = runtime.surface_nest;
+        context.insert("view.show_5h", view.show_5h as u8 as f64);
+        context.insert("view.show_7d", view.show_7d as u8 as f64);
+        context.insert(
+            "view.rows",
+            (view.show_5h as u8 + view.show_7d as u8) as f64,
+        );
+        let mut hub_shown = 0u32;
+        for source in hub {
+            let key = format!("hub.{}", source.id);
+            let shown = filter.is_shown(nest, &key);
+            hub_shown += shown as u32;
+            context.insert(&format!("{key}.shown"), shown as u8 as f64);
+            context.insert(&format!("{key}.present"), 1.0);
+            context.insert_string(&format!("{key}.name"), &source.name);
+            context.insert_string(&format!("{key}.text"), &source.text);
+            let (line1, line2) = source.text.split_once('\n').unwrap_or((&source.text, ""));
+            context.insert_string(&format!("{key}.line1"), line1);
+            context.insert_string(&format!("{key}.line2"), line2);
+            context.insert(&format!("{key}.percent"), source.percent.unwrap_or(0.0));
+            context.insert(
+                &format!("{key}.has_percent"),
+                source.percent.is_some() as u8 as f64,
+            );
+            context.insert(&format!("{key}.up"), (source.up == Some(true)) as u8 as f64);
+            context.insert(&format!("{key}.has_up"), source.up.is_some() as u8 as f64);
+        }
+        context.insert("hub.shown_count", hub_shown as f64);
+        let mut shown_count = 0u32;
+        context.insert("accounts.shown_count", 0.0);
         if let Some(data) = data {
             for account in &data.accounts {
                 let key = format!(
@@ -1525,6 +1576,13 @@ impl DataContext {
                     account.provider.descriptor().key,
                     account.profile.id
                 );
+                let shown = filter.is_shown(nest, &format!(
+                    "{}.{}",
+                    account.provider.descriptor().key,
+                    account.profile.id
+                ));
+                shown_count += shown as u32;
+                context.insert(&format!("{key}.shown"), shown as u8 as f64);
                 context.insert_string(&format!("{key}.name"), &account.profile.name);
                 context.insert(&format!("{key}.selected"), account.selected as u8 as f64);
                 context.insert(
@@ -1546,6 +1604,7 @@ impl DataContext {
                     runtime.countdown,
                 );
             }
+            context.insert("accounts.shown_count", shown_count as f64);
             for descriptor in PROVIDER_DESCRIPTORS {
                 let selected = data
                     .accounts
@@ -1789,6 +1848,11 @@ impl DataContext {
             .copied()
             .or_else(|| self.limit_default(&name))
             .or_else(|| {
+                Self::hub_default_field(&name)
+                    .filter(|field| !matches!(*field, "name" | "text" | "line1" | "line2"))
+                    .map(|_| 0.0)
+            })
+            .or_else(|| {
                 let key = Self::account_default_key(&name)?;
                 let value = *Self::account_defaults().values.get(&key)?;
                 Some(
@@ -1814,12 +1878,40 @@ impl DataContext {
             .map(String::as_str)
             .or_else(|| Self::limit_string_default(&name))
             .or_else(|| {
+                Self::hub_default_field(&name)
+                    .filter(|field| matches!(*field, "name" | "text" | "line1" | "line2"))
+                    .map(|_| "")
+            })
+            .or_else(|| {
                 let key = Self::account_default_key(&name)?;
                 Self::account_defaults()
                     .strings
                     .get(&key)
                     .map(String::as_str)
             })
+    }
+
+    /// `hub.<id>.<field>` for an Agent Hub entry that is not (or no longer)
+    /// reported: every field reads as absent, so its tile is simply hidden.
+    fn hub_default_field(name: &str) -> Option<&'static str> {
+        let (id, field) = name.strip_prefix("hub.")?.split_once('.')?;
+        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return None;
+        }
+        [
+            "shown",
+            "present",
+            "percent",
+            "has_percent",
+            "up",
+            "has_up",
+            "name",
+            "text",
+            "line1",
+            "line2",
+        ]
+        .into_iter()
+        .find(|known| *known == field)
     }
 
     // Account IDs are dynamic, but their fields use the same schema as provider
@@ -1845,6 +1937,7 @@ impl DataContext {
             context.insert("account.selected", 0.0);
             context.insert("account.has_error", 0.0);
             context.insert("account.login_required", 0.0);
+            context.insert("account.shown", 1.0);
             context
         })
     }

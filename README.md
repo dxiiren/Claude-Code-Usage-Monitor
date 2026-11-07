@@ -20,6 +20,33 @@ server alike.
 > page. The full guide lives in [`.docs/`](.docs/README.md). The upstream widget guide is kept
 > in [`docs/upstream-README.md`](docs/upstream-README.md).
 
+## Quickstart (3 steps)
+
+1. **Install.** Open PowerShell and paste one line. It installs what is missing, the widget and
+   the Account Manager, and starts both with Windows (about 5 minutes):
+
+   ```powershell
+   irm https://raw.githubusercontent.com/dxiiren/Claude-Code-Usage-Monitor/main/install.ps1 | iex
+   ```
+
+   The widget appears in the taskbar, next to the system tray.
+
+   ![The widget in the taskbar: one tile per account with its 5-hour and 7-day usage](docs/images/widget-taskbar.png)
+
+2. **Sign in an account.** Open **Claude Accounts** from the Start menu (or
+   <http://127.0.0.1:47291>), type a name, press **Start**, sign in in the window that opens and
+   paste the code. Codex accounts: pick **Codex** first, the sign-in finishes by itself.
+
+   ![The Accounts page with an Add an account box and one card per account](docs/images/accounts-light.png)
+
+3. **Pick what shows.** Right-click the widget, then **Accounts and rows**: tick the accounts you
+   want, and tick **Show 5h** / **Show 7d**. It is saved at once and kept across restarts.
+   Details: [Choose what the widget shows](#choose-what-the-widget-shows).
+
+   ![The same widget showing two accounts, 5h and 7d](docs/images/widget-two-accounts.png)
+
+Something wrong? Jump to [Troubleshooting](#troubleshooting).
+
 ## Screenshots
 
 | Desktop widget | Accounts page | On a phone |
@@ -91,6 +118,82 @@ PC, `/data/accounts/<id>` on a server); your own `~/.codex` is never used, chang
 On a server, Codex usage is polled by the server itself, like Claude's.
 
 ---
+
+## Choose what the widget shows
+
+Right-click the widget (taskbar strip or floating card), then **Accounts and rows**:
+
+- **Accounts** has one checkbox per account (Claude and Codex), plus the Agent Hub entries when
+  they are switched on (below). Untick an account and it disappears and the others close up.
+- **Show 5h** and **Show 7d** switch the 5-hour and the 7-day bar on or off.
+- The taskbar strip and the floating card remember their own choices (accounts and rows): the
+  strip only has room for about six tiles, so keep it short and let the card show everything.
+  The menu changes the one you right-clicked.
+- Untick everything and the widget shows a hint ("Nothing shown - right-click to pick") instead
+  of going blank. Tick something and it is back.
+
+The menu looks like this (a normal Windows menu, so no screenshot is kept here):
+
+```text
+Accounts and rows >  [x] BA
+                     [x] KV
+                     [ ] ETL        <- unticked: gone from the widget
+                     ----------------
+                     [x] Show 5h
+                     [x] Show 7d
+```
+
+One account, 5-hour row only, then nothing shown:
+
+![One account with only the 5h row](docs/images/widget-one-account-5h.png)
+![The hint shown when everything is unticked](docs/images/widget-nothing-shown.png)
+
+It is saved in `%APPDATA%\ClaudeCodeUsageMonitor\settings.json` under `widget` by the menu and applied at once. If you edit the file by hand, restart the widget to apply it:
+
+```json
+"widget": {
+  "taskbar": { "hidden": ["claude.work", "hub.qwen_110"], "show_5h": true, "show_7d": false },
+  "card": { "hidden": [], "show_5h": true, "show_7d": true }
+}
+```
+
+`hidden` lists the unticked entries as `claude.<id>`, `codex.<id>` or `hub.<id>`. A file without
+`widget` shows everything, exactly as before.
+
+**Custom themes.** The built-in menu and the settings work with any theme, but a theme only
+rearranges itself if it reads the new variables: `accounts.<claude|codex>.<id>.shown` (1 or 0),
+`view.show_5h`, `view.show_7d`, `view.rows`, `accounts.shown_count` and `hub.<id>.shown`. Multiply a
+layer's `render` by them and shift `x` by the `shown` flags of the tiles before it; the theme in
+`web/src/lib/server/theme.ts` and [`docs/account-manager-contract.md`](docs/account-manager-contract.md)
+show the pattern.
+
+### Show Agent Hub (Qoder, Qwen)
+
+Optional. If you use a coding-agent hub that already tracks Qoder and self-hosted Qwen models,
+the widget can show its numbers as extra tiles:
+
+- **Qoder:** monthly quota percent, credits used and left, reset date.
+- **Each Qwen endpoint:** up or down, tokens today and over the last 7 days. There is no
+  percentage, because those servers have no quota.
+
+Turn it on by giving the widget a command that prints the hub's JSON, in `settings.json`:
+
+```json
+"agent_hub_command": "python \"C:\\path\\to\\agent-hub\\plugins\\usage-otel\\bin\\agent_hub_widget.py\""
+```
+
+The command is run at most every 5 minutes, hidden, with a 25 second limit. It only reads what the
+hub has already saved (the last Qoder quota and the token log) and, for Qwen, asks each endpoint
+`/v1/models` at most once per 5 minutes. With no `agent_hub_command` nothing runs and nothing
+changes. Restart the widget after editing the file. The entries then show up as checkboxes under
+**Accounts and rows** like any account. Hub tiles are wide (about 150 px each) and the taskbar strip
+has room for about six tiles in all, so on the strip untick a few accounts before ticking the hub
+entries; the floating card has no such limit. If the strip does not fit, the widget moves to the
+floating card by itself.
+![The strip with one account and the Qoder and two Qwen tiles](docs/images/widget-agent-hub.png)
+
+The JSON format is `{"version":1,"sources":[{"id","name","text","percent"?,"up"?}]}`; `text` has
+two lines separated by a line break. Any program that prints it works.
 
 ## Pick a setup path
 
@@ -229,6 +332,27 @@ Run `just` with no arguments to list every recipe. The ones you'll use daily:
 Every recipe is in [`.docs/05-reference/commands.md`](.docs/05-reference/commands.md).
 
 ## Troubleshooting
+
+### The widget is not in the taskbar
+
+Start it again from PowerShell:
+
+```powershell
+Start-Process "$env:LOCALAPPDATA\Programs\ClaudeUsageMonitor\claude-code-usage-monitor.exe"
+```
+
+If it is missing after a reboot, run `just startup-on` (it re-adds the Windows startup entry).
+A widget that is running but not visible may be set to "Show taskbar window" off: right-click is
+not available then, so edit `settings.json` and set `"show_taskbar_window": true`.
+
+### The widget or the Usage page says 401 or "log in again"
+
+The login of that account expired. Open the Accounts page and press **Re-login** on its card.
+
+### The widget shows "Nothing shown"
+
+Every account or both rows are unticked. Right-click, **Accounts and rows**, and tick something
+(or delete the `widget` block in `settings.json`).
 
 ### "The Claude Code login already stopped: Login successful"
 

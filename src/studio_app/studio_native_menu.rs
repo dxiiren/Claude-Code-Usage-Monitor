@@ -574,6 +574,14 @@ pub(super) fn context_menu_preview_action_checked(
         }
         ContextMenuAction::ToggleProvider { provider } => settings.provider_enabled(*provider),
         ContextMenuAction::ToggleStartup => startup_enabled,
+        ContextMenuAction::ToggleAccount { account } => {
+            crate::widget_filter::current().is_shown(SurfaceNest::Taskbar, account)
+        }
+        ContextMenuAction::ToggleRow { row } => {
+            let filter = crate::widget_filter::current();
+            let view = filter.view(SurfaceNest::Taskbar);
+            if row == "7d" { view.show_7d } else { view.show_5h }
+        }
         ContextMenuAction::ToggleLockPosition => settings.lock_position,
         ContextMenuAction::ToggleTaskbarWindow => settings.show_taskbar_window,
         ContextMenuAction::ToggleMainWindow => settings.show_main_window,

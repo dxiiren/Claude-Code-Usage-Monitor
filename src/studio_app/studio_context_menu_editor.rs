@@ -322,6 +322,10 @@ pub(super) fn context_menu_action_script(action: &ContextMenuAction) -> String {
             format!("toggle_provider({})", provider.descriptor().key)
         }
         ContextMenuAction::ToggleStartup => "toggle_startup()".into(),
+        ContextMenuAction::ToggleAccount { account } => {
+            format!("toggle_account({})", string_arg(account))
+        }
+        ContextMenuAction::ToggleRow { row } => format!("toggle_row({})", string_arg(row)),
         ContextMenuAction::ToggleLockPosition => "toggle_lock_position()".into(),
         ContextMenuAction::SetFloatingZOrder { mode } => {
             format!("set_floating_z_order({})", string_arg(mode))
@@ -413,6 +417,18 @@ pub(super) fn parse_context_menu_action_script(script: &str) -> Result<ContextMe
         let provider = ContextMenuProvider::from_key(&key)
             .ok_or_else(|| format!("Unknown provider: {key}"))?;
         return Ok(ContextMenuAction::ToggleProvider { provider });
+    }
+    if call_arg("toggle_account").is_some() {
+        return Ok(ContextMenuAction::ToggleAccount {
+            account: string_arg("toggle_account")?,
+        });
+    }
+    if call_arg("toggle_row").is_some() {
+        let row = string_arg("toggle_row")?;
+        if !matches!(row.as_str(), "5h" | "7d") {
+            return Err("Choose 5h or 7d".into());
+        }
+        return Ok(ContextMenuAction::ToggleRow { row });
     }
     if call_arg("set_floating_z_order").is_some() {
         let mode = string_arg("set_floating_z_order")?;

@@ -8,6 +8,8 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
 ### Added
 
+- Choose what the widget shows: **Accounts and rows** in the right-click menu has one checkbox per account and **Show 5h** / **Show 7d**. The taskbar strip and the floating card keep their own choices in `settings.json` (`widget.taskbar` / `widget.card`: `hidden`, `show_5h`, `show_7d`); a file without the key shows everything as before. Themes read `accounts.<provider>.<id>.shown`, `view.show_5h`, `view.show_7d`, `view.rows` and `accounts.shown_count`; the widget shows a hint instead of going blank when everything is unticked.
+- Optional Agent Hub tiles: setting `agent_hub_command` runs a command (at most every 5 minutes, hidden, 25 s limit) that prints JSON for Qoder quota and self-hosted model endpoints; entries appear as `hub.<id>.*` theme variables and as checkboxes in the same menu. Nothing runs when the setting is empty.
 - "Show taskbar window" and "Show main window" replace the single "Show widget" item in the right-click menu. They are independent switches (settings `show_taskbar_window` and `show_main_window`, both on by default): the first shows or hides every taskbar-docked window, the second the floating or desktop card, which keeps following the floating stacking and lock position settings.
 - Setting `show_on_all_taskbars` (off by default): repeats the taskbar window on the taskbar of every connected display and follows displays being plugged in or removed without a restart. `just widget-compact left grid all yes` turns it on for the compact strip and adds a main-window card.
 

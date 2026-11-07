@@ -65,6 +65,15 @@ pub enum ContextMenuAction {
         provider: ContextMenuProvider,
     },
     ToggleStartup,
+    /// Tick or untick one account (`claude.work`) in the widget. The key `*`
+    /// expands to one checkbox per account when the menu opens.
+    ToggleAccount {
+        account: String,
+    },
+    /// Show or hide the `5h` or `7d` usage row of the view that was clicked.
+    ToggleRow {
+        row: String,
+    },
     /// Pin the widget: it can no longer be dragged away from where it is.
     ToggleLockPosition,
     /// Stacking of the floating card: `normal`, `top` or `desktop`.
@@ -278,6 +287,12 @@ fn validate_items(
                     {
                         errors.push(format!("{}.percent must be 50 to 300", item.id));
                     }
+                    ContextMenuAction::ToggleRow { row } if !matches!(row.as_str(), "5h" | "7d") => {
+                        errors.push(format!("{}.row must be 5h or 7d", item.id));
+                    }
+                    ContextMenuAction::ToggleAccount { account } if account.trim().is_empty() => {
+                        errors.push(format!("{}.account cannot be empty", item.id));
+                    }
                     ContextMenuAction::SetLanguage { language } if language.trim().is_empty() => {
                         errors.push(format!("{}.language cannot be empty", item.id));
                     }
@@ -337,6 +352,33 @@ fn manage_accounts_item() -> ContextMenuItem {
         ContextMenuAction::OpenUrl {
             url: crate::remote::manager_url(),
         },
+    )
+}
+
+/// Accounts (one checkbox each, built when the menu opens) and the 5h / 7d rows.
+fn widget_view_item() -> ContextMenuItem {
+    use ContextMenuAction as Action;
+    ContextMenuItem::submenu(
+        "widget-view",
+        "Accounts and rows",
+        vec![
+            ContextMenuItem::action(
+                "widget-accounts",
+                "Accounts",
+                Action::ToggleAccount { account: "*".into() },
+            ),
+            ContextMenuItem::separator("widget-view-separator"),
+            ContextMenuItem::action(
+                "widget-show-5h",
+                "Show 5h",
+                Action::ToggleRow { row: "5h".into() },
+            ),
+            ContextMenuItem::action(
+                "widget-show-7d",
+                "Show 7d",
+                Action::ToggleRow { row: "7d".into() },
+            ),
+        ],
     )
 }
 
@@ -513,6 +555,8 @@ pub fn classic_context_menu() -> ContextMenuDocument {
         ],
     );
 
+    let widget_view = widget_view_item();
+
     ContextMenuDocument {
         schema_version: CONTEXT_MENU_SCHEMA_VERSION,
         id: CLASSIC_CONTEXT_MENU_ID.into(),
@@ -521,6 +565,7 @@ pub fn classic_context_menu() -> ContextMenuDocument {
             ContextMenuItem::action("refresh", "Refresh", Action::Refresh),
             frequency,
             providers,
+            widget_view,
             settings,
             ContextMenuItem::action(
                 "toggle-taskbar-window",
@@ -551,6 +596,7 @@ pub fn dashboard_v2_context_menu() -> ContextMenuDocument {
                 "Open Dashboard",
                 ContextMenuAction::OpenDashboard,
             ),
+            widget_view_item(),
             manage_accounts_item(),
             ContextMenuItem::separator("dashboard-separator"),
             ContextMenuItem::action("exit", "Exit", ContextMenuAction::Exit),
@@ -836,6 +882,7 @@ mod tests {
                     "Open Dashboard",
                     ContextMenuAction::OpenDashboard,
                 ),
+                widget_view_item(),
                 ContextMenuItem::action(
                     "manage-accounts",
                     "Manage accounts",
@@ -1024,5 +1071,22 @@ mod tests {
             item.render = Expression(render.into());
             assert_eq!(item.should_render(&context), visible);
         }
+    }
+
+    #[test]
+    fn classic_menu_has_the_account_and_row_toggles_and_validates_them() {
+        let menu = classic_context_menu();
+        assert!(menu.validate().is_empty(), "{:?}", menu.validate());
+        let json = serde_json::to_string(&menu).unwrap();
+        assert!(json.contains(r#""type":"toggle_account","account":"*""#));
+        assert!(json.contains(r#""type":"toggle_row","row":"5h""#));
+        assert!(json.contains(r#""type":"toggle_row","row":"7d""#));
+        let mut bad = menu.clone();
+        bad.items = vec![ContextMenuItem::action(
+            "bad",
+            "Bad",
+            ContextMenuAction::ToggleRow { row: "30d".into() },
+        )];
+        assert!(bad.validate().iter().any(|e| e.contains("5h or 7d")));
     }
 }

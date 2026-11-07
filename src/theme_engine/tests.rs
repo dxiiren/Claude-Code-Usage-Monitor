@@ -2705,3 +2705,111 @@ fn action_values_are_found_around_the_caret() {
     assert_eq!(at(r#"layer_actions("toggle(self, |render)")"#), None);
     assert_eq!(at(r#"layer_actions(|"set(self, x, 1)")"#), None);
 }
+
+#[test]
+fn widget_filter_variables_follow_the_unticked_accounts_and_rows() {
+    use crate::accounts::AccountProfile;
+    use crate::models::AccountUsage;
+    use crate::widget_filter::{Row, WidgetFilter};
+    let mut data = AppUsageData::default();
+    for id in ["work", "home"] {
+        data.accounts.push(AccountUsage {
+            provider: ProviderId::Claude,
+            profile: AccountProfile {
+                id: id.into(),
+                name: id.into(),
+                ..Default::default()
+            },
+            source_signature: "fixture".into(),
+            source_path: None,
+            selected: false,
+            usage: None,
+            error: None,
+        });
+    }
+    let canvas = Canvas::default();
+    let all = DataContext::from_usage_filtered(
+        Some(&data),
+        &canvas,
+        ThemeRuntime::default(),
+        &WidgetFilter::default(),
+        &[],
+    );
+    assert_eq!(evaluate("accounts.claude.work.shown", &all).unwrap(), 1.0);
+    assert_eq!(evaluate("accounts.shown_count", &all).unwrap(), 2.0);
+    assert_eq!(evaluate("view.rows", &all).unwrap(), 2.0);
+
+    let mut filter = WidgetFilter::default();
+    filter.toggle_account(SurfaceNest::Taskbar, "claude.work");
+    filter.toggle_row(SurfaceNest::Taskbar, Row::FiveHour);
+    let taskbar =
+        DataContext::from_usage_filtered(Some(&data), &canvas, ThemeRuntime::default(), &filter, &[]);
+    assert_eq!(evaluate("accounts.claude.work.shown", &taskbar).unwrap(), 0.0);
+    assert_eq!(evaluate("accounts.claude.home.shown", &taskbar).unwrap(), 1.0);
+    assert_eq!(evaluate("accounts.shown_count", &taskbar).unwrap(), 1.0);
+    assert_eq!(evaluate("view.show_5h", &taskbar).unwrap(), 0.0);
+    assert_eq!(evaluate("view.show_7d", &taskbar).unwrap(), 1.0);
+    // The floating card keeps its own accounts and rows.
+    let card = DataContext::from_usage_filtered(
+        Some(&data),
+        &canvas,
+        ThemeRuntime::default().with_nest(SurfaceNest::Floating),
+        &filter,
+        &[],
+    );
+    assert_eq!(evaluate("view.show_5h", &card).unwrap(), 1.0);
+    assert_eq!(evaluate("accounts.claude.work.shown", &card).unwrap(), 1.0);
+    assert_eq!(evaluate("accounts.shown_count", &card).unwrap(), 2.0);
+    // Accounts the widget has not polled yet count as shown; no data defines the names too.
+    let empty = DataContext::from_usage(None, &canvas);
+    assert_eq!(evaluate("accounts.claude.new.shown", &empty).unwrap(), 1.0);
+    assert_eq!(evaluate("accounts.shown_count", &empty).unwrap(), 0.0);
+}
+
+#[test]
+fn agent_hub_entries_are_theme_variables_and_absent_ones_read_as_hidden() {
+    use crate::agent_hub::HubSource;
+    use crate::widget_filter::WidgetFilter;
+    let hub = [
+        HubSource {
+            id: "qoder".into(),
+            name: "Qoder".into(),
+            text: "49% used\n6k left".into(),
+            percent: Some(49.2),
+            up: None,
+        },
+        HubSource {
+            id: "qwen_122".into(),
+            name: "Qwen .122".into(),
+            text: "up | 1k today".into(),
+            percent: None,
+            up: Some(true),
+        },
+    ];
+    let mut filter = WidgetFilter::default();
+    filter.toggle_account(SurfaceNest::Taskbar, "hub.qwen_122");
+    let context = DataContext::from_usage_filtered(
+        None,
+        &Canvas::default(),
+        ThemeRuntime::default(),
+        &filter,
+        &hub,
+    );
+    assert_eq!(evaluate("hub.qoder.shown", &context).unwrap(), 1.0);
+    assert_eq!(evaluate("hub.qoder.percent", &context).unwrap(), 49.2);
+    assert_eq!(evaluate("hub.qoder.has_up", &context).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.qwen_122.shown", &context).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.qwen_122.up", &context).unwrap(), 1.0);
+    assert_eq!(evaluate("hub.qwen_122.has_percent", &context).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.shown_count", &context).unwrap(), 1.0);
+    assert_eq!(context.get_string("hub.qoder.line1"), Some("49% used"));
+    assert_eq!(context.get_string("hub.qoder.line2"), Some("6k left"));
+    assert_eq!(context.get_string("hub.qwen_122.line2"), Some(""));
+    // Not configured: every entry is absent and hidden, nothing else changes.
+    let none = DataContext::from_usage(None, &Canvas::default());
+    assert_eq!(evaluate("hub.qoder.shown", &none).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.qoder.present", &none).unwrap(), 0.0);
+    assert_eq!(none.get_string("hub.qoder.line1"), Some(""));
+    assert_eq!(evaluate("hub.shown_count", &none).unwrap(), 0.0);
+    assert!(evaluate("hub.qoder.typo", &none).is_err());
+}
