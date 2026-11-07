@@ -122,7 +122,7 @@ pub const HUB_FULL_W: u32 = 156;
 pub const HUB_COMPACT_W: u32 = 78;
 /// The "+N" tile that stands for the providers that did not fit.
 pub const HUB_OVERFLOW_W: u32 = 40;
-/// Tiles per row on the floating card; more wrap to a further row.
+/// Most tiles on one card row; more start a further row (the rows are then balanced).
 pub const CARD_PER_ROW: u32 = 6;
 
 /// How the ticked Agent Hub providers are laid out in one view. Themes read it
@@ -150,14 +150,17 @@ pub fn hub_layout(nest: SurfaceNest, hub_shown: u32, accounts_w: u32) -> HubLayo
         return HubLayout::default();
     }
     if nest != SurfaceNest::Taskbar {
+        // Balanced rows (7 -> 4 + 3, never 6 + 1): as few rows as the width needs, then equal ones.
+        let rows = hub_shown.div_ceil(CARD_PER_ROW);
+        let per_row = hub_shown.div_ceil(rows);
         return HubLayout {
             tile_w: HUB_FULL_W,
             compact: false,
             fit: hub_shown,
             overflow: 0,
-            rows: hub_shown.div_ceil(CARD_PER_ROW),
-            per_row: CARD_PER_ROW,
-            width: hub_shown.min(CARD_PER_ROW) * HUB_FULL_W,
+            rows,
+            per_row,
+            width: per_row * HUB_FULL_W,
         };
     }
     let room = TASKBAR_BUDGET.saturating_sub(accounts_w);
@@ -261,11 +264,24 @@ mod tests {
             (one.rows, one.fit, one.overflow, one.compact, one.width),
             (1, 4, 0, false, 4 * 156)
         );
+        let six = hub_layout(SurfaceNest::Floating, 6, 0);
+        assert_eq!((six.rows, six.per_row), (1, 6));
         let two = hub_layout(SurfaceNest::Floating, 7, 0);
         assert_eq!(
             (two.rows, two.per_row, two.fit, two.width),
-            (2, 6, 7, 6 * 156)
+            (2, 4, 7, 4 * 156)
         );
+    }
+
+    #[test]
+    fn card_rows_are_balanced_and_never_leave_a_lone_tile() {
+        for n in 2..=12u32 {
+            let l = hub_layout(SurfaceNest::Floating, n, 0);
+            assert!(l.per_row <= CARD_PER_ROW, "{n}");
+            assert_eq!(l.rows, n.div_ceil(l.per_row), "{n}");
+            let last = n - (l.rows - 1) * l.per_row;
+            assert!(last >= 2, "{n} tiles leave {last} alone on the last row");
+        }
     }
 
     #[test]

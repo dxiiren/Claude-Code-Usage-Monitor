@@ -24,6 +24,8 @@ pub struct HubSource {
     pub text: String,
     pub percent: Option<f64>,
     pub up: Option<bool>,
+    /// Not running now but the hub starts it on demand: neither up nor down.
+    pub idle: bool,
 }
 
 #[derive(Deserialize)]
@@ -41,6 +43,7 @@ struct Raw {
     text: String,
     percent: Option<f64>,
     up: Option<bool>,
+    idle: Option<bool>,
 }
 
 fn theme_safe(id: &str) -> String {
@@ -55,6 +58,7 @@ impl HubSource {
     /// else the first word of the text (`818k` of `818k today`).
     pub fn short(&self) -> String {
         match (self.percent, self.up) {
+            _ if self.idle => "idle".into(),
             (Some(percent), _) => format!("{percent:.0}%"),
             (None, Some(up)) => if up { "up" } else { "down" }.into(),
             _ => self
@@ -102,6 +106,7 @@ pub fn parse(json: &str) -> Result<Vec<HubSource>, String> {
                 .filter(|p| p.is_finite())
                 .map(|p| p.clamp(0.0, 100.0)),
             up: raw.up,
+            idle: raw.idle == Some(true),
             id,
         });
     }

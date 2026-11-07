@@ -1527,6 +1527,23 @@ impl ThemeRuntime {
     }
 }
 
+/// Why an account has no figures to draw, in a word a tile can hold; empty when
+/// every window is reported. Themes show "-" plus this instead of a made-up 0%.
+/// An expired login is not named here: `login_required` already covers it.
+pub(crate) fn account_status(
+    error: Option<crate::poller::PollError>,
+    usage: Option<&crate::models::UsageData>,
+) -> &'static str {
+    use crate::poller::PollError;
+    match (error, usage) {
+        (Some(error), _) if error.is_auth() || error == PollError::NoCredentials => "",
+        (Some(PollError::HttpStatus(429)), _) => "limited",
+        (_, None) => "no data",
+        (_, Some(usage)) if !usage.session.available && !usage.weekly.available => "no data",
+        _ => "",
+    }
+}
+
 impl DataContext {
     pub fn from_usage(data: Option<&AppUsageData>, canvas: &Canvas) -> Self {
         Self::from_usage_with_runtime(data, canvas, ThemeRuntime::default())
@@ -1663,6 +1680,10 @@ impl DataContext {
                     account.error.is_some_and(|error| {
                         error.is_auth() || error == crate::poller::PollError::NoCredentials
                     }) as u8 as f64,
+                );
+                context.insert_string(
+                    &format!("{key}.status"),
+                    account_status(account.error, account.usage.as_ref()),
                 );
                 context.insert_provider(
                     &key,
@@ -1801,6 +1822,7 @@ impl DataContext {
         );
         self.insert(&format!("{key}.up"), (source.up == Some(true)) as u8 as f64);
         self.insert(&format!("{key}.has_up"), source.up.is_some() as u8 as f64);
+        self.insert(&format!("{key}.idle"), source.idle as u8 as f64);
     }
 
     fn insert_provider(
@@ -2051,6 +2073,7 @@ impl DataContext {
             "has_percent",
             "up",
             "has_up",
+            "idle",
             "name",
             "text",
             "line1",
@@ -2090,6 +2113,7 @@ impl DataContext {
             let mut context = Self::default();
             context.insert_provider("account", None, false, false);
             context.insert_string("account.name", "");
+            context.insert_string("account.status", "");
             context.insert("account.selected", 0.0);
             context.insert("account.has_error", 0.0);
             context.insert("account.login_required", 0.0);

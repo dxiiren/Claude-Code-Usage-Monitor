@@ -2786,6 +2786,7 @@ fn hub_fixture() -> Vec<crate::agent_hub::HubSource> {
             text: "49% used\n6k left".into(),
             percent: Some(49.2),
             up: None,
+            ..Default::default()
         },
         HubSource {
             id: "qwen_122".into(),
@@ -2793,6 +2794,7 @@ fn hub_fixture() -> Vec<crate::agent_hub::HubSource> {
             text: "up | 1k today".into(),
             percent: None,
             up: Some(true),
+            ..Default::default()
         },
         HubSource {
             id: "codex".into(),
@@ -2800,6 +2802,7 @@ fn hub_fixture() -> Vec<crate::agent_hub::HubSource> {
             text: "818k today\n6.8M in 7 days".into(),
             percent: None,
             up: None,
+            ..Default::default()
         },
     ]
 }
@@ -2879,12 +2882,16 @@ fn hub_slots_are_generic_in_ticked_order_and_the_card_has_a_second_row() {
     assert_eq!(evaluate("hub.slot8.shown", &card).unwrap(), 0.0);
     assert_eq!(card.get_string("hub.slot8.name"), Some(""));
     assert_eq!(evaluate("hub.layout.rows", &card).unwrap(), 2.0);
-    assert_eq!(evaluate("hub.layout.per_row", &card).unwrap(), 6.0);
+    // 7 tiles balance to 4 + 3, never 6 + 1.
+    assert_eq!(evaluate("hub.layout.per_row", &card).unwrap(), 4.0);
     assert_eq!(evaluate("hub.slot1.row", &card).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.slot4.row", &card).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.slot5.row", &card).unwrap(), 1.0);
+    assert_eq!(evaluate("hub.slot5.x", &card).unwrap(), 0.0);
     assert_eq!(evaluate("hub.slot7.row", &card).unwrap(), 1.0);
-    assert_eq!(evaluate("hub.slot7.x", &card).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.slot7.x", &card).unwrap(), 2.0 * 156.0);
     assert_eq!(evaluate("hub.slot3.x", &card).unwrap(), 2.0 * 156.0);
-    assert_eq!(evaluate("hub.layout.width", &card).unwrap(), 6.0 * 156.0);
+    assert_eq!(evaluate("hub.layout.width", &card).unwrap(), 4.0 * 156.0);
     assert_eq!(evaluate("hub.overflow.shown", &card).unwrap(), 0.0);
 }
 
@@ -2966,7 +2973,86 @@ fn nested_repeats_are_rejected_before_anything_is_cloned() {
         {"id":"a@n","name":"a","repeat":32,"children":[
             {"id":"b@n","name":"b","repeat":32,"children":[{"id":"c","name":"c","repeat":32}]}]}]}]}"#;
     let started = std::time::Instant::now();
-    let error = serde_json::from_str::<ThemeDocument>(nested).unwrap_err().to_string();
+    let error = serde_json::from_str::<ThemeDocument>(nested)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("nested"), "{error}");
     assert!(started.elapsed().as_secs() < 2, "must fail fast");
+}
+
+#[test]
+fn missing_account_data_gets_a_status_word_never_a_silent_zero() {
+    use crate::models::{UsageData, UsageSection};
+    use crate::poller::PollError;
+    let section = |available| UsageSection {
+        available,
+        percentage: 0.0,
+        resets_at: None,
+    };
+    let usage = |s, w| UsageData {
+        session: section(s),
+        weekly: section(w),
+        ..Default::default()
+    };
+    assert_eq!(
+        account_status(Some(PollError::HttpStatus(429)), None),
+        "limited"
+    );
+    assert_eq!(
+        account_status(Some(PollError::NetworkError), None),
+        "no data"
+    );
+    assert_eq!(account_status(None, None), "no data");
+    assert_eq!(account_status(None, Some(&usage(false, false))), "no data");
+    assert_eq!(account_status(None, Some(&usage(false, true))), "");
+    assert_eq!(account_status(None, Some(&usage(true, true))), "");
+    // a dead login is the "re-login" tile's job
+    assert_eq!(account_status(Some(PollError::TokenExpired), None), "");
+    assert_eq!(account_status(Some(PollError::HttpStatus(401)), None), "");
+}
+
+#[test]
+fn an_account_with_no_figures_exposes_unavailable_windows_and_a_reason() {
+    use crate::accounts::AccountProfile;
+    use crate::models::AccountUsage;
+    use crate::poller::PollError;
+    use crate::widget_filter::WidgetFilter;
+    let mut data = AppUsageData::default();
+    data.accounts.push(AccountUsage {
+        provider: ProviderId::Claude,
+        profile: AccountProfile {
+            id: "ba".into(),
+            name: "BA".into(),
+            ..Default::default()
+        },
+        source_signature: "fixture".into(),
+        source_path: None,
+        selected: false,
+        usage: None,
+        error: Some(PollError::HttpStatus(429)),
+    });
+    let context = DataContext::from_usage_filtered(
+        Some(&data),
+        &Canvas::default(),
+        ThemeRuntime::default(),
+        &WidgetFilter::default(),
+        &[],
+    );
+    // The theme draws "-" + the reason when a window is unavailable, never "0%".
+    assert_eq!(
+        evaluate("accounts.claude.ba.five_hour.available", &context).unwrap(),
+        0.0
+    );
+    assert_eq!(
+        evaluate("accounts.claude.ba.weekly.available", &context).unwrap(),
+        0.0
+    );
+    assert_eq!(
+        evaluate("accounts.claude.ba.login_required", &context).unwrap(),
+        0.0
+    );
+    assert_eq!(
+        context.get_string("accounts.claude.ba.status"),
+        Some("limited")
+    );
 }
