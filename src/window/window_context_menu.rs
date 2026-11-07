@@ -122,6 +122,24 @@ unsafe fn append_context_menu_items(
                     PCWSTR::from_raw(label.as_ptr()),
                 );
             }
+            ContextMenuItemKind::Action {
+                action: ContextMenuAction::ToggleAccount { account },
+            } if account == "*" => {
+                // One checkbox per account, built each time the menu opens.
+                let filter = crate::widget_filter::current();
+                let nest = origin_nest(origin);
+                for (key, name) in account_choices() {
+                    let id = 1_000 + actions.len();
+                    let label = native_interop::wide_str(&name);
+                    let flags = if filter.is_shown(nest, &key) {
+                        MF_CHECKED
+                    } else {
+                        MENU_ITEM_FLAGS(0)
+                    };
+                    let _ = AppendMenuW(menu, flags, id, PCWSTR::from_raw(label.as_ptr()));
+                    actions.push(ContextMenuAction::ToggleAccount { account: key });
+                }
+            }
             ContextMenuItemKind::Action { action } => {
                 let id = 1_000 + actions.len();
                 let label = native_interop::wide_str(&context_menu::rendered_label(
@@ -137,10 +155,68 @@ unsafe fn append_context_menu_items(
     }
 }
 
+/// (settings key, label) of every account the widget knows, in theme order.
+fn account_choices() -> Vec<(String, String)> {
+    let hub = crate::agent_hub::current();
+    let state = lock_state();
+    let accounts = state
+        .as_ref()
+        .and_then(|state| state.data.as_ref())
+        .map(|data| data.accounts.as_slice())
+        .unwrap_or_default();
+    accounts
+        .iter()
+        .map(|account| {
+            let key = format!("{}.{}", account.provider.descriptor().key, account.profile.id);
+            let name = if account.provider == ProviderId::Claude {
+                account.profile.name.clone()
+            } else {
+                format!("{} ({})", account.profile.name, account.provider.descriptor().key)
+            };
+            (key, name)
+        })
+        .chain(
+            hub.into_iter()
+                .map(|source| (format!("hub.{}", source.id), source.name)),
+        )
+        .collect()
+}
+
+/// Which view (taskbar strip or floating card) a click came from.
+fn origin_nest(origin: Option<&(usize, String)>) -> SurfaceNest {
+    let state = lock_state();
+    state
+        .as_ref()
+        .and_then(effective_theme_from_state)
+        .and_then(|theme| {
+            theme
+                .surfaces
+                .get(origin.map_or(0, |(index, _)| *index))
+                .map(|surface| surface.placement.nest)
+        })
+        .unwrap_or(SurfaceNest::Taskbar)
+}
+
+fn row_of(row: &str) -> crate::widget_filter::Row {
+    if row == "7d" {
+        crate::widget_filter::Row::SevenDay
+    } else {
+        crate::widget_filter::Row::FiveHour
+    }
+}
+
 pub(super) fn context_menu_action_flags(
     action: &ContextMenuAction,
     origin: Option<&(usize, String)>,
 ) -> MENU_ITEM_FLAGS {
+    let row_checked = match action {
+        ContextMenuAction::ToggleRow { row } => {
+            let filter = crate::widget_filter::current();
+            let view = filter.view(origin_nest(origin));
+            Some(if row == "7d" { view.show_7d } else { view.show_5h })
+        }
+        _ => None,
+    };
     let state = lock_state();
     let Some(state) = state.as_ref() else {
         return MENU_ITEM_FLAGS(0);
@@ -151,6 +227,7 @@ pub(super) fn context_menu_action_flags(
         }
         ContextMenuAction::ToggleProvider { provider } => state.providers.contains(*provider),
         ContextMenuAction::ToggleStartup => is_startup_enabled(),
+        ContextMenuAction::ToggleRow { .. } => row_checked.unwrap_or(true),
         ContextMenuAction::ToggleLockPosition => state.lock_position,
         ContextMenuAction::SetCardSize { percent } => *percent == card_scale_percent(),
         ContextMenuAction::ToggleTaskbarWindow => state.show_taskbar_window,
@@ -306,6 +383,8 @@ pub(super) fn execute_context_menu_action(
         ContextMenuAction::CheckForUpdates => Some(IDM_VERSION_ACTION),
         ContextMenuAction::Exit => Some(2),
         ContextMenuAction::ToggleWidget
+        | ContextMenuAction::ToggleAccount { .. }
+        | ContextMenuAction::ToggleRow { .. }
         | ContextMenuAction::LegacyResetPosition
         | ContextMenuAction::ToggleLayerRender { .. }
         | ContextMenuAction::LayerActions { .. }
@@ -318,6 +397,16 @@ pub(super) fn execute_context_menu_action(
         return;
     }
     match action {
+        ContextMenuAction::ToggleAccount { account } => {
+            let mut filter = crate::widget_filter::current();
+            filter.toggle_account(origin_nest(origin.as_ref()), &account);
+            apply_widget_filter(filter);
+        }
+        ContextMenuAction::ToggleRow { row } => {
+            let mut filter = crate::widget_filter::current();
+            filter.toggle_row(origin_nest(origin.as_ref()), row_of(&row));
+            apply_widget_filter(filter);
+        }
         ContextMenuAction::ToggleWidget => {
             let target = lock_state()
                 .as_ref()
@@ -347,6 +436,15 @@ pub(super) fn execute_context_menu_action(
         }
         _ => {}
     }
+}
+
+/// Store a new filter, save it and redraw (the theme re-lays itself out).
+fn apply_widget_filter(filter: crate::widget_filter::WidgetFilter) {
+    crate::widget_filter::set(filter);
+    save_state_settings();
+    sync_custom_mirrors();
+    position_at_taskbar();
+    render_layered();
 }
 
 #[cfg(test)]

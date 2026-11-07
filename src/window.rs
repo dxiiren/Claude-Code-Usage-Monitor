@@ -1000,6 +1000,7 @@ fn save_state_settings() {
         persisted.placement_override = s.placement_override.clone();
         persisted.surface_offsets = s.surface_offsets.clone();
         persisted.lock_position = s.lock_position;
+        persisted.widget = crate::widget_filter::current();
         persisted.card_scale_percent = card_scale_percent();
         persisted.show_taskbar_window = s.show_taskbar_window;
         persisted.show_on_all_taskbars = s.show_on_all_taskbars;
@@ -2308,6 +2309,8 @@ pub fn run() {
                 usage_countdown: settings.usage_countdown,
                 lock_position: {
                     set_card_scale_percent(settings.card_scale_percent);
+                    crate::widget_filter::set(settings.widget.clone());
+        crate::agent_hub::configure(&settings.agent_hub_command);
                     settings.lock_position
                 },
                 show_taskbar_window: settings.show_taskbar_window,
@@ -3076,6 +3079,20 @@ fn request_remote_check(hwnd: HWND) {
     });
 }
 
+/// Refresh the optional Agent Hub entries when due (self-throttled to 5 min,
+/// run on a worker thread). New entries re-lay the widget out.
+fn request_hub_refresh(hwnd: HWND) {
+    let send_hwnd = SendHwnd::from_hwnd(hwnd);
+    crate::agent_hub::refresh_if_due(move |_| unsafe {
+        let _ = PostMessageW(
+            Some(send_hwnd.to_hwnd()),
+            WM_APP_SETTINGS_UPDATED,
+            WPARAM(0),
+            LPARAM(0),
+        );
+    });
+}
+
 fn post_remote_changed(hwnd: HWND) {
     unsafe {
         let _ = PostMessageW(Some(hwnd), WM_APP_REMOTE_CHANGED, WPARAM(0), LPARAM(0));
@@ -3131,6 +3148,8 @@ fn reload_settings_and_theme(hwnd: HWND, force_poll: bool) {
         state.providers = settings.enabled_providers();
         state.usage_countdown = settings.usage_countdown;
         state.lock_position = settings.lock_position;
+        crate::widget_filter::set(settings.widget.clone());
+        crate::agent_hub::configure(&settings.agent_hub_command);
         set_card_scale_percent(settings.card_scale_percent);
         state.show_taskbar_window = settings.show_taskbar_window;
         state.show_on_all_taskbars = settings.show_on_all_taskbars;

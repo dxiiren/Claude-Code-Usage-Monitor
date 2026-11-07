@@ -113,3 +113,28 @@ specific instructions.
 - Keep edits scoped and prefer existing patterns.
 - Use `rg` for searching when available.
 - Do not revert user changes or unrelated local changes.
+
+## For AI agents: where things live, how to build, what never to commit
+
+- **Settings:** the widget reads `%APPDATA%\ClaudeCodeUsageMonitor\settings.json` at start. It does NOT
+  watch the file: after editing it, restart the widget, or post window message `0x8005` (WM_APP+5,
+  "settings updated") to the widget window class `ClaudeCodeUsageMonitor` (a child of the taskbar). Keys you will touch: `widget` (`taskbar` and `card`, each with
+  `hidden`, `show_5h`, `show_7d`), `agent_hub_command`, `active_theme_path`. Accounts: `accounts.db` in the
+  same folder (managed by the Account Manager, never edit by hand). Themes: `...\themes\*.json`.
+- **Code map:** `src/widget_filter.rs` (the account / 5h / 7d filter), `src/agent_hub.rs` (optional
+  hub entries), `src/theme_engine.rs` (`from_usage_filtered` builds the `accounts.*`, `view.*`,
+  `hub.*` theme variables), `src/context_menu.rs` + `src/window/window_context_menu.rs` (the
+  right-click menu), `src/localization/locales/*.toml` (every menu label needs all 14 languages),
+  `web/` (Account Manager, SvelteKit), `kit/` (PowerShell install and run helpers).
+- **Build and test:** `cargo test` (Rust), `cargo build --release` (exe in `target/release`),
+  `just test` (all suites). Never run `just start` or `just stop` from an agent session that has
+  an ask-list for them; install a new exe by stopping only the widget process id and starting the
+  new file with `Start-Process`. Keep a `.bak` of the exe you replace.
+- **Install on a PC:** back up `%LOCALAPPDATA%\Programs\ClaudeUsageMonitor\claude-code-usage-monitor.exe`,
+  stop that one process, copy the new exe over it, start it, confirm it stays running.
+- **Never commit:** tokens, passwords, `accounts.db`, `settings.json`, real e-mail addresses,
+  hostnames or IP addresses of any private network, or company names. The repo is public: use
+  `example.com` and placeholders. Commit with the default git identity, no co-author or session
+  trailer lines.
+- **Adding a menu label:** add it to `src/localization/locales/en.toml` and to every other locale
+  file next to `"Manage accounts"`; a test fails if one language is missing or left in English.

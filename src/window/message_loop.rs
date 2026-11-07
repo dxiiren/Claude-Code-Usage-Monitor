@@ -371,6 +371,7 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                     sync_theme_window_visibility();
                 }
                 TIMER_ACCOUNTS_DB => {
+                    request_hub_refresh(hwnd);
                     request_accounts_db_check(hwnd);
                 }
                 TIMER_REMOTE_SERVER => {

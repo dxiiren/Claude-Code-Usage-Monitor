@@ -47,6 +47,15 @@ describe('settings.json writer', () => {
 		expect(fs.existsSync(`${settingsFile()}.bak-manager`)).toBe(true);
 	});
 
+	it('keeps the widget filter and the Agent Hub command when accounts change', () => {
+		const widget = { hidden: ['claude.kv', 'hub.qoder'], taskbar: { show_5h: true, show_7d: false } };
+		fs.writeFileSync(settingsFile(), JSON.stringify({ widget, agent_hub_command: 'python hub.py' }), 'utf8');
+		wf.writeSettings([{ id: 'kv', name: 'KV', config_dir: path.join(env.home, '.claude-kv') }]);
+		const s = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
+		expect(s.widget).toEqual(widget);
+		expect(s.agent_hub_command).toBe('python hub.py');
+	});
+
 	it('zero accounts -> empty profiles, selected ""', () => {
 		wf.writeSettings([]);
 		const s = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));

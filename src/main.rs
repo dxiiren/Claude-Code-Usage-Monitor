@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod accounts;
+mod agent_hub;
 mod accounts_db;
 mod app_settings;
 mod context_menu;
@@ -23,6 +24,7 @@ mod theme_package;
 mod tray_icon;
 mod ui;
 mod updater;
+mod widget_filter;
 mod window;
 mod winsqlite;
 
