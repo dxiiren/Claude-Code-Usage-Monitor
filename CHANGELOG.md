@@ -6,6 +6,12 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
 ## [Unreleased]
 
+### Fixed
+
+- A usage window the provider did not report (rate limited, no data) is drawn as a dash plus a short reason instead of "0%". Themes get `accounts.<provider>.<id>.status` ("limited", "no data" or empty) next to the existing `<window>.available`.
+- The floating card balances its Agent Hub rows (7 tiles are 4 + 3, never 6 + 1).
+- An Agent Hub source can report `"idle": true` (not running, starts on demand); it draws "idle" instead of "down" (`hub.<id>.idle`).
+
 ### Changed
 
 - Agent Hub providers start unticked on the taskbar strip (little room) and ticked on the floating card. In `settings.json` `widget.taskbar.hidden` now lists the `hub.*` entries you ticked; remove old `hub.*` entries from it if the strip shows tiles you did not choose.
