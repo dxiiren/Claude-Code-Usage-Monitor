@@ -2959,3 +2959,14 @@ fn a_child_with_repeat_becomes_numbered_copies() {
     );
     assert!(bad.is_err());
 }
+
+#[test]
+fn nested_repeats_are_rejected_before_anything_is_cloned() {
+    let nested = r#"{"id":"t","name":"t","surfaces":[{"id":"m","name":"m","children":[
+        {"id":"a@n","name":"a","repeat":32,"children":[
+            {"id":"b@n","name":"b","repeat":32,"children":[{"id":"c","name":"c","repeat":32}]}]}]}]}"#;
+    let started = std::time::Instant::now();
+    let error = serde_json::from_str::<ThemeDocument>(nested).unwrap_err().to_string();
+    assert!(error.contains("nested"), "{error}");
+    assert!(started.elapsed().as_secs() < 2, "must fail fast");
+}

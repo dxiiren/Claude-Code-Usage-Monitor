@@ -1112,6 +1112,12 @@ where
                     ))
                 })?,
         };
+        // Nested repeats would multiply (32 x 32 x ...): a shared theme file must not be able to do that.
+        if contains_repeat(&value) {
+            return Err(serde::de::Error::custom(
+                "repeat cannot be nested inside a repeated object",
+            ));
+        }
         for n in 1..=copies {
             let mut copy = value.clone();
             substitute_repeat_index(&mut copy, n);
@@ -1119,6 +1125,16 @@ where
         }
     }
     Ok(objects)
+}
+
+fn contains_repeat(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.contains_key("repeat") || map.values().any(contains_repeat)
+        }
+        serde_json::Value::Array(items) => items.iter().any(contains_repeat),
+        _ => false,
+    }
 }
 
 fn substitute_repeat_index(value: &mut serde_json::Value, n: u64) {
