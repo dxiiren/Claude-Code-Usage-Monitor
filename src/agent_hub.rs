@@ -1,7 +1,8 @@
 //! Optional "Agent Hub" sources (a coding-agent hub's Qoder quota, self-hosted
 //! model endpoints). Nothing runs unless settings.json has `agent_hub_command`:
 //! a command that prints one JSON document,
-//! `{"version":1,"sources":[{"id","name","text","percent"?,"up"?}]}`.
+//! `{"version":1,"sources":[{"id","name","kind"?,"text","percent"?,"up"?,"idle"?,
+//! "tokens_today"?,"tokens_7d"?}]}`.
 //! The widget runs it at most every five minutes, off the UI thread, and the
 //! entries appear as `hub.<id>.*` theme variables and as menu checkboxes.
 use std::io::Read;
@@ -26,6 +27,11 @@ pub struct HubSource {
     pub up: Option<bool>,
     /// Not running now but the hub starts it on demand: neither up nor down.
     pub idle: bool,
+    /// What the provider is (`qwen`, `qoder`, `codex`...). The taskbar strip has
+    /// room for one tile per kind, so providers of one kind share a tile there.
+    pub kind: String,
+    pub tokens_today: Option<u64>,
+    pub tokens_7d: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -44,6 +50,10 @@ struct Raw {
     percent: Option<f64>,
     up: Option<bool>,
     idle: Option<bool>,
+    #[serde(default)]
+    kind: String,
+    tokens_today: Option<u64>,
+    tokens_7d: Option<u64>,
 }
 
 fn theme_safe(id: &str) -> String {
@@ -57,6 +67,15 @@ impl HubSource {
     /// The one-line value for a compact tile: the percentage, else up/down,
     /// else the first word of the text (`818k` of `818k today`).
     pub fn short(&self) -> String {
+        let status = if self.idle {
+            Some("idle")
+        } else {
+            self.up.map(|up| if up { "up" } else { "down" })
+        };
+        // A provider with a status and a token count shows both ("up 562.2k").
+        if let (Some(status), Some(today), None) = (status, self.tokens_today, self.percent) {
+            return format!("{status} {}", fmt_tokens(today));
+        }
         match (self.percent, self.up) {
             _ if self.idle => "idle".into(),
             (Some(percent), _) => format!("{percent:.0}%"),
@@ -71,6 +90,91 @@ impl HubSource {
                 .collect(),
         }
     }
+}
+
+fn fmt_tokens(n: u64) -> String {
+    match n {
+        1_000_000.. => format!("{:.1}M", n as f64 / 1e6),
+        1_000.. => format!("{:.1}k", n as f64 / 1e3),
+        _ => n.to_string(),
+    }
+}
+
+/// The taskbar strip's view of the providers: one entry per `kind` (a source
+/// with no kind is its own kind), in first-seen order. A kind with one member is
+/// that member under the kind's id. A kind with several becomes one tile named
+/// after the kind: up when any member is up, idle when none is up but one can
+/// start, else down; the summed tokens of today and of 7 days. A future provider
+/// of the same kind joins it with no widget change.
+pub fn group_by_kind(sources: &[HubSource]) -> Vec<HubSource> {
+    let key = |source: &HubSource| {
+        if source.kind.is_empty() {
+            source.id.clone()
+        } else {
+            source.kind.clone()
+        }
+    };
+    let mut order: Vec<String> = Vec::new();
+    for source in sources {
+        if !order.contains(&key(source)) {
+            order.push(key(source));
+        }
+    }
+    order
+        .into_iter()
+        .map(|group| {
+            let members: Vec<&HubSource> = sources.iter().filter(|s| key(s) == group).collect();
+            let mut tile = members[0].clone();
+            tile.id = group.clone();
+            if members.len() == 1 {
+                return tile;
+            }
+            let sum = |value: fn(&HubSource) -> Option<u64>| {
+                members
+                    .iter()
+                    .filter_map(|member| value(member))
+                    .reduce(|a, b| a + b)
+            };
+            tile.tokens_today = sum(|s| s.tokens_today);
+            tile.tokens_7d = sum(|s| s.tokens_7d);
+            let any_up = members.iter().any(|m| m.up == Some(true));
+            tile.up = if any_up {
+                Some(true)
+            } else if members.iter().any(|m| m.up.is_some()) {
+                Some(false)
+            } else {
+                None
+            };
+            tile.idle = !any_up && members.iter().any(|m| m.idle);
+            tile.percent = None;
+            let mut name = group.clone();
+            name[..1].make_ascii_uppercase();
+            tile.name = name;
+            let status = match (tile.idle, tile.up) {
+                (true, _) => Some("idle"),
+                (_, Some(true)) => Some("up"),
+                (_, Some(false)) => Some("down"),
+                _ => None,
+            };
+            let today = tile
+                .tokens_today
+                .map(|n| format!("{} today", fmt_tokens(n)));
+            let week = tile
+                .tokens_7d
+                .map(|n| format!("{} in 7 days", fmt_tokens(n)));
+            let first = [status.map(String::from), today]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" - ");
+            tile.text = [first, week.unwrap_or_default()]
+                .into_iter()
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            tile
+        })
+        .collect()
 }
 
 /// Ids the widget keeps for its own variables (`hub.layout.*`, `hub.overflow.*`, `hub.slotN.*`).
@@ -107,6 +211,9 @@ pub fn parse(json: &str) -> Result<Vec<HubSource>, String> {
                 .map(|p| p.clamp(0.0, 100.0)),
             up: raw.up,
             idle: raw.idle == Some(true),
+            kind: theme_safe(&raw.kind),
+            tokens_today: raw.tokens_today,
+            tokens_7d: raw.tokens_7d,
             id,
         });
     }
@@ -276,5 +383,94 @@ mod tests {
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].up, Some(false));
         assert!(run_command("exit 3").is_err());
+    }
+
+    fn src(id: &str, kind: &str, up: Option<bool>, idle: bool, today: u64, week: u64) -> HubSource {
+        HubSource {
+            id: id.into(),
+            name: id.into(),
+            kind: kind.into(),
+            up,
+            idle,
+            tokens_today: Some(today),
+            tokens_7d: Some(week),
+            text: "x".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn qwen_providers_share_one_taskbar_tile() {
+        let sources = [
+            src("qwen_laptop", "qwen", None, true, 155_200, 277_800),
+            src("qoder", "qoder", None, false, 0, 0),
+            src("qwen_122", "qwen", Some(true), false, 141_700, 312_200),
+            src("qwen_110", "qwen", Some(true), false, 265_300, 602_200),
+        ];
+        let grouped = group_by_kind(&sources);
+        assert_eq!(
+            grouped.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            ["qwen", "qoder"],
+            "one tile per kind, first-seen order"
+        );
+        let qwen = &grouped[0];
+        assert_eq!(qwen.name, "Qwen");
+        assert_eq!(qwen.up, Some(true), "up when any member is up");
+        assert!(!qwen.idle);
+        assert_eq!(qwen.tokens_today, Some(562_200));
+        assert_eq!(qwen.tokens_7d, Some(1_192_200));
+        assert_eq!(qwen.text, "up - 562.2k today\n1.2M in 7 days");
+        assert_eq!(qwen.short(), "up 562.2k", "compact tile: status and tokens today");
+        assert_eq!(grouped[1].name, "qoder", "a lone provider is unchanged");
+    }
+
+    #[test]
+    fn group_status_idle_down_and_future_members() {
+        let idle = group_by_kind(&[
+            src("a", "qwen", None, true, 1, 2),
+            src("b", "qwen", Some(false), false, 1, 2),
+        ]);
+        assert!(idle[0].idle, "none up but one can start: idle");
+        assert_eq!(idle[0].short(), "idle 2");
+        let down = group_by_kind(&[
+            src("a", "qwen", Some(false), false, 0, 0),
+            src("b", "qwen", Some(false), false, 0, 0),
+        ]);
+        assert_eq!(down[0].up, Some(false));
+        assert_eq!(down[0].text, "down - 0 today\n0 in 7 days");
+        // a provider the hub adds later with the same kind joins the tile
+        let more = group_by_kind(&[
+            src("a", "qwen", Some(true), false, 1000, 1000),
+            src("b", "qwen", Some(true), false, 1000, 1000),
+            src("qwen_new", "qwen", Some(true), false, 1000, 1000),
+        ]);
+        assert_eq!(more.len(), 1);
+        assert_eq!(more[0].tokens_today, Some(3000));
+        // no kind: the id is the kind, nothing merges by accident
+        let none = group_by_kind(&[
+            HubSource {
+                id: "x".into(),
+                ..Default::default()
+            },
+            HubSource {
+                id: "y".into(),
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(none.len(), 2);
+    }
+
+    #[test]
+    fn kind_and_tokens_are_read_from_the_json() {
+        let parsed = parse(
+            r#"{"sources":[{"id":"q","kind":"Qwen","tokens_today":5,"tokens_7d":9},{"id":"z"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed[0].kind, "qwen");
+        assert_eq!(
+            (parsed[0].tokens_today, parsed[0].tokens_7d),
+            (Some(5), Some(9))
+        );
+        assert_eq!(parsed[1].kind, "");
     }
 }

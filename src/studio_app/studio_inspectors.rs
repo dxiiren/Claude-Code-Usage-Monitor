@@ -1142,6 +1142,7 @@ pub(super) fn reference_target_name(language: LanguageId, target: ReferenceTarge
         ReferenceRegion::Monitor => language.text("Monitor"),
         ReferenceRegion::Taskbar => language.text("Taskbar"),
         ReferenceRegion::SystemTray => language.text("System Tray"),
+        ReferenceRegion::TrafficMonitor => language.text("Traffic Monitor"),
     };
     format!(
         "{region} ({} {})",

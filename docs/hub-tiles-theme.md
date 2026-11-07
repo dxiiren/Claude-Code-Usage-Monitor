@@ -31,3 +31,27 @@ shown, and height `62 * A + 46 * hub.layout.rows + (hub.layout.rows > 0) * (16 -
 Variables: `hub.slotN.{shown,name,text,line1,line2,short,percent,has_percent,up,has_up,x,row}`,
 `hub.layout.{tile_w,compact,fit,overflow,rows,per_row,width}`, `hub.overflow.{shown,x,text}`,
 `hub.shown_count`, and `hub.<id>.*` for a provider by its id.
+
+## A separate segment next to the traffic monitor
+
+Put the hub tiles on their own taskbar surface so they sit by the TrafficMonitor tool instead of
+after the accounts. Copy the strip surface, keep only the `hub-*` tiles, and change:
+
+```json
+{
+  "id": "hub",
+  "render": "(hub.layout.width > 0)",
+  "placement": {
+    "reference": { "region": "traffic_monitor", "display": 0 },
+    "nest": "taskbar", "horizontal": "right", "vertical": "bottom",
+    "surface_horizontal": "left", "surface_vertical": "bottom", "offset_x": 0, "offset_y": 0
+  },
+  "width": "max(1, hub.layout.width - 6)"
+}
+```
+
+Tile `x` is just `hub.slot@n.x` (and `hub.overflow.x` for "+N"): there are no accounts before them.
+`hub.layout.*` is computed for the free space next to the monitor, so the tiles step down from full
+to compact to "+N" by themselves. The account strip keeps only its account tiles; its width is
+`112 * accounts - 6`. On the taskbar the providers of one kind are already one tile (`hub.slotN`
+is the Qwen group, `hub.qwen.*` by id), see the README.

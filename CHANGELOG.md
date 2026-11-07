@@ -6,6 +6,15 @@ changes grouped into Added, Changed, Fixed, and Removed where applicable.
 
 ## [Unreleased]
 
+### Added
+
+- Agent Hub segment on the taskbar: a theme surface with placement reference `traffic_monitor` is placed right after the TrafficMonitor tool's taskbar window (read-only, the monitor is never moved). When the monitor touches the notification area, so there is no room after it, the segment sits flush left of it, between the app buttons and the monitor; without the monitor it follows the account strip. Tiles size to the free span (full, compact, "+N"), the segment never overlaps the app buttons, the strip, the monitor or the tray, and it follows the monitor when it moves or resizes and on taskbar or DPI changes.
+- The hub JSON may carry `kind`, `tokens_today` and `tokens_7d` per source.
+
+### Changed
+
+- The taskbar shows one Agent Hub tile per kind: every Qwen provider (Qwen Code, local llama, on any machine) is one "Qwen" tile (up if any is up, idle if none is up but one starts on demand, summed tokens), so Qwen and Qoder are two tiles. The floating card keeps one tile per provider. The taskbar menu lists the groups and saves them as `hub.<kind>` (for example `hub.qwen`) in `widget.taskbar.hidden`; old `hub.qwen_*` entries there no longer match.
+
 ### Fixed
 
 - A usage window the provider did not report (rate limited, no data) is drawn as a dash plus a short reason instead of "0%". Themes get `accounts.<provider>.<id>.status` ("limited", "no data" or empty) next to the existing `<window>.available`.
