@@ -145,6 +145,14 @@ specific instructions.
 
 - The hub side is `plugins/usage-otel/bin/agent_hub_widget.py` in the agent-hub repo: it prints one
   source per configured provider of any kind. A new provider needs no widget change.
+- The taskbar draws one tile per `kind` (`agent_hub::group_by_kind`: Qwen laptop + .122 + .110 are
+  one "Qwen" tile; ids on the strip and in the taskbar menu are `hub.<kind>`); the card keeps every
+  provider. The hub JSON carries `kind`, `tokens_today`, `tokens_7d` for the sums.
+- A surface with `placement.reference.region = "traffic_monitor"` is the hub segment
+  (`src/window/hub_segment.rs`): it finds TrafficMonitor's taskbar window read-only, prefers the
+  space after it, else flush left of it (its right edge normally touches the tray), else after the
+  account strip; `widget_filter::hub_segment_layout` sizes the tiles to that room, and the 250 ms
+  window-state timer re-reads the neighbours. Never move or resize the traffic monitor.
 - Menu actions name their view with a prefix: `toggle_account("taskbar:hub.*")`,
   `toggle_account("card:claude.work")`, `toggle_row("taskbar:7d")` (no prefix = the view that was
   right-clicked). Add a label to all 14 `src/localization/locales/*.toml`.

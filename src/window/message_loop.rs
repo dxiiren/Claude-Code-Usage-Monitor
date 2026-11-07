@@ -369,6 +369,9 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -
                 }
                 TIMER_WINDOW_STATE => {
                     sync_theme_window_visibility();
+                    if hub_segment::refresh_anchors() {
+                        schedule_tray_reposition(hwnd);
+                    }
                 }
                 TIMER_ACCOUNTS_DB => {
                     request_hub_refresh(hwnd);

@@ -120,6 +120,10 @@ pub const TASKBAR_BUDGET: u32 = 672;
 pub const ACCOUNT_TILE_W: u32 = 112;
 pub const HUB_FULL_W: u32 = 156;
 pub const HUB_COMPACT_W: u32 = 78;
+/// A tile in the hub segment next to the traffic monitor: that span is short
+/// (about 200 logical px on the owner's taskbar), so two tiles (Qwen and Qoder)
+/// must fit in it. The 9 px text of "49.2% - resets 28 Nov" needs about 97 px.
+pub const HUB_SEGMENT_FULL_W: u32 = 102;
 /// The "+N" tile that stands for the providers that did not fit.
 pub const HUB_OVERFLOW_W: u32 = 40;
 /// Most tiles on one card row; more start a further row (the rows are then balanced).
@@ -180,6 +184,36 @@ pub fn hub_layout(nest: SurfaceNest, hub_shown: u32, accounts_w: u32) -> HubLayo
     } else {
         let fit = (room.saturating_sub(HUB_OVERFLOW_W) / HUB_COMPACT_W).min(hub_shown - 1);
         layout(HUB_COMPACT_W, true, fit, hub_shown - fit)
+    }
+}
+
+/// The hub segment (its own taskbar surface next to the traffic monitor) in
+/// `room` logical px: full tiles, else compact ones, else the first ones and a
+/// "+N" tile; nothing at all when even "+N" does not fit. The theme draws the
+/// width as `hub.layout.width - 6`, so the last tile's gap is not counted.
+pub fn hub_segment_layout(hub_shown: u32, room: u32) -> HubLayout {
+    if hub_shown == 0 {
+        return HubLayout::default();
+    }
+    let layout = |tile_w, compact, fit: u32, overflow: u32| HubLayout {
+        tile_w,
+        compact,
+        fit,
+        overflow,
+        rows: 1,
+        per_row: hub_shown,
+        width: fit * tile_w + if overflow > 0 { HUB_OVERFLOW_W } else { 0 },
+    };
+    let fits = |tile_w: u32| (hub_shown * tile_w).saturating_sub(6) <= room;
+    if fits(HUB_SEGMENT_FULL_W) {
+        layout(HUB_SEGMENT_FULL_W, false, hub_shown, 0)
+    } else if fits(HUB_COMPACT_W) {
+        layout(HUB_COMPACT_W, true, hub_shown, 0)
+    } else if room >= HUB_OVERFLOW_W + 6 {
+        let fit = ((room + 6).saturating_sub(HUB_OVERFLOW_W) / HUB_COMPACT_W).min(hub_shown - 1);
+        layout(HUB_COMPACT_W, true, fit, hub_shown - fit)
+    } else {
+        HubLayout::default()
     }
 }
 
@@ -345,5 +379,36 @@ mod tests {
         filter.toggle_account(SurfaceNest::Taskbar, "claude.work");
         filter.toggle_row(SurfaceNest::Taskbar, Row::FiveHour);
         assert!(filter.is_default());
+    }
+
+    #[test]
+    fn segment_layout_steps_down_with_the_room() {
+        assert_eq!(hub_segment_layout(0, 500), HubLayout::default());
+        // Qwen and Qoder in the owner's 200 logical px next to the traffic monitor.
+        let full = hub_segment_layout(2, 200);
+        assert_eq!(
+            (full.tile_w, full.compact, full.fit, full.overflow),
+            (102, false, 2, 0)
+        );
+        assert!(full.width - 6 <= 200);
+        let compact = hub_segment_layout(2, 150);
+        assert_eq!(
+            (compact.tile_w, compact.compact, compact.fit),
+            (78, true, 2)
+        );
+        let plus = hub_segment_layout(3, 100);
+        assert!(plus.compact && plus.overflow > 0 && plus.fit + plus.overflow == 3);
+        assert!(plus.width - 6 <= 100, "never wider than the room");
+        assert_eq!(hub_segment_layout(2, 30), HubLayout::default());
+        for room in 0..400 {
+            for hub in 0..=8 {
+                let l = hub_segment_layout(hub, room);
+                assert!(
+                    l.width == 0 || l.width - 6 <= room,
+                    "hub {hub} room {room}: {}",
+                    l.width
+                );
+            }
+        }
     }
 }

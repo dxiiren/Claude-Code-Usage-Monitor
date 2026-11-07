@@ -129,7 +129,7 @@ unsafe fn append_context_menu_items(
                 let filter = crate::widget_filter::current();
                 let (target, which) = crate::widget_filter::split_target(account);
                 let nest = target.unwrap_or_else(|| origin_nest(origin));
-                let choices = account_choices(which == "hub.*");
+                let choices = account_choices(which == "hub.*", nest);
                 if choices.is_empty() && which == "hub.*" {
                     let label = native_interop::wide_str(&context_menu::rendered_label(
                         language,
@@ -173,10 +173,17 @@ unsafe fn append_context_menu_items(
 }
 
 /// (settings key, label) of every Agent Hub provider (`hub`) or every account
-/// the widget knows, in theme order.
-fn account_choices(hub_only: bool) -> Vec<(String, String)> {
+/// the widget knows, in theme order. The taskbar lists one entry per kind
+/// (Qwen, Qoder), exactly the tiles it draws.
+fn account_choices(hub_only: bool, nest: SurfaceNest) -> Vec<(String, String)> {
     if hub_only {
-        return crate::agent_hub::current()
+        let sources = crate::agent_hub::current();
+        let sources = if nest == SurfaceNest::Taskbar {
+            crate::agent_hub::group_by_kind(&sources)
+        } else {
+            sources
+        };
+        return sources
             .into_iter()
             .map(|source| (format!("hub.{}", source.id), source.name))
             .collect();

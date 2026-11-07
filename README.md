@@ -215,6 +215,27 @@ How they are laid out:
   tiles). If the ticked providers do not fit as full tiles (156 px, two lines) they become compact
   tiles (78 px, name and one value). If they still do not fit, the last ones are folded into a
   small **+N** tile. Nothing is ever clipped; untick accounts or providers to see more.
+- **One tile per kind on the taskbar.** The strip has little room, so providers of the same kind
+  share one tile there: every Qwen (a Qwen Code endpoint, a local llama server, on any machine) is
+  one **Qwen** tile that is up when any of them is up, idle when none is up but one starts on
+  demand, down otherwise, with the tokens of all of them added up (today and 7 days). With Qoder
+  the strip shows exactly two tiles, Qwen and Qoder. The floating card keeps every provider on its
+  own tile. A Qwen provider you add later joins the Qwen tile by itself. The taskbar menu lists the
+  same groups (one **Qwen** checkbox), saved as `hub.<kind>` (for example `hub.qwen`) in
+  `widget.taskbar.hidden`; the hub's JSON needs `kind`, `tokens_today` and `tokens_7d` for this
+  (the bundled `agent_hub_widget.py` prints them).
+- **Hub segment next to the traffic monitor.** A theme can draw the hub tiles as their own taskbar
+  surface instead of after the accounts: give the surface a placement reference of
+  `{"region": "traffic_monitor", "display": 0}`. The widget finds the
+  [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor) taskbar window
+  (`TrafficMonitorTaskbarWindow`, read-only: it is never moved or touched) and puts the segment
+  right after it. TrafficMonitor normally sits against the notification area, so there is no room
+  after it; then the segment sits flush against its left edge instead, between the app buttons and
+  the monitor, and the tiles shrink (full, compact, "+N") to the free space. The segment never
+  overlaps the app buttons, the account strip, the monitor or the tray. If TrafficMonitor is not
+  running the segment follows the account strip, up to the first app button. It follows the
+  monitor when it moves or resizes (watched every quarter of a second) and on taskbar or DPI
+  changes. `ThemeRuntime` hands such a surface `hub.layout.*` computed for its own room.
 
   ![The strip with compact hub tiles: name and one value](docs/images/widget-taskbar-compact.png)
 

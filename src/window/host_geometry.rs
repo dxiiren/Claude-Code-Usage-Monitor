@@ -31,6 +31,7 @@ pub(super) fn refresh_theme_host_geometry() {
             })
             .collect()
     });
+    hub_segment::refresh_anchors();
 }
 
 fn refresh_with(query: impl FnOnce() -> Vec<ThemeHostGeometry>) {
@@ -174,7 +175,20 @@ fn runtime_with_geometry(
         .placement
         .nest
         .resolve(surface.placement.reference.region);
-    let runtime = runtime.with_nest(nest);
+    let mut runtime = runtime.with_nest(nest);
+    if surface.placement.reference.region == ReferenceRegion::TrafficMonitor {
+        // The segment is drawn at the strip's scale, so its room in logical px
+        // is the free span divided by that scale (never 0: 0 means "no segment").
+        let display = surface.placement.reference.display;
+        let scale = geometry
+            .get(display)
+            .or_else(|| geometry.first())
+            .map_or(1.0, |h| h.scale)
+            * strip_fit::percent(display) as f64
+            / 100.0;
+        let room = hub_segment::room_logical(hub_segment::span_for(display, scale), scale);
+        runtime = runtime.with_hub_room(room.max(1));
+    }
     if nest == SurfaceNest::Floating {
         if let Some((width, height)) = surface.placement.host_dimensions {
             return runtime.with_host_dimensions(width, height);

@@ -211,6 +211,9 @@ pub enum ReferenceRegion {
     Taskbar,
     #[default]
     SystemTray,
+    /// Right after the TrafficMonitor tool's taskbar window (see
+    /// `window::hub_segment`); without it, right after the account strip.
+    TrafficMonitor,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,7 +236,9 @@ impl SurfaceNest {
     pub fn resolve(self, reference: ReferenceRegion) -> Self {
         match self {
             Self::Auto => match reference {
-                ReferenceRegion::Taskbar | ReferenceRegion::SystemTray => Self::Taskbar,
+                ReferenceRegion::Taskbar
+                | ReferenceRegion::SystemTray
+                | ReferenceRegion::TrafficMonitor => Self::Taskbar,
                 ReferenceRegion::Monitor => Self::Floating,
             },
             nest => nest,
@@ -1422,6 +1427,9 @@ pub struct ThemeRuntime {
     pub show_main_window: bool,
     host_width: u32,
     host_height: u32,
+    /// Logical px of the free taskbar span a hub segment (a surface placed next to
+    /// the traffic monitor) may fill; 0 = the surface is not a segment.
+    hub_room: u32,
 }
 
 impl Default for ThemeRuntime {
@@ -1438,6 +1446,7 @@ impl Default for ThemeRuntime {
             show_main_window: true,
             host_width: default_canvas_width(),
             host_height: default_canvas_height(),
+            hub_room: 0,
         }
     }
 }
@@ -1470,7 +1479,14 @@ impl ThemeRuntime {
             show_main_window: true,
             host_width: default_canvas_width(),
             host_height: default_canvas_height(),
+            hub_room: 0,
         }
+    }
+
+    /// Mark this runtime as the one of a hub segment with `room` logical px.
+    pub fn with_hub_room(mut self, room: u32) -> Self {
+        self.hub_room = room;
+        self
     }
 
     pub fn with_nest(mut self, nest: SurfaceNest) -> Self {
@@ -1750,7 +1766,7 @@ impl DataContext {
         } else {
             0
         };
-        context.insert_hub(hub, filter, nest, accounts_w);
+        context.insert_hub(hub, filter, nest, accounts_w, runtime.hub_room);
         context
     }
 
@@ -1764,7 +1780,17 @@ impl DataContext {
         filter: &crate::widget_filter::WidgetFilter,
         nest: SurfaceNest,
         accounts_w: u32,
+        segment_room: u32,
     ) {
+        // The taskbar has room for one tile per kind (Qwen = laptop + .122 + .110);
+        // the floating card keeps every provider.
+        let grouped;
+        let hub = if nest == SurfaceNest::Taskbar {
+            grouped = crate::agent_hub::group_by_kind(hub);
+            &grouped[..]
+        } else {
+            hub
+        };
         let mut ticked: Vec<&crate::agent_hub::HubSource> = Vec::new();
         for source in hub {
             let key = format!("hub.{}", source.id);
@@ -1774,7 +1800,11 @@ impl DataContext {
             }
             self.insert_hub_fields(&key, source, shown);
         }
-        let layout = crate::widget_filter::hub_layout(nest, ticked.len() as u32, accounts_w);
+        let layout = if segment_room > 0 {
+            crate::widget_filter::hub_segment_layout(ticked.len() as u32, segment_room)
+        } else {
+            crate::widget_filter::hub_layout(nest, ticked.len() as u32, accounts_w)
+        };
         self.insert("hub.shown_count", ticked.len() as f64);
         self.insert("hub.layout.tile_w", layout.tile_w as f64);
         self.insert("hub.layout.compact", layout.compact as u8 as f64);

@@ -251,7 +251,7 @@ pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, 
     let tray = taskbar
         .and_then(|tb| native_interop::find_child_window(tb.hwnd, "TrayNotifyWnd"))
         .and_then(native_interop::get_window_rect_safe);
-    let rect = surface_screen_rect(
+    let mut rect = surface_screen_rect(
         &theme.placement,
         width,
         height,
@@ -260,6 +260,18 @@ pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, 
         taskbar.map(|tb| tb.rect),
         tray,
     );
+    if theme.placement.reference.region == ReferenceRegion::TrafficMonitor {
+        // Same row as the strip; across, the free span next to the traffic monitor.
+        let span = hub_segment::span_for(display_index, scale);
+        let Some(span) = span.filter(|span| span.width() > 0) else {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+            return;
+        };
+        rect.left = span.origin(width);
+        rect.right = rect.left + width;
+    }
     let (x, y) = (rect.left, rect.top);
     let nest = theme
         .placement
@@ -294,7 +306,10 @@ pub(super) fn position_custom_theme_internal(hwnd: HWND, theme: &ThemeDocument, 
                     let mut point = [POINT { x, y }];
                     MapWindowPoints(None, Some(desktop.parent), &mut point);
                     super::drag_stats::trace(|| {
-                        format!("swp place-desktop hwnd={hwnd:?} to=({},{}) size={width}x{height}", point[0].x, point[0].y)
+                        format!(
+                            "swp place-desktop hwnd={hwnd:?} to=({},{}) size={width}x{height}",
+                            point[0].x, point[0].y
+                        )
                     });
                     let _ = SetWindowPos(
                         hwnd,
@@ -839,7 +854,7 @@ pub(super) fn surface_screen_rect(
 ) -> RECT {
     let reference = match placement.reference.region {
         ReferenceRegion::Monitor => monitor,
-        ReferenceRegion::Taskbar => taskbar.unwrap_or(monitor),
+        ReferenceRegion::Taskbar | ReferenceRegion::TrafficMonitor => taskbar.unwrap_or(monitor),
         ReferenceRegion::SystemTray => taskbar
             .map(|tb| system_tray_reference(tb, tray))
             .unwrap_or(monitor),

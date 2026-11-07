@@ -3056,3 +3056,109 @@ fn an_account_with_no_figures_exposes_unavailable_windows_and_a_reason() {
         Some("limited")
     );
 }
+
+fn qwen_hub() -> Vec<crate::agent_hub::HubSource> {
+    use crate::agent_hub::HubSource;
+    let qwen = |id: &str, up, idle, today, week| HubSource {
+        id: id.into(),
+        name: format!("Qwen {id}"),
+        kind: "qwen".into(),
+        up,
+        idle,
+        tokens_today: Some(today),
+        tokens_7d: Some(week),
+        text: "x".into(),
+        ..Default::default()
+    };
+    vec![
+        qwen("laptop", None, true, 155_200, 277_800),
+        HubSource {
+            id: "qoder".into(),
+            name: "Qoder".into(),
+            kind: "qoder".into(),
+            text: "49.2% - resets 28 Nov\n6.3k used - 6.5k left".into(),
+            percent: Some(49.2),
+            ..Default::default()
+        },
+        qwen("e122", Some(true), false, 141_700, 312_200),
+        qwen("e110", Some(true), false, 265_300, 602_200),
+    ]
+}
+
+#[test]
+fn taskbar_shows_exactly_qwen_and_qoder_while_the_card_keeps_every_provider() {
+    use crate::widget_filter::WidgetFilter;
+    let hub = qwen_hub();
+    let mut filter = WidgetFilter::default();
+    // On the strip a provider starts unticked; tick the two kinds the owner wants.
+    filter.toggle_account(SurfaceNest::Taskbar, "hub.qwen");
+    filter.toggle_account(SurfaceNest::Taskbar, "hub.qoder");
+    let strip = hub_context(&filter, SurfaceNest::Taskbar, &hub);
+    assert_eq!(
+        evaluate("hub.shown_count", &strip).unwrap(),
+        2.0,
+        "Qwen and Qoder"
+    );
+    assert_eq!(strip.get_string("hub.slot1.name"), Some("Qwen"));
+    assert_eq!(strip.get_string("hub.slot2.name"), Some("Qoder"));
+    assert_eq!(evaluate("hub.slot3.shown", &strip).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.slot1.up", &strip).unwrap(), 1.0);
+    assert_eq!(
+        strip.get_string("hub.slot1.line1"),
+        Some("up - 562.2k today")
+    );
+    assert_eq!(strip.get_string("hub.slot1.line2"), Some("1.2M in 7 days"));
+    assert_eq!(evaluate("hub.qwen.has_percent", &strip).unwrap(), 0.0);
+    // Unticking Qwen on the strip hides the whole group.
+    filter.toggle_account(SurfaceNest::Taskbar, "hub.qwen");
+    let only_qoder = hub_context(&filter, SurfaceNest::Taskbar, &hub);
+    assert_eq!(evaluate("hub.shown_count", &only_qoder).unwrap(), 1.0);
+    assert_eq!(only_qoder.get_string("hub.slot1.name"), Some("Qoder"));
+    // The floating card lists the four providers separately, untouched.
+    let card = hub_context(&WidgetFilter::default(), SurfaceNest::Floating, &hub);
+    assert_eq!(evaluate("hub.shown_count", &card).unwrap(), 4.0);
+    assert_eq!(card.get_string("hub.slot1.name"), Some("Qwen laptop"));
+    assert_eq!(card.get_string("hub.slot4.name"), Some("Qwen e110"));
+}
+
+#[test]
+fn a_hub_segment_sizes_its_tiles_to_the_room_next_to_the_traffic_monitor() {
+    use crate::widget_filter::WidgetFilter;
+    let hub = qwen_hub();
+    let mut filter = WidgetFilter::default();
+    filter.toggle_account(SurfaceNest::Taskbar, "hub.qwen");
+    filter.toggle_account(SurfaceNest::Taskbar, "hub.qoder");
+    let segment = |room| {
+        DataContext::from_usage_filtered(
+            None,
+            &Canvas::default(),
+            ThemeRuntime::default()
+                .with_nest(SurfaceNest::Taskbar)
+                .with_hub_room(room),
+            &filter,
+            &hub,
+        )
+    };
+    // 200 logical px holds Qwen and Qoder as full tiles, so the tokens show.
+    let full = segment(200);
+    assert_eq!(evaluate("hub.layout.compact", &full).unwrap(), 0.0);
+    assert_eq!(evaluate("hub.layout.width", &full).unwrap(), 204.0);
+    assert_eq!(evaluate("hub.slot2.x", &full).unwrap(), 102.0);
+    // 150 px: compact tiles; 60 px: only the "+2" tile; 20 px: nothing.
+    assert_eq!(evaluate("hub.layout.compact", &segment(150)).unwrap(), 1.0);
+    let plus = segment(60);
+    assert_eq!(evaluate("hub.overflow.shown", &plus).unwrap(), 1.0);
+    assert_eq!(plus.get_string("hub.overflow.text"), Some("+2"));
+    assert_eq!(evaluate("hub.layout.width", &segment(20)).unwrap(), 0.0);
+}
+
+#[test]
+fn traffic_monitor_reference_is_a_taskbar_surface() {
+    let reference: ReferenceTarget =
+        serde_json::from_str(r#"{"region":"traffic_monitor","display":0}"#).unwrap();
+    assert_eq!(reference.region, ReferenceRegion::TrafficMonitor);
+    assert_eq!(
+        SurfaceNest::Auto.resolve(reference.region),
+        SurfaceNest::Taskbar
+    );
+}

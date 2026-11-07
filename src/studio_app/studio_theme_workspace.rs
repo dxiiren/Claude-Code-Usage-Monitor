@@ -1426,6 +1426,7 @@ impl StudioApp {
                                     ReferenceRegion::Monitor,
                                     ReferenceRegion::Taskbar,
                                     ReferenceRegion::SystemTray,
+                                    ReferenceRegion::TrafficMonitor,
                                 ] {
                                     let target = ReferenceTarget { region, display };
                                     dropdown_selectable_value(

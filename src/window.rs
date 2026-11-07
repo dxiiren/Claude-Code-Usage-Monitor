@@ -670,8 +670,7 @@ fn strip_fit_plans(state: &AppState) -> Vec<(usize, strip_fit::Fit)> {
         let left_edge = occupancy
             .clock_gap()
             .unwrap_or_else(|| strip_fit::fallback_edge(display_scale(display)));
-        if let Some(fit) = strip_fit::plan(gap.right - taskbar.rect.left, width, saved, left_edge)
-        {
+        if let Some(fit) = strip_fit::plan(gap.right - taskbar.rect.left, width, saved, left_edge) {
             plans.push((display, fit));
         }
     }
@@ -941,7 +940,16 @@ fn window_state_timer_required(state: &AppState) -> bool {
     state.custom_theme_enabled
         && effective_theme_from_state(state)
             .as_ref()
-            .is_some_and(theme_has_floating_surface)
+            .is_some_and(|theme| theme_has_floating_surface(theme) || theme_has_hub_segment(theme))
+}
+
+/// A surface placed next to the traffic monitor follows that tool, which can move
+/// or resize at any time, so the window-state timer watches its neighbours.
+fn theme_has_hub_segment(theme: &ThemeDocument) -> bool {
+    theme
+        .surfaces
+        .iter()
+        .any(|surface| surface.placement.reference.region == ReferenceRegion::TrafficMonitor)
 }
 
 fn sync_window_state_timer(hwnd: HWND) {
@@ -2310,7 +2318,7 @@ pub fn run() {
                 lock_position: {
                     set_card_scale_percent(settings.card_scale_percent);
                     crate::widget_filter::set(settings.widget.clone());
-        crate::agent_hub::configure(&settings.agent_hub_command);
+                    crate::agent_hub::configure(&settings.agent_hub_command);
                     settings.lock_position
                 },
                 show_taskbar_window: settings.show_taskbar_window,
@@ -2452,7 +2460,11 @@ fn render_layered() {
     // install Classic in memory when a selected theme cannot be loaded.
     let theme = active_theme.unwrap_or_else(ThemeDocument::starter);
     let hwnd = hwnd_val.to_hwnd();
-    set_window_state_timer(hwnd, theme_has_floating_surface(&theme));
+    hub_segment::set_active(theme_has_hub_segment(&theme));
+    set_window_state_timer(
+        hwnd,
+        theme_has_floating_surface(&theme) || theme_has_hub_segment(&theme),
+    );
     let target_count = theme.surfaces.len();
     for surface_index in 0..target_count {
         let regular_hwnd = if surface_index == 0 {
@@ -2534,6 +2546,14 @@ fn render_layered() {
             }
         }
         position_custom_theme(target_hwnd, &positioned, scale);
+        if surface_index == 0 {
+            // The hub segment is placed after this strip and never over it.
+            hub_segment::set_strip(
+                (nest == SurfaceNest::Taskbar)
+                    .then(|| native_interop::get_window_rect_safe(target_hwnd))
+                    .flatten(),
+            );
+        }
         if desktop_nested {
             unsafe {
                 let _ = ShowWindow(target_hwnd, SW_SHOWNOACTIVATE);
@@ -3199,6 +3219,7 @@ fn tray_reposition_is_suppressed() -> bool {
 
 mod drag_stats;
 mod host_geometry;
+mod hub_segment;
 mod message_loop;
 use host_geometry::*;
 use message_loop::wnd_proc;
