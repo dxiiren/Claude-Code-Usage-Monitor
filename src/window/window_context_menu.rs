@@ -124,11 +124,21 @@ unsafe fn append_context_menu_items(
             }
             ContextMenuItemKind::Action {
                 action: ContextMenuAction::ToggleAccount { account },
-            } if account == "*" => {
-                // One checkbox per account, built each time the menu opens.
+            } if matches!(crate::widget_filter::split_target(account).1, "*" | "hub.*") => {
+                // One checkbox per account or hub provider, built each time the menu opens.
                 let filter = crate::widget_filter::current();
-                let nest = origin_nest(origin);
-                for (key, name) in account_choices() {
+                let (target, which) = crate::widget_filter::split_target(account);
+                let nest = target.unwrap_or_else(|| origin_nest(origin));
+                let choices = account_choices(which == "hub.*");
+                if choices.is_empty() && which == "hub.*" {
+                    let label = native_interop::wide_str(&context_menu::rendered_label(
+                        language,
+                        "No Agent Hub providers (set agent_hub_command)",
+                        context,
+                    ));
+                    let _ = AppendMenuW(menu, MF_GRAYED, 0, PCWSTR::from_raw(label.as_ptr()));
+                }
+                for (key, name) in choices {
                     let id = 1_000 + actions.len();
                     let label = native_interop::wide_str(&name);
                     let flags = if filter.is_shown(nest, &key) {
@@ -137,7 +147,14 @@ unsafe fn append_context_menu_items(
                         MENU_ITEM_FLAGS(0)
                     };
                     let _ = AppendMenuW(menu, flags, id, PCWSTR::from_raw(label.as_ptr()));
-                    actions.push(ContextMenuAction::ToggleAccount { account: key });
+                    let prefix = match target {
+                        Some(SurfaceNest::Taskbar) => "taskbar:",
+                        Some(_) => "card:",
+                        None => "",
+                    };
+                    actions.push(ContextMenuAction::ToggleAccount {
+                        account: format!("{prefix}{key}"),
+                    });
                 }
             }
             ContextMenuItemKind::Action { action } => {
@@ -155,9 +172,15 @@ unsafe fn append_context_menu_items(
     }
 }
 
-/// (settings key, label) of every account the widget knows, in theme order.
-fn account_choices() -> Vec<(String, String)> {
-    let hub = crate::agent_hub::current();
+/// (settings key, label) of every Agent Hub provider (`hub`) or every account
+/// the widget knows, in theme order.
+fn account_choices(hub_only: bool) -> Vec<(String, String)> {
+    if hub_only {
+        return crate::agent_hub::current()
+            .into_iter()
+            .map(|source| (format!("hub.{}", source.id), source.name))
+            .collect();
+    }
     let state = lock_state();
     let accounts = state
         .as_ref()
@@ -167,18 +190,22 @@ fn account_choices() -> Vec<(String, String)> {
     accounts
         .iter()
         .map(|account| {
-            let key = format!("{}.{}", account.provider.descriptor().key, account.profile.id);
+            let key = format!(
+                "{}.{}",
+                account.provider.descriptor().key,
+                account.profile.id
+            );
             let name = if account.provider == ProviderId::Claude {
                 account.profile.name.clone()
             } else {
-                format!("{} ({})", account.profile.name, account.provider.descriptor().key)
+                format!(
+                    "{} ({})",
+                    account.profile.name,
+                    account.provider.descriptor().key
+                )
             };
             (key, name)
         })
-        .chain(
-            hub.into_iter()
-                .map(|source| (format!("hub.{}", source.id), source.name)),
-        )
         .collect()
 }
 
@@ -211,9 +238,14 @@ pub(super) fn context_menu_action_flags(
 ) -> MENU_ITEM_FLAGS {
     let row_checked = match action {
         ContextMenuAction::ToggleRow { row } => {
+            let (target, row) = crate::widget_filter::split_target(row);
             let filter = crate::widget_filter::current();
-            let view = filter.view(origin_nest(origin));
-            Some(if row == "7d" { view.show_7d } else { view.show_5h })
+            let view = filter.view(target.unwrap_or_else(|| origin_nest(origin)));
+            Some(if row == "7d" {
+                view.show_7d
+            } else {
+                view.show_5h
+            })
         }
         _ => None,
     };
@@ -398,13 +430,18 @@ pub(super) fn execute_context_menu_action(
     }
     match action {
         ContextMenuAction::ToggleAccount { account } => {
+            let (target, key) = crate::widget_filter::split_target(&account);
             let mut filter = crate::widget_filter::current();
-            filter.toggle_account(origin_nest(origin.as_ref()), &account);
+            filter.toggle_account(target.unwrap_or_else(|| origin_nest(origin.as_ref())), key);
             apply_widget_filter(filter);
         }
         ContextMenuAction::ToggleRow { row } => {
+            let (target, row) = crate::widget_filter::split_target(&row);
             let mut filter = crate::widget_filter::current();
-            filter.toggle_row(origin_nest(origin.as_ref()), row_of(&row));
+            filter.toggle_row(
+                target.unwrap_or_else(|| origin_nest(origin.as_ref())),
+                row_of(row),
+            );
             apply_widget_filter(filter);
         }
         ContextMenuAction::ToggleWidget => {
@@ -522,6 +559,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_widget_menu_offers_the_same_choices_for_the_taskbar_and_the_card() {
+        let items = vec![context_menu::widget_view_item_for_tests()];
+        let context = DataContext::from_usage(None, &Canvas::default());
+        let mut actions = Vec::new();
+        unsafe {
+            let menu = CreatePopupMenu().unwrap();
+            append_context_menu_items(
+                menu,
+                &items,
+                localization::detect_system_language(),
+                &context,
+                None,
+                &mut actions,
+            );
+            // Accounts and rows > Taskbar strip / Floating card, each with 4 entries:
+            // (no accounts here) Agent Hub providers submenu, separator, Show 5h, Show 7d.
+            let group = GetSubMenu(menu, 0);
+            assert_eq!(GetMenuItemCount(Some(group)), 2);
+            for view in 0..2 {
+                let view_menu = GetSubMenu(group, view);
+                assert_eq!(GetMenuItemCount(Some(view_menu)), 4, "view {view}");
+                let hub_menu = GetSubMenu(view_menu, 0);
+                // "No Agent Hub providers" (grayed), separator, Open Agent Hub.
+                assert_eq!(GetMenuItemCount(Some(hub_menu)), 3, "view {view}");
+            }
+            DestroyMenu(menu).unwrap();
+        }
+        let rows: Vec<_> = actions
+            .iter()
+            .filter_map(|action| match action {
+                ContextMenuAction::ToggleRow { row } => Some(row.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rows, ["taskbar:5h", "taskbar:7d", "card:5h", "card:7d"]);
+        let opens = actions
+            .iter()
+            .filter(|action| matches!(action, ContextMenuAction::OpenUrl { url } if url == context_menu::AGENT_HUB_URL))
+            .count();
+        assert_eq!(opens, 2, "one Open Agent Hub entry per view");
     }
 }
 

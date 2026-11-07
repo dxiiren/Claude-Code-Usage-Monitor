@@ -39,7 +39,8 @@ server alike.
 
    ![The Accounts page with an Add an account box and one card per account](docs/images/accounts-light.png)
 
-3. **Pick what shows.** Right-click the widget, then **Accounts and rows**: tick the accounts you
+3. **Pick what shows.** Right-click the widget, then **Accounts and rows**, then **Taskbar strip**
+   or **Floating card** (they are chosen separately): tick the accounts and Agent Hub providers you
    want, and tick **Show 5h** / **Show 7d**. It is saved at once and kept across restarts.
    Details: [Choose what the widget shows](#choose-what-the-widget-shows).
 
@@ -121,26 +122,34 @@ On a server, Codex usage is polled by the server itself, like Claude's.
 
 ## Choose what the widget shows
 
-Right-click the widget (taskbar strip or floating card), then **Accounts and rows**:
+Right-click the widget, then **Accounts and rows**. It has two parts, **Taskbar strip** and
+**Floating card**, and each has the same choices, so you can keep the strip short and let the
+card show everything. Right-click either one; the part you pick is the one that changes.
 
-- **Accounts** has one checkbox per account (Claude and Codex), plus the Agent Hub entries when
-  they are switched on (below). Untick an account and it disappears and the others close up.
+- **Accounts** has one checkbox per account (Claude and Codex). Untick one and it disappears and
+  the others close up.
+- **Agent Hub providers** has one checkbox per provider your Agent Hub reports (below), and
+  **Open Agent Hub to add a provider**.
 - **Show 5h** and **Show 7d** switch the 5-hour and the 7-day bar on or off.
-- The taskbar strip and the floating card remember their own choices (accounts and rows): the
-  strip only has room for about six tiles, so keep it short and let the card show everything.
-  The menu changes the one you right-clicked.
+- On the floating card the accounts are on line 1 and the Agent Hub providers on line 2. On the
+  taskbar strip everything is on one line, and the hub providers start unticked.
 - Untick everything and the widget shows a hint ("Nothing shown - right-click to pick") instead
   of going blank. Tick something and it is back.
 
 The menu looks like this (a normal Windows menu, so no screenshot is kept here):
 
 ```text
-Accounts and rows >  [x] BA
-                     [x] KV
-                     [ ] ETL        <- unticked: gone from the widget
-                     ----------------
-                     [x] Show 5h
-                     [x] Show 7d
+Accounts and rows >  Taskbar strip >  Accounts >              [x] BA
+                                                               [x] KV
+                                                               [ ] ETL    <- unticked: gone
+                                      Agent Hub providers >    [ ] Qoder
+                                                               [x] Qwen .122
+                                                               ---------------
+                                                               Open Agent Hub to add a provider
+                                      ----------------
+                                      [x] Show 5h
+                                      [ ] Show 7d
+                     Floating card >  (the same list, kept separately)
 ```
 
 One account, 5-hour row only, then nothing shown:
@@ -152,29 +161,37 @@ It is saved in `%APPDATA%\ClaudeCodeUsageMonitor\settings.json` under `widget` b
 
 ```json
 "widget": {
-  "taskbar": { "hidden": ["claude.work", "hub.qwen_110"], "show_5h": true, "show_7d": false },
-  "card": { "hidden": [], "show_5h": true, "show_7d": true }
+  "taskbar": { "hidden": ["claude.work", "hub.qoder"], "show_5h": true, "show_7d": false },
+  "card": { "hidden": ["hub.qwen_110"], "show_5h": true, "show_7d": true }
 }
 ```
 
-`hidden` lists the unticked entries as `claude.<id>`, `codex.<id>` or `hub.<id>`. A file without
-`widget` shows everything, exactly as before.
+`hidden` lists the entries whose tick differs from the default, as `claude.<id>`, `codex.<id>` or
+`hub.<id>`. Accounts are on by default, so for them it is the unticked ones. Agent Hub providers
+are on by default on the floating card and off on the taskbar strip, so on the card `hub.<id>` is
+an unticked one and on the strip it is a ticked one (above, Qoder is shown on the strip and Qwen
+.110 is hidden on the card). A file without `widget` shows every account, and every hub provider
+on the card only.
 
 **Custom themes.** The built-in menu and the settings work with any theme, but a theme only
 rearranges itself if it reads the new variables: `accounts.<claude|codex>.<id>.shown` (1 or 0),
-`view.show_5h`, `view.show_7d`, `view.rows`, `accounts.shown_count` and `hub.<id>.shown`. Multiply a
+`view.show_5h`, `view.show_7d`, `view.rows` and `accounts.shown_count`. Multiply a
 layer's `render` by them and shift `x` by the `shown` flags of the tiles before it; the theme in
 `web/src/lib/server/theme.ts` and [`docs/account-manager-contract.md`](docs/account-manager-contract.md)
-show the pattern.
+show the pattern. Agent Hub providers need no names in a theme: see "Draw hub providers in your
+own theme" below.
 
-### Show Agent Hub (Qoder, Qwen)
+### Show Agent Hub providers
 
-Optional. If you use a coding-agent hub that already tracks Qoder and self-hosted Qwen models,
-the widget can show its numbers as extra tiles:
+Optional. If you use a coding-agent hub (a local program that runs Codex, Claude, Qoder, Qwen and
+other agents), the widget can show every provider it knows as its own tile, whatever kind it is
+(Qwen Code, a local llama server, Qoder, Codex, Claude, OpenCode or a custom one). Adding a
+provider in the hub makes a tile appear within five minutes; nothing in the widget changes.
 
 - **Qoder:** monthly quota percent, credits used and left, reset date.
-- **Each Qwen endpoint:** up or down, tokens today and over the last 7 days. There is no
-  percentage, because those servers have no quota.
+- **A provider with an HTTP endpoint:** up or down, tokens today and over the last 7 days.
+- **Any other provider:** tokens today and over the last 7 days. There is no percentage for a
+  provider that has no quota.
 
 Turn it on by giving the widget a command that prints the hub's JSON, in `settings.json`:
 
@@ -183,17 +200,46 @@ Turn it on by giving the widget a command that prints the hub's JSON, in `settin
 ```
 
 The command is run at most every 5 minutes, hidden, with a 25 second limit. It only reads what the
-hub has already saved (the last Qoder quota and the token log) and, for Qwen, asks each endpoint
+hub has already saved (the last Qoder quota, its config and the token log) and asks each endpoint
 `/v1/models` at most once per 5 minutes. With no `agent_hub_command` nothing runs and nothing
-changes. Restart the widget after editing the file. The entries then show up as checkboxes under
-**Accounts and rows** like any account. Hub tiles are wide (about 150 px each) and the taskbar strip
-has room for about six tiles in all, so on the strip untick a few accounts before ticking the hub
-entries; the floating card has no such limit. If the strip does not fit, the widget moves to the
-floating card by itself.
+changes. Restart the widget after editing the file. The providers then show up under
+**Accounts and rows**, **Agent Hub providers**, with the label the hub gives them (for example
+`Qwen Code .122`; an IP address in a label is shortened to its last number).
+
+How they are laid out:
+
+- **Floating card:** accounts on line 1, providers on line 2 (a third line after six).
+
+  ![The floating card: accounts on line 1, Agent Hub providers on line 2](docs/images/widget-card-two-lines.png)
+- **Taskbar strip:** one line, after the accounts. The strip holds about 672 px (six account
+  tiles). If the ticked providers do not fit as full tiles (156 px, two lines) they become compact
+  tiles (78 px, name and one value). If they still do not fit, the last ones are folded into a
+  small **+N** tile. Nothing is ever clipped; untick accounts or providers to see more.
+
+  ![The strip with compact hub tiles: name and one value](docs/images/widget-taskbar-compact.png)
+
 ![The strip with one account and the Qoder and two Qwen tiles](docs/images/widget-agent-hub.png)
 
 The JSON format is `{"version":1,"sources":[{"id","name","text","percent"?,"up"?}]}`; `text` has
 two lines separated by a line break. Any program that prints it works.
+
+### Draw hub providers in your own theme
+
+A theme does not list providers by name. It draws "the N-th provider" once and repeats it:
+
+- A child object with `"repeat": 12` becomes 12 copies; in every string of the copy, a bare `@n`
+  becomes 1 to 12 (`@name` is left alone). So `"template": "{hub.slot@n.name}"` is the name of
+  slot 1 in copy 1, slot 2 in copy 2, and so on.
+- `hub.slotN.shown` is 1 for the N-th ticked provider that fits (use it in `render`), and the slot
+  also has `.name`, `.line1`, `.line2`, `.short` (a one-word value), `.percent`, `.has_percent`,
+  `.up`, `.has_up`, `.x` (offset in the hub row) and `.row`.
+- `hub.layout.tile_w`, `.compact` (1 = use the short tile), `.fit`, `.overflow`, `.rows`, `.per_row`
+  and `.width` describe the layout; `hub.overflow.shown`, `.x` and `.text` (`+3`) are the "+N" tile.
+- `hub.<id>.*` for one named provider (`hub.qoder.percent`) still works. Provider ids `layout`,
+  `overflow` and `slot<number>` are reserved (the widget adds `_p`).
+
+`src/themes/` has no hub tiles; a worked example for the compact strip is in
+[`docs/hub-tiles-theme.md`](docs/hub-tiles-theme.md).
 
 ## Pick a setup path
 
@@ -351,8 +397,14 @@ The login of that account expired. Open the Accounts page and press **Re-login**
 
 ### The widget shows "Nothing shown"
 
-Every account or both rows are unticked. Right-click, **Accounts and rows**, and tick something
-(or delete the `widget` block in `settings.json`).
+Every account or both rows are unticked. Right-click, **Accounts and rows**, **Taskbar strip** (or
+**Floating card**), and tick something (or delete the `widget` block in `settings.json`).
+
+### The Agent Hub list is empty
+
+Right-click, **Accounts and rows**, **Agent Hub providers** says "No Agent Hub providers". Set
+`agent_hub_command` in `settings.json` (above) and restart the widget; then run the command by hand
+(`python agent_hub_widget.py`) and check it prints JSON with a `sources` list.
 
 ### "The Claude Code login already stopped: Login successful"
 

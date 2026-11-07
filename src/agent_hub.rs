@@ -13,7 +13,8 @@ use serde::Deserialize;
 pub const REFRESH_SECONDS: u64 = 300;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(25);
 const MAX_OUTPUT: u64 = 64 * 1024;
-const MAX_SOURCES: usize = 12;
+/// Also the number of `hub.slotN` variables a theme can draw.
+pub const MAX_SOURCES: usize = 12;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HubSource {
@@ -49,13 +50,43 @@ fn theme_safe(id: &str) -> String {
         .collect()
 }
 
+impl HubSource {
+    /// The one-line value for a compact tile: the percentage, else up/down,
+    /// else the first word of the text (`818k` of `818k today`).
+    pub fn short(&self) -> String {
+        match (self.percent, self.up) {
+            (Some(percent), _) => format!("{percent:.0}%"),
+            (None, Some(up)) => if up { "up" } else { "down" }.into(),
+            _ => self
+                .text
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(10)
+                .collect(),
+        }
+    }
+}
+
+/// Ids the widget keeps for its own variables (`hub.layout.*`, `hub.overflow.*`, `hub.slotN.*`).
+fn reserved(id: &str) -> bool {
+    matches!(id, "layout" | "overflow")
+        || id
+            .strip_prefix("slot")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Parse the command's output. Bad entries are dropped, never fatal.
 pub fn parse(json: &str) -> Result<Vec<HubSource>, String> {
     let document: Document = serde_json::from_str(json.trim_start_matches('\u{feff}'))
         .map_err(|error| format!("agent hub output is not the expected JSON: {error}"))?;
     let mut sources: Vec<HubSource> = Vec::new();
     for raw in document.sources.into_iter().take(MAX_SOURCES) {
-        let id = theme_safe(&raw.id);
+        let mut id = theme_safe(&raw.id);
+        if reserved(&id) {
+            id.push_str("_p");
+        }
         if id.is_empty() || sources.iter().any(|source| source.id == id) {
             continue;
         }
@@ -204,6 +235,25 @@ mod tests {
         assert_eq!(sources[1].percent, None, "no invented percentage");
         assert_eq!(sources[2].percent, Some(100.0));
         assert_eq!(sources[2].name, "over");
+    }
+
+    #[test]
+    fn short_value_and_reserved_ids() {
+        let s = |percent, up, text: &str| HubSource {
+            percent,
+            up,
+            text: text.into(),
+            ..Default::default()
+        };
+        assert_eq!(s(Some(49.2), None, "x").short(), "49%");
+        assert_eq!(s(None, Some(false), "x").short(), "down");
+        assert_eq!(s(None, None, "818.5k today\nmore").short(), "818.5k");
+        let parsed =
+            parse(r#"{"sources":[{"id":"slot3"},{"id":"layout"},{"id":"slot"}]}"#).unwrap();
+        assert_eq!(
+            parsed.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            ["slot3_p", "layout_p", "slot"]
+        );
     }
 
     #[test]

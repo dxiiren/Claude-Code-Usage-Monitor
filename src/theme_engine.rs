@@ -1077,8 +1077,93 @@ struct SceneObjectWire {
     gap: Expression,
     #[serde(default)]
     content: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "expand_repeats")]
     children: Vec<SceneObject>,
+}
+
+/// Most copies one `repeat` node can expand into.
+const MAX_REPEAT: u64 = 32;
+
+/// A child object may carry `"repeat": N`. It is replaced by N copies in which
+/// every `@n` inside any string value (id, name, expressions, text templates)
+/// becomes 1..=N, so a theme draws "the N-th Agent Hub provider" once, with
+/// `hub.slot@n.name`, instead of listing providers by name.
+fn expand_repeats<'de, D>(deserializer: D) -> Result<Vec<SceneObject>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    let mut objects = Vec::with_capacity(values.len());
+    for mut value in values {
+        let repeat = value
+            .as_object_mut()
+            .and_then(|object| object.remove("repeat"));
+        let copies = match repeat {
+            None => {
+                objects.push(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
+                continue;
+            }
+            Some(count) => count
+                .as_u64()
+                .filter(|count| (1..=MAX_REPEAT).contains(count))
+                .ok_or_else(|| {
+                    serde::de::Error::custom(format!(
+                        "repeat must be a number from 1 to {MAX_REPEAT}"
+                    ))
+                })?,
+        };
+        // Nested repeats would multiply (32 x 32 x ...): a shared theme file must not be able to do that.
+        if contains_repeat(&value) {
+            return Err(serde::de::Error::custom(
+                "repeat cannot be nested inside a repeated object",
+            ));
+        }
+        for n in 1..=copies {
+            let mut copy = value.clone();
+            substitute_repeat_index(&mut copy, n);
+            objects.push(serde_json::from_value(copy).map_err(serde::de::Error::custom)?);
+        }
+    }
+    Ok(objects)
+}
+
+fn contains_repeat(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.contains_key("repeat") || map.values().any(contains_repeat)
+        }
+        serde_json::Value::Array(items) => items.iter().any(contains_repeat),
+        _ => false,
+    }
+}
+
+fn substitute_repeat_index(value: &mut serde_json::Value, n: u64) {
+    match value {
+        serde_json::Value::String(text) if text.contains("@n") => {
+            let mut out = String::with_capacity(text.len() + 4);
+            let mut rest = text.as_str();
+            while let Some(at) = rest.find("@n") {
+                out.push_str(&rest[..at]);
+                let after = &rest[at + 2..];
+                // `@name` is not the index: only a bare `@n` is replaced.
+                if after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+                    out.push_str("@n");
+                } else {
+                    out.push_str(&n.to_string());
+                }
+                rest = after;
+            }
+            out.push_str(rest);
+            *text = out;
+        }
+        serde_json::Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| substitute_repeat_index(item, n)),
+        serde_json::Value::Object(map) => map
+            .values_mut()
+            .for_each(|item| substitute_repeat_index(item, n)),
+        _ => {}
+    }
 }
 
 #[derive(Deserialize)]
@@ -1546,27 +1631,6 @@ impl DataContext {
             "view.rows",
             (view.show_5h as u8 + view.show_7d as u8) as f64,
         );
-        let mut hub_shown = 0u32;
-        for source in hub {
-            let key = format!("hub.{}", source.id);
-            let shown = filter.is_shown(nest, &key);
-            hub_shown += shown as u32;
-            context.insert(&format!("{key}.shown"), shown as u8 as f64);
-            context.insert(&format!("{key}.present"), 1.0);
-            context.insert_string(&format!("{key}.name"), &source.name);
-            context.insert_string(&format!("{key}.text"), &source.text);
-            let (line1, line2) = source.text.split_once('\n').unwrap_or((&source.text, ""));
-            context.insert_string(&format!("{key}.line1"), line1);
-            context.insert_string(&format!("{key}.line2"), line2);
-            context.insert(&format!("{key}.percent"), source.percent.unwrap_or(0.0));
-            context.insert(
-                &format!("{key}.has_percent"),
-                source.percent.is_some() as u8 as f64,
-            );
-            context.insert(&format!("{key}.up"), (source.up == Some(true)) as u8 as f64);
-            context.insert(&format!("{key}.has_up"), source.up.is_some() as u8 as f64);
-        }
-        context.insert("hub.shown_count", hub_shown as f64);
         let mut shown_count = 0u32;
         context.insert("accounts.shown_count", 0.0);
         if let Some(data) = data {
@@ -1576,11 +1640,14 @@ impl DataContext {
                     account.provider.descriptor().key,
                     account.profile.id
                 );
-                let shown = filter.is_shown(nest, &format!(
-                    "{}.{}",
-                    account.provider.descriptor().key,
-                    account.profile.id
-                ));
+                let shown = filter.is_shown(
+                    nest,
+                    &format!(
+                        "{}.{}",
+                        account.provider.descriptor().key,
+                        account.profile.id
+                    ),
+                );
                 shown_count += shown as u32;
                 context.insert(&format!("{key}.shown"), shown as u8 as f64);
                 context.insert_string(&format!("{key}.name"), &account.profile.name);
@@ -1656,7 +1723,84 @@ impl DataContext {
             }
             context.insert_provider("active", None, false, runtime.countdown);
         }
+        let accounts_w = if view.show_5h || view.show_7d {
+            context.get("accounts.shown_count").unwrap_or(0.0) as u32
+                * crate::widget_filter::ACCOUNT_TILE_W
+        } else {
+            0
+        };
+        context.insert_hub(hub, filter, nest, accounts_w);
         context
+    }
+
+    /// Agent Hub variables: `hub.<id>.*` for every reported provider, the
+    /// generic `hub.slotN.*` (the N-th ticked provider that fits) so a theme
+    /// needs no provider names, `hub.overflow.*` for the "+N" tile and
+    /// `hub.layout.*` (see `crate::widget_filter::hub_layout`).
+    fn insert_hub(
+        &mut self,
+        hub: &[crate::agent_hub::HubSource],
+        filter: &crate::widget_filter::WidgetFilter,
+        nest: SurfaceNest,
+        accounts_w: u32,
+    ) {
+        let mut ticked: Vec<&crate::agent_hub::HubSource> = Vec::new();
+        for source in hub {
+            let key = format!("hub.{}", source.id);
+            let shown = filter.is_shown(nest, &key);
+            if shown {
+                ticked.push(source);
+            }
+            self.insert_hub_fields(&key, source, shown);
+        }
+        let layout = crate::widget_filter::hub_layout(nest, ticked.len() as u32, accounts_w);
+        self.insert("hub.shown_count", ticked.len() as f64);
+        self.insert("hub.layout.tile_w", layout.tile_w as f64);
+        self.insert("hub.layout.compact", layout.compact as u8 as f64);
+        self.insert("hub.layout.fit", layout.fit as f64);
+        self.insert("hub.layout.overflow", layout.overflow as f64);
+        self.insert("hub.layout.rows", layout.rows as f64);
+        self.insert("hub.layout.per_row", layout.per_row as f64);
+        self.insert("hub.layout.width", layout.width as f64);
+        let per_row = layout.per_row.max(1);
+        for slot in 1..=crate::agent_hub::MAX_SOURCES {
+            let key = format!("hub.slot{slot}");
+            match ticked.get(slot - 1).filter(|_| (slot as u32) <= layout.fit) {
+                Some(source) => {
+                    self.insert_hub_fields(&key, source, true);
+                    let index = (slot - 1) as u32;
+                    self.insert(
+                        &format!("{key}.x"),
+                        ((index % per_row) * layout.tile_w) as f64,
+                    );
+                    self.insert(&format!("{key}.row"), (index / per_row) as f64);
+                }
+                None => {
+                    self.insert(&format!("{key}.shown"), 0.0);
+                }
+            }
+        }
+        self.insert("hub.overflow.shown", (layout.overflow > 0) as u8 as f64);
+        self.insert("hub.overflow.x", (layout.fit * layout.tile_w) as f64);
+        self.insert_string("hub.overflow.text", format!("+{}", layout.overflow));
+    }
+
+    fn insert_hub_fields(&mut self, key: &str, source: &crate::agent_hub::HubSource, shown: bool) {
+        self.insert(&format!("{key}.shown"), shown as u8 as f64);
+        self.insert(&format!("{key}.present"), 1.0);
+        self.insert_string(&format!("{key}.name"), &source.name);
+        self.insert_string(&format!("{key}.text"), &source.text);
+        let (line1, line2) = source.text.split_once('\n').unwrap_or((&source.text, ""));
+        self.insert_string(&format!("{key}.line1"), line1);
+        self.insert_string(&format!("{key}.line2"), line2);
+        self.insert_string(&format!("{key}.short"), source.short());
+        self.insert(&format!("{key}.percent"), source.percent.unwrap_or(0.0));
+        self.insert(
+            &format!("{key}.has_percent"),
+            source.percent.is_some() as u8 as f64,
+        );
+        self.insert(&format!("{key}.up"), (source.up == Some(true)) as u8 as f64);
+        self.insert(&format!("{key}.has_up"), source.up.is_some() as u8 as f64);
     }
 
     fn insert_provider(
@@ -1849,7 +1993,9 @@ impl DataContext {
             .or_else(|| self.limit_default(&name))
             .or_else(|| {
                 Self::hub_default_field(&name)
-                    .filter(|field| !matches!(*field, "name" | "text" | "line1" | "line2"))
+                    .filter(|field| {
+                        !matches!(*field, "name" | "text" | "line1" | "line2" | "short")
+                    })
                     .map(|_| 0.0)
             })
             .or_else(|| {
@@ -1879,7 +2025,7 @@ impl DataContext {
             .or_else(|| Self::limit_string_default(&name))
             .or_else(|| {
                 Self::hub_default_field(&name)
-                    .filter(|field| matches!(*field, "name" | "text" | "line1" | "line2"))
+                    .filter(|field| matches!(*field, "name" | "text" | "line1" | "line2" | "short"))
                     .map(|_| "")
             })
             .or_else(|| {
@@ -1909,6 +2055,16 @@ impl DataContext {
             "text",
             "line1",
             "line2",
+            "short",
+            "x",
+            "row",
+            "tile_w",
+            "compact",
+            "fit",
+            "overflow",
+            "rows",
+            "per_row",
+            "width",
         ]
         .into_iter()
         .find(|known| *known == field)
